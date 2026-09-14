@@ -1,0 +1,27 @@
+/* SPDX-FileCopyrightText: Ruben Talstra */
+/* SPDX-License-Identifier: BUSL-1.1 */
+/* FerroSYS brand tokens, the "Olive & Iron" palette. Import this file, or
+   copy the values. The family site copies the two hue values verbatim into
+   its own tokens.css, so a change here is a change there. */
+:root {
+  /* Core palette */
+  --ferrosys-olive: #5B6B16;        /* primary mark and accents; text on light */
+  --ferrosys-olive-light: #BEF264;  /* the same voice on a dark ground; highlights in the mark */
+  --ferrosys-ink: #0F172A;          /* text on light */
+  --ferrosys-mist: #F1F5F9;         /* text on dark */
+  --ferrosys-tile: #0B1020;         /* dark tile background */
+  --ferrosys-surface: #F8FAFC;      /* light surface background */
+
+  /* Roles */
+  --ferrosys-brand: var(--ferrosys-olive);
+  --ferrosys-brand-2: var(--ferrosys-olive-light);
+  --ferrosys-fg: var(--ferrosys-ink);
+  --ferrosys-bg: var(--ferrosys-surface);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ferrosys-brand: var(--ferrosys-olive-light);
+    --ferrosys-fg: var(--ferrosys-mist);
+    --ferrosys-bg: var(--ferrosys-tile);
+  }
+}

@@ -1,0 +1,11 @@
+<!-- SPDX-FileCopyrightText: Ruben Talstra -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- The FerroSYS mark: a gauge on a stand, for the control plane every server reports to.
+     The needle is the light value so the reading is the first thing seen. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64" role="img" aria-label="FerroSYS icon">
+  <title>FerroSYS</title>
+  <path d="M11 42 A21 21 0 0 1 53 42" fill="none" stroke="#5B6B16" stroke-width="4.6" stroke-linecap="round"/>
+  <path d="M32 42 L44 27" stroke="#BEF264" stroke-width="4.6" stroke-linecap="round"/>
+  <circle cx="32" cy="42" r="5" fill="#5B6B16"/>
+  <path d="M20 54 H44" stroke="#BEF264" stroke-width="4.6" stroke-linecap="round"/>
+</svg>
