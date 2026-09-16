@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: Ruben Talstra -->
+<!-- SPDX-FileCopyrightText: Vernum Projecten B.V. -->
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 
 # Maintainers and access continuity
@@ -36,5 +36,5 @@ build, and budget for maintaining it.
 
 ## Commercial licensing
 
-The maintainer above is the Licensor named in [LICENSE](LICENSE) and the
-contact for a commercial licence.
+Vernum Projecten B.V. is the Licensor named in [LICENSE](LICENSE). The
+maintainer above is its contact for a commercial licence.
