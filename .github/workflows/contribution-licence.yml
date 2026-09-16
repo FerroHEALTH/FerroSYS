@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: Vernum Projecten B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+# The contribution-licence guard.
+#
+# FerroSYS's contributions carry the licensing terms in CONTRIBUTING.md
+# § Licensing of contributions: a contribution is licensed under the project
+# licence of the version it lands in, and it grants the Licensor the relicensing
+# right that keeps the work one work under one licensor. The pull-request
+# template's checkbox is the record of acceptance, and this job is what makes
+# it binding: a body without the ticked line fails, whether the box was left
+# empty or the section deleted.
+#
+# Bots are skipped by author type. A bot cannot accept terms, and its changes
+# (dependency and pin bumps) carry no copyrightable expression of their own.
+#
+# The pull-request body reaches the script through `env:` rather than `${{ }}`
+# inside `run:`, because a body is attacker-controlled text and interpolation
+# would be a template injection.
+name: Contribution licence
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  contribution-licence:
+    name: contribution-licence-guard
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The pull request body accepts the contribution licensing terms
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash scripts/checks/contribution-licence.sh

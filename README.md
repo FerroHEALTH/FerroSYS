@@ -23,3 +23,8 @@ production use, a commercial licence for any other production use, and Apache
 [MAINTAINERS.md](MAINTAINERS.md) is the contact for a commercial licence.
 
 The brand assets under `assets/brand/` are part of the Licensed Work.
+
+Contributions carry the terms in
+[CONTRIBUTING.md](CONTRIBUTING.md#licensing-of-contributions): you keep your
+copyright, and you grant the Licensor the relicensing right that keeps the work
+one work under one licensor. There is no separate agreement to sign.
