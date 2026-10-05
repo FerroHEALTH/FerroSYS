@@ -19,8 +19,13 @@ FerroSYS is source-available under the Business Source License 1.1. The
 parameters that apply, the Licensor, the Licensed Work, the Additional Use
 Grant and the Change Date, are in [LICENSE](LICENSE): free for non-commercial
 production use, a commercial licence for any other production use, and Apache
-2.0 four years after each version is published. The maintainer named in
-[MAINTAINERS.md](MAINTAINERS.md) is the contact for a commercial licence.
+2.0 four years after each version is published.
+
+A commercial licence is arranged with [Cadasto B.V.](https://www.cadasto.com),
+the Licensor, which handles the business side of FerroSYS: write to
+[info@cadasto.com](mailto:info@cadasto.com) or use
+[cadasto.com/contact](https://www.cadasto.com/contact/). Technical questions go
+to the maintainer named in [MAINTAINERS.md](MAINTAINERS.md).
 
 The brand assets under `assets/brand/` are part of the Licensed Work.
 
