@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: Vernum Projecten B.V. -->
+<!-- SPDX-FileCopyrightText: Cadasto B.V. -->
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 
 # Maintainers and access continuity
@@ -36,5 +36,5 @@ build, and budget for maintaining it.
 
 ## Commercial licensing
 
-Vernum Projecten B.V. is the Licensor named in [LICENSE](LICENSE). The
+Cadasto B.V. is the Licensor named in [LICENSE](LICENSE). The
 maintainer above is its contact for a commercial licence.

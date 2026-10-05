@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: Vernum Projecten B.V. -->
+<!-- SPDX-FileCopyrightText: Cadasto B.V. -->
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
 # <img src="assets/brand/ferrosys-icon.svg" alt="" width="40" height="40" align="top"> FerroSYS
 
