@@ -22,6 +22,6 @@ supported minor line.
 
 **Do not open a public issue for a security vulnerability.** Report it
 privately through GitHub's private vulnerability reporting:
-<https://github.com/rubentalstra/FerroSYS/security/advisories/new>. You will get
+<https://github.com/FerroHEALTH/FerroSYS/security/advisories/new>. You will get
 an acknowledgement within seven days. If that window passes with no response,
 public disclosure to protect other users is your call.
