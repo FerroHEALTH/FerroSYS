@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+name: Task
+description: Propose maintenance, documentation, a refactor, or tooling work for FerroSYS.
+type: Task
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The type is already Task. A maintainer sets the priority, the effort
+        and the one work-kind label during triage, so you do not need to
+        choose them.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What needs doing and why, in a few sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The observable result that closes this task.
+    validations:
+      required: true

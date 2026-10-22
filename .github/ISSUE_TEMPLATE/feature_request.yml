@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+name: Feature request
+description: Propose a new capability or an improvement to FerroSYS.
+type: Feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The type is already Feature, and a maintainer sets the priority during
+        triage, so you do not need to choose one.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The problem you want to solve, and who it affects.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you want FerroSYS to do.
+    validations:
+      required: true

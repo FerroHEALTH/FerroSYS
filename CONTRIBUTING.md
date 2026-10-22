@@ -8,6 +8,22 @@ code yet. The design happens on the tracker of this repository, and the
 tracker is the record of it. The conventions the family shares apply from the
 first commit.
 
+## Issues
+
+The type of an issue (Bug, Feature, Task) is GitHub's native issue type, and
+its priority (Urgent, High, Medium, Low) and effort (High, Medium, Low) are
+the FerroHEALTH organisation's `Priority` and `Effort` issue fields; none of
+the three is a label. The bug, feature and task forms set the type, and a
+maintainer sets the rest at triage with `scripts/gh/fields.sh`, which also
+files a new issue with all three (`scripts/gh/fields.sh new <type>
+<priority> <effort> <gh issue create args>`). A Task carries exactly one
+work-kind label (`documentation`, `chore`, `refactor`, `perf`, `test`, `ci`),
+which names its branch and commit type; a Bug is a `fix` and a Feature a
+`feat`. `scripts/gh/labels.sh` bootstraps the labels, and `scripts/gh/rel.sh`
+sets sub-issue and dependency edges. Read an issue with
+`gh issue view <n> --json title,body,comments`; `--comments` prints nothing
+for an issue without comments.
+
 ## Pull requests
 
 - Branch from `main` with a conventional-type name (`feat/`, `fix/`, `chore/`,
