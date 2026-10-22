@@ -3,3 +3,6 @@
 *.pdb
 .idea/
 .DS_Store
+
+# Agent worktrees, one per task.
+.claude/worktrees/
