@@ -29,6 +29,25 @@ url = "2.5.8"
 # builds on, at the version it publishes.
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "display", "serde"] }
 ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "=0.1.0" }
+ferrohealth-config = { path = "crates/ferrohealth-config", version = "=0.1.0" }
+# ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
+# provider read by Prometheus and pushed over OTLP, on the lines FerroFED
+# resolves. Verified against crates.io on 2026-10-26.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt", "env-filter", "json", "ansi", "registry"] }
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "grpc-tonic", "tls-aws-lc", "tls-roots"] }
+opentelemetry-prometheus = "0.33.1"
+prometheus = { version = "0.14.0", default-features = false }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
+axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
+http = "1.5.0"
+# Test-only: the runtime and the one-shot service call of the request-log
+# cases.
+tokio = { version = "1.53.3", default-features = false }
+tower = { version = "0.5.3", default-features = false, features = ["util"] }
 # Test-only: the JSON rendering a secret is checked through, and the
 # temporary files the `_file` cases read.
 serde_json = "1.0.154"

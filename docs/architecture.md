@@ -96,8 +96,10 @@ pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> Result<String, ConfigEr
 // ferrohealth-telemetry
 pub struct TelemetrySection { pub format: Format, pub filter: String, pub otlp: Option<OtlpSection>, pub logged_query_parameters: Vec<String> }
 pub enum Format { Auto, Json, Pretty }
-pub fn init(section: &TelemetrySection, service: &Service) -> Result<TelemetryGuard, InitError>;
-pub fn request_log<F: RequestFields>(fields: F) -> RequestLogLayer<F>;   // axum feature
+pub struct Telemetry;  // Telemetry::new(&section, Service::new("ferropix", VERSION))?
+impl Telemetry { pub fn install(&self, section: &TelemetrySection, stdout_is_terminal: bool) -> Result<(), InitError>; pub fn meter(&self, scope: &'static str) -> Meter; pub fn shutdown(&self) -> Result<(), InitError>; }
+pub fn panic::install_hook();
+pub async fn request_log::middleware(State(log): State<RequestLog>, request: Request, next: Next) -> Response;  // axum feature
 
 // ferrohealth-health
 pub struct Readiness { pub status: Status, pub phase: Phase, pub indicators: Vec<IndicatorState> }
