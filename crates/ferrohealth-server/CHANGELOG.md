@@ -10,6 +10,38 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `StackPolicy::refusal_body` and the `refusal` module: the refusals the
+  stack writes itself (`408` past the request timeout, `413` for a declared
+  body past the limit, `429` past a caller's rate, `503` past the overload
+  bound) are written in the product's body, keeping the status and
+  `Retry-After`; a response a handler wrote is never rewritten (#91).
+- `[server] header_read_timeout_ms` (default 30000): a client that does not
+  finish its request head in time is disconnected, on the plain and the TLS
+  listener alike (#91).
+- `[server.tls] min_version` and the same key on `tls_client::TlsClientSection`
+  (`section::TlsVersion`): `"1.3"` (RFC 8446) by default, `"1.2"` where a
+  deployment lowers it (RFC 9325 §3.1.1), and `"1.0"` or `"1.1"` refused at
+  load as deprecated (RFC 8996) (#91).
+
+### Changed
+
+- The listener and the outbound TLS client speak TLS 1.3 alone unless
+  `min_version = "1.2"` is set; they offered 1.2 and 1.3 before (#91).
+- `/health/readiness` serves each indicator's name and state without its
+  detail, which can name a dependency or a count and is open to anyone who
+  reaches the port (#91).
+- The plain listener is served by the same connection loop as the TLS
+  listener, so both bound the request head and both put the connection's
+  address on each request (#91).
+
+### Fixed
+
+- A TLS listener no longer builds its route table again for every
+  connection: the connection's address and client certificates ride on each
+  request to the one router (#85).
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

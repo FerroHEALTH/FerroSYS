@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
-use axum::response::{IntoResponse as _, Response};
+use axum::response::Response;
 use http::{HeaderValue, StatusCode, header};
 use tokio::time::Instant;
 
@@ -99,11 +99,10 @@ pub async fn limit(State(limit): State<CallerLimit>, request: Request, next: Nex
         Ok(()) => next.run(request).await,
         Err(wait) => {
             tracing::warn!("a request was refused: its caller sent more than its rate");
-            let mut response = (
+            let mut response = crate::refusal::refused(
                 StatusCode::TOO_MANY_REQUESTS,
                 "too many requests from this caller; retry later",
-            )
-                .into_response();
+            );
             response.headers_mut().insert(
                 header::RETRY_AFTER,
                 HeaderValue::from(crate::overload::retry_seconds(wait)),

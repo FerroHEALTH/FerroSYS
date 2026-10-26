@@ -88,7 +88,10 @@ impl Health {
 /// - `GET /health/liveness` answers `200` while the process serves and
 ///   checks nothing.
 /// - `GET /health/readiness` answers `200` with the readiness document while
-///   the process is ready, and `503` with it otherwise.
+///   the process is ready, and `503` with it otherwise. The route is open to
+///   anyone who reaches the port, so the document names each indicator and
+///   its state and never its detail, which can name a dependency or a count;
+///   a product serves the detail behind its own authentication.
 /// - `GET /health` answers the same status with the state alone, for a
 ///   caller that may not see the detail.
 /// - `GET /health/info` answers `200` with `product`, `version`, the `build`
@@ -144,7 +147,7 @@ async fn liveness() -> Response {
 
 async fn readiness(State(health): State<Health>) -> Response {
     let document = health.registry.readiness(&health.lifecycle).await;
-    (status(&document), axum::Json(document)).into_response()
+    (status(&document), axum::Json(document.without_detail())).into_response()
 }
 
 async fn summary(State(health): State<Health>) -> Response {
@@ -222,5 +225,44 @@ mod tests {
         let (status, _document) =
             info(Health::new(Registry::default(), Lifecycle::default())).await;
         assert_eq!(StatusCode::NOT_FOUND, status);
+    }
+
+    #[derive(Debug)]
+    struct Spool;
+
+    impl ferrohealth_health::registry::HealthIndicator for Spool {
+        fn name(&self) -> &'static str {
+            "spool"
+        }
+
+        fn check(&self) -> ferrohealth_health::registry::Check<'_> {
+            Box::pin(std::future::ready(
+                ferrohealth_health::registry::Outcome::degraded("4096 records behind at db-7"),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_public_readiness_names_each_indicator_and_never_its_detail() {
+        let lifecycle = Lifecycle::default();
+        lifecycle.booted();
+        let health = Health::new(Registry::new(vec![std::sync::Arc::new(Spool)]), lifecycle);
+        let response = routes(health)
+            .oneshot(
+                http::Request::builder()
+                    .uri("/health/readiness")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("served");
+        assert_eq!(StatusCode::OK, response.status(), "degraded stays ready");
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("the body");
+        assert_eq!(
+            r#"{"state":"degraded","phase":"serving","indicators":[{"name":"spool","state":"degraded"}]}"#,
+            String::from_utf8_lossy(&body)
+        );
     }
 }

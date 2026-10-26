@@ -19,15 +19,18 @@ use crate::client_address::{self, Forwarding};
 use crate::health::{self, Health};
 use crate::overload::{self, Admission};
 use crate::panic::{self, PanicBody};
+use crate::refusal::{self, RefusalBody};
 use crate::request_id;
 use crate::section::ServerSection;
 
-/// What a product decides inside the stack: the body of a panicked request
-/// and the request log with its recorders.
+/// What a product decides inside the stack: the body of a panicked request,
+/// the body of a refusal and the request log with its recorders.
 #[derive(Clone)]
 pub struct StackPolicy {
     /// The body of a panicked request.
     pub panic_body: PanicBody,
+    /// The body of a refusal the stack writes: `408`, `413`, `429`, `503`.
+    pub refusal_body: RefusalBody,
     /// The request log.
     pub request_log: RequestLog,
 }
@@ -44,6 +47,7 @@ impl Default for StackPolicy {
     fn default() -> Self {
         Self {
             panic_body: panic::default_body(),
+            refusal_body: refusal::default_body(),
             request_log: RequestLog::default(),
         }
     }
@@ -51,9 +55,10 @@ impl Default for StackPolicy {
 
 /// Wraps `product` and the health routes in the stack, under the base path.
 ///
-/// From the outside in: the request id, the client address, the panic
-/// rendering, the panic catch, the request timeout (`408`), the body limit
-/// (`413`, and the same ceiling for every extractor), the response
+/// From the outside in: the request id, the client address, the refusal
+/// rendering, the panic rendering, the panic catch, the request timeout
+/// (`408`), the body limit (`413`, and the same ceiling for every
+/// extractor), the response
 /// compression when it is on, the request log, then the routes, the
 /// product's behind the overload bound when one is configured.
 pub fn app(
@@ -76,6 +81,7 @@ pub fn app(
         Router::new().nest(section.base_path.as_str(), routes)
     };
     let body = policy.panic_body;
+    let refusal_body = policy.refusal_body;
     // NOTE: axum `Router::layer` wraps every route and the fallback, so the matched
     // route is still known and a request no route matched is logged too.
     let routes = routes.layer(axum::middleware::from_fn_with_state(
@@ -96,6 +102,7 @@ pub fn app(
     };
     routes
         .layer(DefaultBodyLimit::max(section.body_limit_bytes))
+        .layer(axum::middleware::from_fn(refusal::answered))
         .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -104,6 +111,9 @@ pub fn app(
         .layer(CatchPanicLayer::custom(panic::caught))
         .layer(axum::middleware::from_fn(move |request, next| {
             panic::render(body.clone(), request, next)
+        }))
+        .layer(axum::middleware::from_fn(move |request, next| {
+            refusal::render(refusal_body.clone(), request, next)
         }))
         .layer(axum::middleware::from_fn_with_state(
             Arc::new(Forwarding::from_section(section)),
@@ -389,6 +399,99 @@ mod tests {
                 .expect("the request is served");
             assert_eq!(status, response.status(), "{body}");
         }
+    }
+
+    fn refusing() -> StackPolicy {
+        StackPolicy {
+            refusal_body: Arc::new(
+                |uri: &http::Uri, request_id: &str, status: StatusCode, reason: &str| {
+                    axum::Json(serde_json::json!({
+                        "refused": status.as_u16(),
+                        "reason": reason,
+                        "path": uri.path(),
+                        "request_id_length": request_id.len(),
+                    }))
+                    .into_response()
+                },
+            ),
+            ..StackPolicy::default()
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_timeout_is_written_with_the_product_refusal_body() {
+        let app = app(product(), serving(), &section(), refusing());
+        let (status, _, body) = get_status(app, "/ferrosys/slow").await;
+        assert_eq!(StatusCode::REQUEST_TIMEOUT, status);
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(
+            serde_json::json!({
+                "refused": 408,
+                "reason": crate::refusal::TIMEOUT,
+                "path": "/ferrosys/slow",
+                "request_id_length": 36,
+            }),
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn the_limit_and_the_bound_are_written_with_the_product_refusal_body() {
+        let section = ServerSection {
+            max_concurrent_requests: NonZeroUsize::new(1),
+            retry_after_s: 2,
+            ..section()
+        };
+        let app = app(product(), serving(), &section, refusing());
+        let declared = app
+            .clone()
+            .oneshot(
+                http::Request::builder()
+                    .method("POST")
+                    .uri("/ferrosys/echo")
+                    .header(http::header::CONTENT_LENGTH, "33")
+                    .body(Body::from("a body of more than sixteen bytes"))
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the request is served");
+        assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, declared.status());
+        let body = axum::body::to_bytes(declared.into_body(), 4096)
+            .await
+            .expect("the body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+        assert_eq!(crate::refusal::TOO_LARGE, body["reason"]);
+        let streamed = app
+            .clone()
+            .oneshot(
+                http::Request::builder()
+                    .method("POST")
+                    .uri("/ferrosys/echo")
+                    .body(Body::from("a body of more than sixteen bytes"))
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the request is served");
+        assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, streamed.status());
+        let body = axum::body::to_bytes(streamed.into_body(), 4096)
+            .await
+            .expect("the body");
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&body).is_err(),
+            "the extractor's own answer is never rewritten"
+        );
+        let held = tokio::spawn(get_status(app.clone(), "/ferrosys/hold"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (status, headers, body) = get_status(app, "/ferrosys/fhir/Patient/7").await;
+        assert_eq!(StatusCode::SERVICE_UNAVAILABLE, status);
+        assert_eq!(
+            Some("2"),
+            headers.get("retry-after").and_then(|v| v.to_str().ok()),
+            "the refusal keeps its Retry-After"
+        );
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(503, body["refused"]);
+        let _held = held.await.expect("the held request ends");
     }
 
     #[tokio::test]
