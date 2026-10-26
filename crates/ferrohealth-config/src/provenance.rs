@@ -96,6 +96,19 @@ impl Provenance {
     }
 }
 
+impl Provenance {
+    /// Returns the first environment variable that set a key below the
+    /// dotted key `key`, for a refusal of `key` itself, such as an unknown
+    /// section a `<PREFIX>__SECTION__KEY` override created.
+    pub(crate) fn variable_below(&self, key: &str) -> Option<&str> {
+        let prefix = format!("{key}.");
+        self.environment
+            .iter()
+            .find(|(set, _)| set.starts_with(&prefix))
+            .map(|(_, variable)| variable.as_str())
+    }
+}
+
 /// Returns `key` and every dotted key above it, the key itself first.
 fn above(key: &str) -> impl Iterator<Item = &str> {
     std::iter::once(key).chain(key.rmatch_indices('.').filter_map(|(at, _)| key.get(..at)))

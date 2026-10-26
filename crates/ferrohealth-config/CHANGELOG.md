@@ -10,6 +10,12 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A refusal of an unknown section that a `<PREFIX>__SECTION__KEY` override
+  created names that variable, as a refusal of an unknown key already did
+  (#104).
+
 ## [0.2.2] - 2026-10-26
 
 ### Added
