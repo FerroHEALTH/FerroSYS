@@ -15,16 +15,20 @@ cd "$(dirname "$0")/../.."
 base="${1:?usage: crate-version-guard.sh <base-ref> [head-ref]}"
 head="${2:-HEAD}"
 
+# Each reader consumes all of stdin: one that exits early makes `git show`
+# die of SIGPIPE on a file larger than the pipe buffer, which pipefail turns
+# into a failure of the guard.
+
 # The `version` key of `[package]` in a Cargo.toml read on stdin.
 package_version() {
   awk '/^\[package\]/{p=1; next} /^\[/{p=0}
-       p && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; exit}'
+       !done && p && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; done=1}'
 }
 
 # The version of the package $1 in a Cargo.lock read on stdin.
 locked_version() {
   awk -v name="$1" '$0 == "name = \"" name "\"" {p=1; next}
-       p && /^version = /{gsub(/version = "|"/, ""); print; exit}'
+       !done && p && /^version = /{gsub(/version = "|"/, ""); print; done=1}'
 }
 
 failures=0
@@ -52,7 +56,7 @@ while IFS= read -r manifest; do
   [[ "$locked" == "$want" ]] ||
     fail "Cargo.lock holds $crate ${locked:-<none>}, its manifest $want; run cargo update -w"
   changelog="crates/$crate/CHANGELOG.md"
-  if [[ "$want" != "0.0.0" ]] && ! git show "$head:$changelog" 2> /dev/null | grep -qF "## [$want]"; then
+  if [[ "$want" != "0.0.0" ]] && ! git show "$head:$changelog" 2> /dev/null | grep -F "## [$want]" > /dev/null; then
     fail "$changelog has no section for $want"
   fi
   checked="$checked $crate $want;"

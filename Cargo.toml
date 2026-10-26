@@ -60,7 +60,7 @@ tower-http = { version = "0.7.1", default-features = false, features = ["catch-p
 # crates.io on 2026-10-26.
 ipnet = { version = "2.12.2", default-features = false, features = ["std"] }
 clap = { version = "4.6.7", features = ["derive"] }
-uuid = { version = "1.29.0", default-features = false, features = ["v4", "std"] }
+uuid = { version = "1.29.0", default-features = false, features = ["v4", "std", "fast-rng"] }
 # The listener's TLS: rustls behind tokio-rustls on the lines the products
 # resolve, the hyper connection the TLS listener serves, and the test
 # certificates. Verified against crates.io on 2026-10-26.
@@ -74,9 +74,15 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 jsonschema = { version = "0.60.1", default-features = false }
 wiremock = "0.6.5"
+# The floor benchmark of ferrohealth-server, on the line FerroTERM resolves.
+# Verified against crates.io on 2026-10-27.
+criterion = { version = "0.8.2", default-features = false }
 # The runtime, and the one-shot service call of the request-log cases.
 tokio = { version = "1.53.3", default-features = false }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
+# The request log's layer and the server stack's outer service, whose
+# futures are pinned without a box. Verified against crates.io on 2026-10-27.
+pin-project-lite = "0.2.17"
 # Test-only: the JSON rendering a secret is checked through, and the
 # temporary files the `_file` cases read.
 serde_json = "1.0.154"

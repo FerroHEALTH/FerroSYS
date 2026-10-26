@@ -10,6 +10,19 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `request_log::RequestLog` is a `tower::Layer`, whose
+  `RequestLogService` writes the line, the span and the sample
+  `request_log::middleware` writes, with no boxed future (#129).
+
+### Changed
+
+- A clone of `RequestLog` or `RequestId` shares its contents in place of
+  copying them, so a stack that clones its layers for every request pays no
+  allocation for either, and the request log copies neither the route
+  template nor the request id per request (#129).
+
 ## [0.2.1] - 2026-10-26
 
 ### Changed

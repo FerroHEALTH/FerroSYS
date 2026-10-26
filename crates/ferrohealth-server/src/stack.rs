@@ -3,24 +3,20 @@
 
 //! The one stack every server runs around its routes.
 
-use std::sync::Arc;
-
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use ferrohealth_telemetry::request_log::{self, RequestLog};
-use http::StatusCode;
-use tower_http::catch_panic::CatchPanicLayer;
+use ferrohealth_telemetry::request_log::RequestLog;
+use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
 use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::timeout::TimeoutLayer;
 
-use crate::client_address::{self, Forwarding};
+use crate::client_address::Forwarding;
+use crate::edge::{self, EdgeLayer};
 use crate::health::{self, Health};
 use crate::overload::{self, Admission};
 use crate::panic::{self, PanicBody};
 use crate::refusal::{self, RefusalBody};
-use crate::request_id;
 use crate::section::ServerSection;
 
 /// What a product decides inside the stack: the body of a panicked request,
@@ -80,46 +76,35 @@ pub fn app(
     } else {
         Router::new().nest(section.base_path.as_str(), routes)
     };
-    let body = policy.panic_body;
-    let refusal_body = policy.refusal_body;
     // NOTE: axum `Router::layer` wraps every route and the fallback, so the matched
     // route is still known and a request no route matched is logged too.
-    let routes = routes.layer(axum::middleware::from_fn_with_state(
-        policy.request_log,
-        request_log::middleware,
-    ));
-    let routes = if section.compression {
+    let edge = EdgeLayer::new(edge::Settings {
+        forwarding: Forwarding::from_section(section),
+        panic_body: policy.panic_body,
+        refusal_body: policy.refusal_body,
+        timeout: section.request_timeout(),
+        body_limit: section.body_limit_bytes,
+    });
+    let outer = ServiceBuilder::new()
+        .layer(edge)
+        .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
+        .layer(DefaultBodyLimit::max(section.body_limit_bytes));
+    if section.compression {
         routes.layer(
-            CompressionLayer::new().gzip(true).br(true).compress_when(
-                SizeAbove::new(section.compression_min_bytes)
-                    .and(NotForContentType::GRPC)
-                    .and(NotForContentType::IMAGES)
-                    .and(NotForContentType::SSE),
-            ),
+            outer
+                .layer(
+                    CompressionLayer::new().gzip(true).br(true).compress_when(
+                        SizeAbove::new(section.compression_min_bytes)
+                            .and(NotForContentType::GRPC)
+                            .and(NotForContentType::IMAGES)
+                            .and(NotForContentType::SSE),
+                    ),
+                )
+                .layer(policy.request_log),
         )
     } else {
-        routes
-    };
-    routes
-        .layer(DefaultBodyLimit::max(section.body_limit_bytes))
-        .layer(axum::middleware::from_fn(refusal::answered))
-        .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            section.request_timeout(),
-        ))
-        .layer(CatchPanicLayer::custom(panic::caught))
-        .layer(axum::middleware::from_fn(move |request, next| {
-            panic::render(body.clone(), request, next)
-        }))
-        .layer(axum::middleware::from_fn(move |request, next| {
-            refusal::render(refusal_body.clone(), request, next)
-        }))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::new(Forwarding::from_section(section)),
-            client_address::attach,
-        ))
-        .layer(axum::middleware::from_fn(request_id::assign))
+        routes.layer(outer.layer(policy.request_log))
+    }
 }
 
 #[cfg(test)]
@@ -516,6 +501,203 @@ mod tests {
         assert_eq!((StatusCode::OK, "held"), (status, body.as_str()));
         let (status, _, _) = get_status(app, "/ferrosys/fhir/Patient/7").await;
         assert_eq!(StatusCode::OK, status, "the slot is free again");
+    }
+
+    async fn late_boom() -> &'static str {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        panic!("patient Qz7sentinel left")
+    }
+
+    fn waiting() -> Router {
+        Router::new()
+            .route("/late-boom", get(late_boom))
+            .route(
+                "/brief",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    "brief"
+                }),
+            )
+            .route(
+                "/own-408",
+                get(|| async { (StatusCode::REQUEST_TIMEOUT, "the handler's own") }),
+            )
+            .route(
+                "/own-413",
+                get(|| async { (StatusCode::PAYLOAD_TOO_LARGE, "the handler's own") }),
+            )
+            .route(
+                "/client",
+                get(
+                    |client: Option<
+                        axum::extract::Extension<crate::client_address::ClientAddress>,
+                    >| async move {
+                        client.map_or_else(
+                            || "none".to_owned(),
+                            |axum::extract::Extension(crate::client_address::ClientAddress(a))| {
+                                a.to_string()
+                            },
+                        )
+                    },
+                ),
+            )
+    }
+
+    async fn send(
+        app: Router,
+        request: http::Request<Body>,
+    ) -> (StatusCode, http::HeaderMap, String) {
+        let response = app.oneshot(request).await.expect("the request is served");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("the body");
+        (
+            status,
+            headers,
+            String::from_utf8(body.to_vec()).expect("UTF-8"),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn every_answer_the_stack_writes_echoes_the_request_id() {
+        let app = app(
+            product().merge(waiting()),
+            serving(),
+            &section(),
+            refusing(),
+        );
+        let requests = [
+            ("GET", "/ferrosys/slow", None, StatusCode::REQUEST_TIMEOUT),
+            (
+                "GET",
+                "/ferrosys/boom",
+                None,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                "GET",
+                "/ferrosys/late-boom",
+                None,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (
+                "POST",
+                "/ferrosys/echo",
+                Some("33"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+            ("GET", "/ferrosys/brief", None, StatusCode::OK),
+        ];
+        for (method, uri, length, status) in requests {
+            for client in [None, Some("corr-42")] {
+                let mut request = http::Request::builder().method(method).uri(uri);
+                if let Some(length) = length {
+                    request = request.header(http::header::CONTENT_LENGTH, length);
+                }
+                if let Some(client) = client {
+                    request = request.header("x-request-id", client);
+                }
+                let body = if length.is_some() {
+                    Body::from("a body of more than sixteen bytes")
+                } else {
+                    Body::empty()
+                };
+                let (got, headers, _) =
+                    send(app.clone(), request.body(body).expect("the request builds")).await;
+                assert_eq!(status, got, "{uri}");
+                let echoed = headers
+                    .get("x-request-id")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+                match client {
+                    Some(client) => assert_eq!(client, echoed, "{uri} echoes the client's id"),
+                    None => assert_eq!(36, echoed.len(), "{uri} echoes the server's id"),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_panic_after_the_handler_waited_is_caught() {
+        let app = app(waiting(), serving(), &section(), StackPolicy::default());
+        let (status, _, body) = get_status(app, "/ferrosys/late-boom").await;
+        assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status);
+        assert!(
+            !body.contains("Qz7sentinel"),
+            "the message is withheld: {body}"
+        );
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!("internal", body["error"]);
+    }
+
+    #[tokio::test]
+    async fn a_handler_that_waits_inside_the_timeout_is_answered() {
+        let app = app(waiting(), serving(), &section(), StackPolicy::default());
+        let (status, _, body) = get_status(app, "/ferrosys/brief").await;
+        assert_eq!((StatusCode::OK, "brief"), (status, body.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_408_or_413_the_handler_wrote_is_never_rewritten() {
+        let app = app(waiting(), serving(), &section(), refusing());
+        for uri in ["/ferrosys/own-408", "/ferrosys/own-413"] {
+            let (_, _, body) = get_status(app.clone(), uri).await;
+            assert_eq!("the handler's own", body, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_client_address_reaches_the_handler_through_the_stack() {
+        let section = ServerSection {
+            trusted_proxies: vec!["127.0.0.1".parse().expect("a proxy")],
+            forwarded_header: crate::client_address::ForwardedHeader::XForwardedFor,
+            ..section()
+        };
+        let app = app(waiting(), serving(), &section, StackPolicy::default());
+        let mut request = http::Request::builder()
+            .uri("/ferrosys/client")
+            .header("x-forwarded-for", "198.51.100.9")
+            .body(Body::empty())
+            .expect("the request builds");
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                40_000,
+            ))));
+        let (_, _, body) = send(app.clone(), request).await;
+        assert_eq!("198.51.100.9", body);
+        let (_, _, body) = get_status(app, "/ferrosys/client").await;
+        assert_eq!("none", body, "a request over no connection names none");
+    }
+
+    #[tokio::test]
+    async fn the_line_names_the_id_the_response_echoes() {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+        let app = app(product(), serving(), &section(), StackPolicy::default());
+        let (_, headers, _) = get_status(app, "/ferrosys/fhir/Patient/7").await;
+        let echoed = headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let log = String::from_utf8(capture.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        let line: serde_json::Value = log
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .find(|line: &serde_json::Value| line["message"] == "request")
+            .expect("one request line");
+        assert_eq!(36, echoed.len(), "{echoed}");
+        assert_eq!(Some(echoed.as_str()), line["request_id"].as_str());
+        assert_eq!(Some(false), line["client_named"].as_bool());
     }
 
     async fn encoding(app: Router, uri: &str, accept: Option<&str>) -> Option<String> {

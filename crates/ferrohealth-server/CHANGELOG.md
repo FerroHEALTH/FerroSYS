@@ -12,6 +12,21 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ### Fixed
 
+- `stack::app` costs about a quarter of what it did per request: 1.4 µs
+  in place of 5.2 µs to an empty handler on the crate's new `stack`
+  benchmark, beside a bare axum floor of 0.4 µs. The request id, the client
+  address, the panic catch, the request timeout, the declared body limit and
+  the rendering of refusals and panics run as one service with one unboxed
+  future, the layers are composed once around each route, the timeout's
+  timer is armed only once a handler waits, and the request id comes from a
+  thread-local generator in place of one system call per request. Every
+  answer, header and log line is as before (#129).
+
+### Changed
+
+- Requires `ferrohealth-telemetry` 0.2.2, whose `RequestLog` layer the
+  stack runs in place of `request_log::middleware` (#129).
+
 - `serve::run`, `serve::run_all`, `serve::serve` and `serve::serve_tls`
   close every connection still open when the drain bound passes, before
   they return `Drained::Cut`, as documented; the connection tasks kept

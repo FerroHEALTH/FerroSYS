@@ -21,7 +21,9 @@
 
 pub mod fields;
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use axum::extract::{MatchedPath, Request, State};
@@ -31,6 +33,7 @@ use http::{Method, StatusCode, Version};
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Histogram, Meter};
 use tracing::field::Empty;
+use tracing::instrument::Instrumented;
 use tracing::{Instrument as _, Level};
 
 use self::fields::LineFields;
@@ -52,7 +55,7 @@ pub const TARGET: &str = "ferrohealth_telemetry::request";
 /// logged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestId {
-    id: String,
+    id: Arc<str>,
     client_named: bool,
 }
 
@@ -61,7 +64,7 @@ impl RequestId {
     #[must_use]
     pub fn new(id: impl Into<String>, client_named: bool) -> Self {
         Self {
-            id: id.into(),
+            id: Arc::from(id.into()),
             client_named,
         }
     }
@@ -131,8 +134,18 @@ pub trait RouteNamer: Send + Sync + 'static {
 /// The request log: the query parameters whose values it may carry, the
 /// recorders it feeds, the duration histogram and the namer of unmatched
 /// routes.
+///
+/// It is also a [`tower::Layer`], which records each request with no boxed
+/// future, where [`middleware`] boxes one through `axum::middleware`.
 #[derive(Clone, Default)]
 pub struct RequestLog {
+    settings: Arc<Settings>,
+}
+
+/// What a [`RequestLog`] holds, shared by its clones: a stack clones its
+/// layers for every request.
+#[derive(Clone, Default)]
+struct Settings {
     logged_query_parameters: Arc<[String]>,
     recorders: Vec<Arc<dyn Recorder>>,
     duration: Option<Histogram<f64>>,
@@ -152,12 +165,13 @@ enum Scheme {
 
 impl std::fmt::Debug for RequestLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let settings = &self.settings;
         f.debug_struct("RequestLog")
-            .field("logged_query_parameters", &self.logged_query_parameters)
-            .field("recorders", &self.recorders.len())
-            .field("metrics", &self.duration.is_some())
-            .field("scheme", &self.scheme)
-            .field("namer", &self.namer.is_some())
+            .field("logged_query_parameters", &settings.logged_query_parameters)
+            .field("recorders", &settings.recorders.len())
+            .field("metrics", &settings.duration.is_some())
+            .field("scheme", &settings.scheme)
+            .field("namer", &settings.namer.is_some())
             .finish()
     }
 }
@@ -168,15 +182,17 @@ impl RequestLog {
     #[must_use]
     pub fn new(logged_query_parameters: &[String]) -> Self {
         Self {
-            logged_query_parameters: logged_query_parameters.into(),
-            ..Self::default()
+            settings: Arc::new(Settings {
+                logged_query_parameters: logged_query_parameters.into(),
+                ..Settings::default()
+            }),
         }
     }
 
     /// Feeds every finished request to `recorder` too.
     #[must_use]
     pub fn with_recorder(mut self, recorder: Arc<dyn Recorder>) -> Self {
-        self.recorders.push(recorder);
+        Arc::make_mut(&mut self.settings).recorders.push(recorder);
         self
     }
 
@@ -185,7 +201,7 @@ impl RequestLog {
     /// push read one series.
     #[must_use]
     pub fn with_metrics(mut self, meter: &Meter) -> Self {
-        self.duration = Some(
+        Arc::make_mut(&mut self.settings).duration = Some(
             meter
                 .f64_histogram(REQUEST_DURATION)
                 .with_description("Duration of HTTP server requests.")
@@ -200,23 +216,23 @@ impl RequestLog {
     /// and as `http`, the default, when it does not.
     #[must_use]
     pub fn serving_tls(mut self, tls: bool) -> Self {
-        self.scheme = if tls { Scheme::Https } else { Scheme::Http };
+        Arc::make_mut(&mut self.settings).scheme = if tls { Scheme::Https } else { Scheme::Http };
         self
     }
 
     /// Names the route of a request no route matched through `namer`.
     #[must_use]
     pub fn with_route_namer(mut self, namer: Arc<dyn RouteNamer>) -> Self {
-        self.namer = Some(namer);
+        Arc::make_mut(&mut self.settings).namer = Some(namer);
         self
     }
 
     /// Records one finished request in the duration histogram.
     fn measure(&self, completed: &Completed<'_>, version: Version) {
-        let Some(duration) = &self.duration else {
+        let Some(duration) = &self.settings.duration else {
             return;
         };
-        let scheme = match self.scheme {
+        let scheme = match self.settings.scheme {
             Scheme::Http => "http",
             Scheme::Https => "https",
         };
@@ -287,91 +303,217 @@ const fn protocol_version(version: Version) -> Option<&'static str> {
 /// Mounted with `Router::layer` it sees every request, the fallback's
 /// included, and the matched route of each; mounted with
 /// `Router::route_layer` it sees only the requests a route matched, so a
-/// [`RouteNamer`] is never asked.
+/// [`RouteNamer`] is never asked. The [`RequestLog`] layer does the same
+/// without the boxing of `axum::middleware`.
 pub async fn middleware(State(log): State<RequestLog>, request: Request, next: Next) -> Response {
-    let method = request.method().clone();
-    let version = request.version();
-    let matched = request
-        .extensions()
-        .get::<MatchedPath>()
-        .map(|matched| matched.as_str().to_owned())
-        .or_else(|| {
-            log.namer
+    let begun = Begun::of(&log, &request);
+    let response = next.run(request).instrument(begun.span.clone()).await;
+    begun.finish(&log, &response);
+    response
+}
+
+impl<S> tower::Layer<S> for RequestLog {
+    type Service = RequestLogService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RequestLogService {
+            log: self.clone(),
+            inner,
+        }
+    }
+}
+
+/// The service of the [`RequestLog`] layer: one line, one span and one
+/// sample per request `inner` answers.
+#[derive(Clone, Debug)]
+pub struct RequestLogService<S> {
+    log: RequestLog,
+    inner: S,
+}
+
+impl<S, B, ResB> tower::Service<http::Request<B>> for RequestLogService<S>
+where
+    S: tower::Service<http::Request<B>, Response = http::Response<ResB>>,
+{
+    type Response = http::Response<ResB>;
+    type Error = S::Error;
+    type Future = RequestLogFuture<S::Future>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: http::Request<B>) -> Self::Future {
+        let begun = Begun::of(&self.log, &request);
+        RequestLogFuture {
+            inner: self.inner.call(request).instrument(begun.span.clone()),
+            begun: Some(begun),
+            log: self.log.clone(),
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// The future of [`RequestLogService`]: writes the line when the
+    /// response is ready.
+    pub struct RequestLogFuture<F> {
+        #[pin]
+        inner: Instrumented<F>,
+        begun: Option<Begun>,
+        log: RequestLog,
+    }
+}
+
+impl<F> std::fmt::Debug for RequestLogFuture<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestLogFuture").finish_non_exhaustive()
+    }
+}
+
+impl<F, ResB, E> Future for RequestLogFuture<F>
+where
+    F: Future<Output = Result<http::Response<ResB>, E>>,
+{
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let output = std::task::ready!(this.inner.poll(cx));
+        if let (Ok(response), Some(begun)) = (&output, this.begun.take()) {
+            begun.finish(this.log, response);
+        }
+        Poll::Ready(output)
+    }
+}
+
+/// The route a request is logged under.
+enum Route {
+    /// The template the router matched.
+    Matched(MatchedPath),
+    /// The template a [`RouteNamer`] named.
+    Named(String),
+    /// No route.
+    Unmatched,
+}
+
+impl Route {
+    /// The template, when a route matched or was named.
+    fn template(&self) -> Option<&str> {
+        match self {
+            Self::Matched(matched) => Some(matched.as_str()),
+            Self::Named(named) => Some(named),
+            Self::Unmatched => None,
+        }
+    }
+}
+
+/// What the request log reads from a request before it is answered.
+struct Begun {
+    method: Method,
+    version: Version,
+    route: Route,
+    query: String,
+    request_id: Option<RequestId>,
+    span: tracing::Span,
+    started: Instant,
+}
+
+impl Begun {
+    /// Reads `request` and opens its span.
+    fn of<B>(log: &RequestLog, request: &http::Request<B>) -> Self {
+        let method = request.method().clone();
+        let route = match request.extensions().get::<MatchedPath>() {
+            Some(matched) => Route::Matched(matched.clone()),
+            None => log
+                .settings
+                .namer
                 .as_ref()
                 .and_then(|namer| namer.route(&method, request.uri().path()))
-        });
-    let route = matched.as_deref().unwrap_or(UNMATCHED).to_owned();
-    let query = allowed_parameters(
-        request.uri().query().unwrap_or_default(),
-        &log.logged_query_parameters,
-    );
-    let (request_id, client_named) = request
-        .extensions()
-        .get::<RequestId>()
-        .map_or((String::new(), false), |id| {
-            (id.id().to_owned(), id.client_named())
-        });
-    let span = tracing::info_span!(
-        target: TARGET,
-        "request",
-        http.request.method = method.as_str(),
-        http.route = route.as_str(),
-        http.response.status_code = Empty,
-        request_id = request_id.as_str(),
-    );
-    let started = Instant::now();
-    let response = next.run(request).instrument(span.clone()).await;
-    let status = response.status();
-    let latency = started.elapsed();
-    span.record("http.response.status_code", status.as_u16());
-    let completed = Completed {
-        method: &method,
-        route: matched.as_deref(),
-        status,
-        latency,
-    };
-    for recorder in &log.recorders {
-        recorder.record(&completed);
-    }
-    log.measure(&completed, version);
-    let latency_ms = latency.as_secs_f64() * 1000.0;
-    let (method, route, query, request_id) = (
-        method.as_str(),
-        route.as_str(),
-        query.as_str(),
-        request_id.as_str(),
-    );
-    let status = status.as_u16();
-    if let Some(added) = response
-        .extensions()
-        .get::<LineFields>()
-        .filter(|added| !added.is_empty())
-    {
-        let level = if completed.status.is_server_error() {
-            Level::ERROR
-        } else if completed.status.is_client_error() {
-            Level::WARN
-        } else {
-            Level::INFO
+                .map_or(Route::Unmatched, Route::Named),
         };
-        let core = fields::Core {
+        let query = allowed_parameters(
+            request.uri().query().unwrap_or_default(),
+            &log.settings.logged_query_parameters,
+        );
+        let request_id = request.extensions().get::<RequestId>().cloned();
+        let span = tracing::info_span!(
+            target: TARGET,
+            "request",
+            http.request.method = method.as_str(),
+            http.route = route.template().unwrap_or(UNMATCHED),
+            http.response.status_code = Empty,
+            request_id = request_id.as_ref().map_or("", RequestId::id),
+        );
+        Self {
             method,
+            version: request.version(),
             route,
-            status,
-            latency_ms,
             query,
             request_id,
-            client_named,
-        };
-        fields::write(level, &core, added);
-    } else if completed.status.is_server_error() {
-        tracing::error!(target: TARGET, method, route, status, latency_ms, query, request_id, client_named, "request");
-    } else if completed.status.is_client_error() {
-        tracing::warn!(target: TARGET, method, route, status, latency_ms, query, request_id, client_named, "request");
-    } else {
-        tracing::info!(target: TARGET, method, route, status, latency_ms, query, request_id, client_named, "request");
+            span,
+            started: Instant::now(),
+        }
     }
-    response
+
+    /// Records the answered request: the span's status, the recorders, the
+    /// histogram and the line.
+    fn finish<ResB>(self, log: &RequestLog, response: &http::Response<ResB>) {
+        let status = response.status();
+        let latency = self.started.elapsed();
+        self.span
+            .record("http.response.status_code", status.as_u16());
+        let completed = Completed {
+            method: &self.method,
+            route: self.route.template(),
+            status,
+            latency,
+        };
+        for recorder in &log.settings.recorders {
+            recorder.record(&completed);
+        }
+        log.measure(&completed, self.version);
+        let latency_ms = latency.as_secs_f64() * 1000.0;
+        let (method, route, query, request_id) = (
+            self.method.as_str(),
+            completed.route.unwrap_or(UNMATCHED),
+            self.query.as_str(),
+            self.request_id.as_ref().map_or("", RequestId::id),
+        );
+        let client_named = self
+            .request_id
+            .as_ref()
+            .is_some_and(RequestId::client_named);
+        let status = status.as_u16();
+        if let Some(added) = response
+            .extensions()
+            .get::<LineFields>()
+            .filter(|added| !added.is_empty())
+        {
+            let level = if completed.status.is_server_error() {
+                Level::ERROR
+            } else if completed.status.is_client_error() {
+                Level::WARN
+            } else {
+                Level::INFO
+            };
+            let core = fields::Core {
+                method,
+                route,
+                status,
+                latency_ms,
+                query,
+                request_id,
+                client_named,
+            };
+            fields::write(level, &core, added);
+        } else if completed.status.is_server_error() {
+            tracing::error!(target: TARGET, method, route, status, latency_ms, query, request_id, client_named, "request");
+        } else if completed.status.is_client_error() {
+            tracing::warn!(target: TARGET, method, route, status, latency_ms, query, request_id, client_named, "request");
+        } else {
+            tracing::info!(target: TARGET, method, route, status, latency_ms, query, request_id, client_named, "request");
+        }
+    }
 }
 
 /// Returns the allowed `key=value` pairs of `query`, each value cut to
@@ -731,6 +873,50 @@ mod tests {
             *count.0.lock().expect("the list"),
             "the recorders see the named route too"
         );
+    }
+
+    #[test]
+    fn the_layer_writes_the_line_the_middleware_writes() {
+        let routes = || {
+            Router::new()
+                .route("/fhir/Patient/{id}", get(|| async { "ok" }))
+                .route("/broken", get(|| async { http::StatusCode::BAD_GATEWAY }))
+        };
+        let with_id = |router: Router| {
+            router.layer(axum::middleware::map_request(
+                |mut request: axum::extract::Request| async move {
+                    request
+                        .extensions_mut()
+                        .insert(RequestId::new("srv-1", false));
+                    request
+                },
+            ))
+        };
+        let by_middleware = |log: RequestLog| {
+            with_id(routes().layer(axum::middleware::from_fn_with_state(log, middleware)))
+        };
+        let by_layer = |log: RequestLog| with_id(routes().layer(log));
+        let without_latency = |mut lines: Vec<serde_json::Value>| {
+            for line in &mut lines {
+                if let Some(line) = line.as_object_mut() {
+                    line.remove("latency_ms");
+                    line.remove("timestamp");
+                }
+            }
+            lines
+        };
+        for uri in ["/fhir/Patient/7?_count=3&name=Qz7", "/broken", "/elsewhere"] {
+            let count = Arc::new(Count::default());
+            let log = RequestLog::new(&["_count".to_owned()]).with_recorder(count.clone());
+            let (status, expected) = json_lines(log.clone(), by_middleware, get_request(uri));
+            let (got_status, got) = json_lines(log, by_layer, get_request(uri));
+            assert_eq!(status, got_status, "{uri}");
+            assert_eq!(1, expected.len(), "{uri}: {expected:?}");
+            assert_eq!(without_latency(expected), without_latency(got), "{uri}");
+            let seen = count.0.lock().expect("the list");
+            assert_eq!(2, seen.len(), "{uri}: both feed the recorder");
+            assert_eq!(seen.first(), seen.last(), "{uri}");
+        }
     }
 
     #[test]

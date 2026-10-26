@@ -73,19 +73,54 @@ pub async fn render(body: RefusalBody, request: Request, next: Next) -> Response
         .unwrap_or_default();
     let response = next.run(request).await;
     let status = response.status();
-    let reason = match response.extensions().get::<Refused>() {
-        Some(Refused(reason)) => *reason,
+    let reason = match reason(&response) {
+        Some(reason) => reason,
         None if response.extensions().get::<Answered>().is_some() => return response,
         None if status == StatusCode::REQUEST_TIMEOUT => TIMEOUT,
         None if status == StatusCode::PAYLOAD_TOO_LARGE => TOO_LARGE,
         None => return response,
     };
-    let mut rendered = body(&uri, &request_id, status, reason);
+    rewrite(&body, &uri, &request_id, &response, reason)
+}
+
+/// The reason of a refusal [`refused`] wrote, when `response` is one.
+pub(crate) fn reason<B>(response: &http::Response<B>) -> Option<&'static str> {
+    response
+        .extensions()
+        .get::<Refused>()
+        .map(|Refused(reason)| *reason)
+}
+
+/// The refusal `response` written with `body` for `reason`, keeping its
+/// status and its `Retry-After`.
+pub(crate) fn rewrite<B>(
+    body: &RefusalBody,
+    uri: &Uri,
+    request_id: &str,
+    response: &http::Response<B>,
+    reason: &str,
+) -> Response {
+    let status = response.status();
+    let mut rendered = body(uri, request_id, status, reason);
     *rendered.status_mut() = status;
     if let Some(wait) = response.headers().get(header::RETRY_AFTER) {
         rendered
             .headers_mut()
             .insert(header::RETRY_AFTER, wait.clone());
     }
+    rendered
+}
+
+/// A refusal of `status` for `reason` the stack writes before any handler
+/// runs, such as a timeout, written with `body`.
+pub(crate) fn write(
+    body: &RefusalBody,
+    uri: &Uri,
+    request_id: &str,
+    status: StatusCode,
+    reason: &str,
+) -> Response {
+    let mut rendered = body(uri, request_id, status, reason);
+    *rendered.status_mut() = status;
     rendered
 }
