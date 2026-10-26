@@ -746,7 +746,9 @@ dependencies = [
 name = "ferrohealth-usage-report"
 version = "0.1.1"
 dependencies = [
+ "axum",
  "ferrohealth-config",
+ "ferrohealth-telemetry",
  "http",
  "jiff",
  "jsonschema",
@@ -756,6 +758,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "url",

@@ -22,7 +22,9 @@ own `status`.
   daily report a day with every replica's counts, and one installation id.
 - `window::Window` holds the latency histogram and the server errors per
   request group, and the product's counters. The request log fills it with
-  route templates, never paths.
+  route templates, never paths: with the `telemetry` feature the window is a
+  `ferrohealth_telemetry::request_log::Recorder`, handed to the shared
+  request log with `RequestLog::with_recorder`.
 - `envelope` holds the closed types of envelope v2.
 - `reporter::Reporter` sends one `start` report at each start (at most one
   per ten minutes) and one `daily` report a day. A refusal is logged with

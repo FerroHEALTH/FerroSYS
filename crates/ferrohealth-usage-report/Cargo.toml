@@ -17,7 +17,14 @@ keywords = ["usage-report", "telemetry", "installation", "healthcare"]
 categories = ["web-programming::http-client"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 
+[features]
+default = []
+# The `Recorder` through which the shared request log of
+# ferrohealth-telemetry fills the window.
+telemetry = ["dep:ferrohealth-telemetry"]
+
 [dependencies]
+ferrohealth-telemetry = { workspace = true, features = ["axum"], optional = true }
 http.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
@@ -30,10 +37,12 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 ferrohealth-config.workspace = true
 jsonschema.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tower.workspace = true
 tracing-subscriber.workspace = true
 wiremock.workspace = true
 

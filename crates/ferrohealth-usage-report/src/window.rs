@@ -233,6 +233,19 @@ impl Window {
     }
 }
 
+#[cfg(feature = "telemetry")]
+impl ferrohealth_telemetry::request_log::Recorder for Window {
+    fn record(&self, completed: &ferrohealth_telemetry::request_log::Completed<'_>) {
+        Self::record(
+            self,
+            completed.method,
+            completed.route,
+            completed.status,
+            completed.latency,
+        );
+    }
+}
+
 fn bucket_of(ms: f64) -> usize {
     BUCKET_BOUNDS_MS
         .iter()
@@ -388,5 +401,44 @@ mod tests {
         let metrics = window.take().to_metrics();
         assert_eq!(MAX_GROUPS, metrics.window_24h.groups.len());
         assert_eq!(RequestsBucket::Below100, metrics.window_24h.requests_bucket);
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn the_shared_request_log_fills_the_window() {
+        use std::sync::Arc;
+
+        use axum::Router;
+        use axum::body::Body;
+        use axum::routing::get;
+        use ferrohealth_telemetry::request_log::{RequestLog, middleware};
+        use tower::ServiceExt as _;
+
+        let window = Arc::new(Window::new(|_method, route| match route {
+            Some("/fhir/Patient/{id}" | "/fhir/Observation/{id}") => Key::new("read"),
+            _ => None,
+        }));
+        let log = RequestLog::new(&[]).with_recorder(window.clone());
+        let app = Router::new()
+            .route("/fhir/Patient/{id}", get(|| async { "{}" }))
+            .route(
+                "/fhir/Observation/{id}",
+                get(|| async { StatusCode::NOT_FOUND }),
+            )
+            .route("/health", get(|| async { "up" }))
+            .layer(axum::middleware::from_fn_with_state(log, middleware));
+        for path in ["/fhir/Patient/a1", "/fhir/Observation/b2", "/health"] {
+            let request = http::Request::get(path)
+                .body(Body::empty())
+                .expect("a request");
+            app.clone().oneshot(request).await.expect("an answer");
+        }
+
+        let counts = window.take();
+        let groups: Vec<&str> = counts.groups.keys().map(Key::as_str).collect();
+        assert_eq!(vec!["read"], groups);
+        assert_eq!(2, counts.requests(), "the health probe is not counted");
+        let refusals = Key::new(RESPONSES_4XX).expect("a key");
+        assert_eq!(Some(&1), counts.counters.get(&refusals));
     }
 }

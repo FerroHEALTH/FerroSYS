@@ -10,6 +10,13 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- The `telemetry` feature: `window::Window` implements
+  `ferrohealth_telemetry::request_log::Recorder`, so a product hands its
+  window to the shared request log with `RequestLog::with_recorder` and
+  writes no adapter of its own (#117).
+
 ## [0.1.1] - 2026-10-26
 
 ### Added
