@@ -28,6 +28,9 @@ pub struct TelemetrySection {
     /// The query parameters whose values the request log may carry; empty,
     /// it carries none.
     pub logged_query_parameters: Vec<String>,
+    /// The deployment environment, `deployment.environment.name` on the
+    /// resource, such as `production`.
+    pub environment: Option<String>,
     /// The OTLP collector, when spans and metrics are exported.
     pub otlp: Option<OtlpSection>,
 }
@@ -321,6 +324,13 @@ mod tests {
             );
         }
         assert_eq!(Some(0.25), SampleRatio::new(0.25).map(SampleRatio::get));
+    }
+
+    #[test]
+    fn the_environment_loads_as_written() {
+        let section = load("[telemetry]\nenvironment = \"staging\"\n").expect("the key loads");
+        assert_eq!(Some("staging"), section.environment.as_deref());
+        assert_eq!(None, load("").expect("an empty file loads").environment);
     }
 
     #[test]

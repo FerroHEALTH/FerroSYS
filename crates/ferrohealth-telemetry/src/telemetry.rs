@@ -12,8 +12,10 @@
 //! span (W3C Trace Context): every request starts a trace of the server's
 //! own.
 
+use std::ffi::OsStr;
 use std::fmt;
-use std::io;
+use std::io::{self, IsTerminal as _};
+use std::sync::Arc;
 
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Meter, MeterProvider as _};
@@ -22,15 +24,15 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::{Sampler, SdkTracer, SdkTracerProvider};
 use tracing::{Metadata, Subscriber};
-use tracing_subscriber::Layer;
-use tracing_subscriber::filter::FilterFn;
+use tracing_subscriber::filter::{EnvFilter, FilterExt as _, FilterFn, LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
+use tracing_subscriber::{Layer, reload};
 
 use crate::console::{self, BoxedLayer};
-use crate::section::{FilterError, Format, SampleRatio, TelemetrySection};
+use crate::section::{Filter, FilterError, Format, SampleRatio, TelemetrySection};
 
 /// The service the telemetry describes: the OpenTelemetry resource of every
 /// span and metric, and the crates whose spans are exported.
@@ -39,6 +41,7 @@ pub struct Service {
     name: String,
     version: String,
     instance_id: Option<String>,
+    environment: Option<String>,
     crates: Vec<String>,
 }
 
@@ -54,6 +57,7 @@ impl Service {
             name,
             version: version.into(),
             instance_id: None,
+            environment: None,
         }
     }
 
@@ -61,6 +65,15 @@ impl Service {
     #[must_use]
     pub fn instance_id(mut self, id: impl Into<String>) -> Self {
         self.instance_id = Some(id.into());
+        self
+    }
+
+    /// Names the deployment environment as `deployment.environment.name`
+    /// (OpenTelemetry semantic conventions, deployment attributes), such as
+    /// `production`.
+    #[must_use]
+    pub fn environment(mut self, name: impl Into<String>) -> Self {
+        self.environment = Some(name.into());
         self
     }
 
@@ -83,6 +96,12 @@ impl Service {
         let mut attributes = vec![KeyValue::new("service.version", self.version.clone())];
         if let Some(id) = &self.instance_id {
             attributes.push(KeyValue::new("service.instance.id", id.clone()));
+        }
+        if let Some(environment) = &self.environment {
+            attributes.push(KeyValue::new(
+                "deployment.environment.name",
+                environment.clone(),
+            ));
         }
         Resource::builder()
             .with_service_name(self.name.clone())
@@ -118,6 +137,13 @@ pub enum InitError {
     /// The log filter does not parse.
     #[error(transparent)]
     Filter(#[from] FilterError),
+    /// The console filter could not be replaced: the subscriber is gone.
+    #[error("the log filter could not be replaced")]
+    Reload {
+        /// What `tracing-subscriber` reported.
+        #[source]
+        source: reload::Error,
+    },
     /// A subscriber is already installed in this process.
     #[error("a log subscriber is already installed")]
     AlreadyInstalled {
@@ -225,6 +251,10 @@ impl Telemetry {
     /// cannot be built, and [`InitError::Prometheus`] when the Prometheus
     /// reader cannot be built.
     pub fn new(section: &TelemetrySection, service: Service) -> Result<Self, InitError> {
+        let service = match &section.environment {
+            Some(environment) => service.environment(environment.clone()),
+            None => service,
+        };
         let resource = service.resource();
         let mut meters = SdkMeterProvider::builder().with_resource(resource.clone());
         #[cfg(feature = "prometheus")]
@@ -285,11 +315,13 @@ impl Telemetry {
             .map(|provider| provider.tracer(self.service.name.clone()))
     }
 
-    /// Returns the subscriber layers: the console for `format` with
-    /// `section`'s filter, writing through `writer`, and the span export.
+    /// Returns the subscriber layers and the handle of the console filter.
     ///
-    /// The filter decides what the console writes and nothing else, so a
-    /// quieter log never thins a trace.
+    /// The console renders `section`'s format as `console` decides it,
+    /// writing through `writer`, and writes what `section`'s filter or
+    /// `console`'s forced directives let through. The filter decides what
+    /// the console writes and nothing else, so a quieter log never thins a
+    /// trace.
     ///
     /// # Errors
     ///
@@ -298,19 +330,25 @@ impl Telemetry {
     pub fn layers<S, W>(
         &self,
         section: &TelemetrySection,
-        stdout_is_terminal: bool,
+        console: &Console,
         writer: W,
-    ) -> Result<Vec<BoxedLayer<S>>, InitError>
+    ) -> Result<Layers<S>, InitError>
     where
         S: Subscriber + for<'span> LookupSpan<'span> + Send + Sync,
         W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
     {
-        let rendering = section.format.resolve(stdout_is_terminal);
-        let ansi = matches!(section.format, Format::Pretty) || stdout_is_terminal;
-        let filter = section.filter.env_filter()?;
+        let rendering = section.format.resolve(console.terminal);
+        let ansi = console.colour(section.format);
+        let (configured, handle) = reload::Layer::new(section.filter.env_filter()?);
+        // NOTE: no specification governs this: our own design; a forced directive is
+        // its own filter beside the configured one, so no directive there can quiet it.
+        let forced = match &console.forced {
+            Some(forced) => forced.env_filter()?,
+            None => EnvFilter::new(LevelFilter::OFF.to_string()),
+        };
         let mut layers = vec![
             console::layer(rendering, ansi, writer)
-                .with_filter(filter)
+                .with_filter(configured.or(forced))
                 .boxed(),
         ];
         if let Some(tracer) = self.tracer() {
@@ -324,10 +362,14 @@ impl Telemetry {
                     .boxed(),
             );
         }
-        Ok(layers)
+        Ok(Layers {
+            layers,
+            filter: FilterHandle::new(handle),
+        })
     }
 
-    /// Installs the process-wide subscriber on stdout.
+    /// Installs the process-wide subscriber on stdout and returns the handle
+    /// that replaces the console filter.
     ///
     /// # Errors
     ///
@@ -336,13 +378,14 @@ impl Telemetry {
     pub fn install(
         &self,
         section: &TelemetrySection,
-        stdout_is_terminal: bool,
-    ) -> Result<(), InitError> {
-        let layers = self.layers(section, stdout_is_terminal, io::stdout)?;
+        console: &Console,
+    ) -> Result<FilterHandle, InitError> {
+        let Layers { layers, filter } = self.layers(section, console, io::stdout)?;
         tracing_subscriber::registry()
             .with(layers)
             .try_init()
-            .map_err(|source| InitError::AlreadyInstalled { source })
+            .map_err(|source| InitError::AlreadyInstalled { source })?;
+        Ok(filter)
     }
 
     /// Renders every metric in the Prometheus text exposition format.
@@ -386,6 +429,131 @@ impl Telemetry {
                 source,
             });
         traces.and(metrics)
+    }
+}
+
+/// How the console is drawn: whether stdout is a terminal, whether
+/// `NO_COLOR` asks for no colour, and the directives no filter can drop.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Console {
+    terminal: bool,
+    no_color: bool,
+    forced: Option<Filter>,
+}
+
+impl Console {
+    /// A console on a stdout that is a terminal when `stdout_is_terminal`
+    /// holds, with `no_color` the value of `NO_COLOR`, which the caller
+    /// passes so a test fixes both.
+    #[must_use]
+    pub fn new(stdout_is_terminal: bool, no_color: Option<&OsStr>) -> Self {
+        Self {
+            terminal: stdout_is_terminal,
+            // NOTE: <https://no-color.org/>: a `NO_COLOR` that is present and not empty
+            // turns colour off, whatever its value.
+            no_color: no_color.is_some_and(|value| !value.is_empty()),
+            forced: None,
+        }
+    }
+
+    /// The console of this process: whether its stdout is a terminal, and
+    /// its `NO_COLOR`.
+    #[must_use]
+    pub fn detect() -> Self {
+        Self::new(
+            io::stdout().is_terminal(),
+            std::env::var_os("NO_COLOR").as_deref(),
+        )
+    }
+
+    /// Writes what `directives` let through whatever the configured filter
+    /// says, such as a product's security log at `info`
+    /// (`ferrofed::security=info`).
+    ///
+    /// The directives are their own filter beside the configured one, and
+    /// replacing the configured filter keeps them.
+    #[must_use]
+    pub fn force(mut self, directives: Filter) -> Self {
+        self.forced = Some(directives);
+        self
+    }
+
+    /// Whether the console writes colour for `format`: never under
+    /// `NO_COLOR`; otherwise always for an explicit `pretty`, because a
+    /// person asked for it, and on a terminal for `auto` and `json`.
+    #[must_use]
+    pub fn colour(&self, format: Format) -> bool {
+        !self.no_color && (matches!(format, Format::Pretty) || self.terminal)
+    }
+}
+
+/// The subscriber layers and the handle of the console filter.
+pub struct Layers<S> {
+    /// The layers, for `tracing_subscriber::registry().with(layers)`.
+    pub layers: Vec<BoxedLayer<S>>,
+    /// The handle that replaces the console filter.
+    pub filter: FilterHandle,
+}
+
+impl<S> fmt::Debug for Layers<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Layers")
+            .field("layers", &self.layers.len())
+            .field("filter", &self.filter)
+            .finish()
+    }
+}
+
+/// The swap of the console filter.
+type Swap = dyn Fn(EnvFilter) -> Result<(), reload::Error> + Send + Sync;
+
+/// The read of the console filter.
+type Current = dyn Fn() -> Option<String> + Send + Sync;
+
+/// The handle that replaces the configured console filter at run time; the
+/// forced directives stay.
+#[derive(Clone)]
+pub struct FilterHandle {
+    swap: Arc<Swap>,
+    current: Arc<Current>,
+}
+
+impl fmt::Debug for FilterHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilterHandle").finish_non_exhaustive()
+    }
+}
+
+impl FilterHandle {
+    /// The handle over the reload `handle` of the configured filter.
+    fn new<S>(handle: reload::Handle<EnvFilter, S>) -> Self
+    where
+        S: 'static,
+    {
+        let read = handle.clone();
+        Self {
+            swap: Arc::new(move |filter| handle.reload(filter)),
+            current: Arc::new(move || read.with_current(ToString::to_string).ok()),
+        }
+    }
+
+    /// Replaces the configured console filter with `directive`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InitError::Filter`] when the directive does not parse and
+    /// [`InitError::Reload`] when the subscriber is gone; the running filter
+    /// stays either way.
+    pub fn replace(&self, directive: &str) -> Result<(), InitError> {
+        let filter = Filter::new(directive)?.env_filter()?;
+        (self.swap)(filter).map_err(|source| InitError::Reload { source })
+    }
+
+    /// Returns the configured console filter now running, or `None` when
+    /// the subscriber is gone.
+    #[must_use]
+    pub fn current(&self) -> Option<String> {
+        (self.current)()
     }
 }
 
@@ -507,10 +675,192 @@ mod otlp {
 
 #[cfg(test)]
 mod tests {
-    use ferrohealth_secret::secret_url::SecretUrl;
+    use std::ffi::OsStr;
+    use std::sync::{Arc, Mutex};
 
-    use super::{InitError, Service, Telemetry};
-    use crate::section::{OtlpSection, TelemetrySection};
+    use ferrohealth_secret::secret_url::SecretUrl;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    use super::{Console, InitError, Service, Telemetry};
+    use crate::section::{Filter, Format, OtlpSection, TelemetrySection};
+
+    /// A writer that keeps what it is given.
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl Capture {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("the buffer").clone()).expect("UTF-8")
+        }
+    }
+
+    impl std::io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("the buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn telemetry() -> Telemetry {
+        Telemetry::new(
+            &TelemetrySection::default(),
+            Service::new("ferrosys", "0.0.0"),
+        )
+        .expect("the telemetry builds")
+    }
+
+    fn section(format: Format, filter: &str) -> TelemetrySection {
+        TelemetrySection {
+            format,
+            filter: Filter::new(filter).expect("the filter parses"),
+            ..TelemetrySection::default()
+        }
+    }
+
+    #[test]
+    fn no_color_set_and_not_empty_turns_colour_off() {
+        let off = Some(OsStr::new("1"));
+        assert!(!Console::new(true, off).colour(Format::Pretty));
+        assert!(!Console::new(true, off).colour(Format::Auto));
+        assert!(!Console::new(false, Some(OsStr::new("false"))).colour(Format::Pretty));
+        let empty = Some(OsStr::new(""));
+        assert!(
+            Console::new(true, empty).colour(Format::Auto),
+            "an empty NO_COLOR is unset"
+        );
+        assert!(
+            Console::new(false, None).colour(Format::Pretty),
+            "pretty asked for colour"
+        );
+        assert!(!Console::new(false, None).colour(Format::Auto));
+    }
+
+    #[test]
+    fn the_pretty_console_under_no_color_writes_no_escape() {
+        let draw = |console: &Console| {
+            let capture = Capture::default();
+            let layers = telemetry()
+                .layers(&section(Format::Pretty, "info"), console, capture.clone())
+                .expect("the layers build")
+                .layers;
+            tracing::subscriber::with_default(tracing_subscriber::registry().with(layers), || {
+                tracing::info!("drawn");
+            });
+            capture.text()
+        };
+        assert!(
+            draw(&Console::new(true, None)).contains('\u{1b}'),
+            "colour by default"
+        );
+        let plain = draw(&Console::new(true, Some(OsStr::new("1"))));
+        assert!(
+            plain.contains("drawn") && !plain.contains('\u{1b}'),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn a_forced_target_logs_under_an_error_only_filter() {
+        let capture = Capture::default();
+        let console = Console::new(false, None)
+            .force(Filter::new("ferrosys::security=info").expect("parses"));
+        let layers = telemetry()
+            .layers(&section(Format::Json, "error"), &console, capture.clone())
+            .expect("the layers build")
+            .layers;
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layers), || {
+            tracing::info!(target: "ferrosys::security", "Qz7forced");
+            tracing::debug!(target: "ferrosys::security", "Qz7below");
+            tracing::info!(target: "ferrosys::other", "Qz7quiet");
+            tracing::error!(target: "ferrosys::other", "Qz7error");
+        });
+        let text = capture.text();
+        assert!(text.contains("Qz7forced"), "{text}");
+        assert!(text.contains("Qz7error"), "{text}");
+        assert!(!text.contains("Qz7below"), "the forced level holds: {text}");
+        assert!(!text.contains("Qz7quiet"), "{text}");
+    }
+
+    #[test]
+    fn the_handle_swaps_the_filter_keeps_the_forced_directives_and_refuses_a_bad_one() {
+        let capture = Capture::default();
+        let console = Console::new(false, None)
+            .force(Filter::new("ferrosys::security=info").expect("parses"));
+        let layers = telemetry()
+            .layers(&section(Format::Json, "error"), &console, capture.clone())
+            .expect("the layers build");
+        let handle = layers.filter.clone();
+        tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(layers.layers),
+            || {
+                tracing::info!(target: "ferrosys::other", "Qz7before");
+                assert_eq!(Some("error".to_owned()), handle.current());
+                handle.replace("info").expect("the filter swaps");
+                assert_eq!(Some("info".to_owned()), handle.current());
+                tracing::info!(target: "ferrosys::other", "Qz7after");
+                let refused = handle
+                    .replace("info,=,,")
+                    .expect_err("the directive does not parse");
+                assert!(matches!(refused, InitError::Filter(_)), "{refused:?}");
+                assert_eq!(
+                    Some("info".to_owned()),
+                    handle.current(),
+                    "the running filter stays"
+                );
+                handle.replace("off").expect("the filter swaps");
+                tracing::info!(target: "ferrosys::other", "Qz7silenced");
+                tracing::info!(target: "ferrosys::security", "Qz7forced");
+            },
+        );
+        let text = capture.text();
+        assert!(!text.contains("Qz7before"), "{text}");
+        assert!(text.contains("Qz7after"), "{text}");
+        assert!(!text.contains("Qz7silenced"), "{text}");
+        assert!(
+            text.contains("Qz7forced"),
+            "a swap keeps the forced directives: {text}"
+        );
+    }
+
+    #[test]
+    fn the_environment_of_the_section_names_the_deployment_on_the_resource() {
+        let section = TelemetrySection {
+            environment: Some("production".to_owned()),
+            ..TelemetrySection::default()
+        };
+        let telemetry = Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
+            .expect("the telemetry builds");
+        let resource = telemetry.service.resource();
+        assert_eq!(
+            Some("production".to_owned()),
+            resource
+                .get(&opentelemetry::Key::from_static_str(
+                    "deployment.environment.name"
+                ))
+                .map(|value| value.to_string())
+        );
+        let unnamed = Service::new("ferrosys", "0.0.0").resource();
+        assert!(
+            unnamed
+                .get(&opentelemetry::Key::from_static_str(
+                    "deployment.environment.name"
+                ))
+                .is_none(),
+            "no environment, no attribute"
+        );
+    }
 
     fn with_otlp(endpoint: &str) -> TelemetrySection {
         TelemetrySection {
