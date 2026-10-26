@@ -10,6 +10,8 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-26
+
 ### Added
 
 - The `telemetry` feature: `window::Window` implements
@@ -57,6 +59,7 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
   reports, a refusal logged with the collector's status, and a daily report
   that does not arrive keeping its counts for the next try (#18).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.2...HEAD
+[0.1.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.1...ferrohealth-usage-report-v0.1.2
 [0.1.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.0...ferrohealth-usage-report-v0.1.1
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-usage-report-v0.1.0
