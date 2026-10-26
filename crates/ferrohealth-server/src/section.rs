@@ -20,6 +20,11 @@ pub struct ServerSection {
     pub base_path: BasePath,
     /// How long one request may take before the server answers `408`.
     pub request_timeout_ms: u64,
+    /// How long a client may take to send a request head once it connected
+    /// or once its last response was written; a client still sending its
+    /// head then is disconnected, which bounds a connection that never
+    /// finishes one.
+    pub header_read_timeout_ms: std::num::NonZeroU64,
     /// The largest request body the server reads before answering `413`.
     pub body_limit_bytes: usize,
     /// How long readiness stays withdrawn before the listener closes, so an
@@ -80,6 +85,23 @@ pub struct TlsSection {
     /// The client certificate chain and key, in one PEM, the healthcheck
     /// presents to a listener that asks one.
     pub healthcheck_identity_file: Option<std::path::PathBuf>,
+    /// The oldest TLS version the listener speaks.
+    pub min_version: TlsVersion,
+}
+
+/// A TLS version the listener speaks at least.
+///
+/// RFC 9325 §3.1.1 has TLS 1.3 supported and lets a deployment require it;
+/// the default keeps TLS 1.2 beside it for clients that have no 1.3.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum TlsVersion {
+    /// TLS 1.2 and 1.3.
+    #[default]
+    #[serde(rename = "1.2")]
+    Tls12,
+    /// TLS 1.3 alone.
+    #[serde(rename = "1.3")]
+    Tls13,
 }
 
 /// Whether the listener asks a client certificate.
@@ -106,6 +128,8 @@ struct RawTls {
     client_ca_file: Option<std::path::PathBuf>,
     reload_interval_s: Option<std::num::NonZeroU64>,
     healthcheck_identity_file: Option<std::path::PathBuf>,
+    #[serde(default)]
+    min_version: TlsVersion,
 }
 
 /// A `[server.tls]` table whose `client_auth` names no CA.
@@ -127,6 +151,7 @@ impl TryFrom<RawTls> for TlsSection {
             client_ca_file: raw.client_ca_file,
             reload_interval_s: raw.reload_interval_s,
             healthcheck_identity_file: raw.healthcheck_identity_file,
+            min_version: raw.min_version,
         })
     }
 }
@@ -143,6 +168,7 @@ impl TlsSection {
             client_ca_file: None,
             reload_interval_s: None,
             healthcheck_identity_file: None,
+            min_version: TlsVersion::Tls12,
         }
     }
 }
@@ -153,6 +179,7 @@ impl Default for ServerSection {
             listen: SocketAddr::from(([127, 0, 0, 1], 8080)),
             base_path: BasePath::default(),
             request_timeout_ms: 30_000,
+            header_read_timeout_ms: std::num::NonZeroU64::MIN.saturating_add(29_999),
             body_limit_bytes: 1024 * 1024,
             drain_delay_ms: 0,
             shutdown_timeout_ms: 10_000,
@@ -173,6 +200,12 @@ impl ServerSection {
     #[must_use]
     pub const fn request_timeout(&self) -> Duration {
         Duration::from_millis(self.request_timeout_ms)
+    }
+
+    /// The bound on reading a request head.
+    #[must_use]
+    pub const fn header_read_timeout(&self) -> Duration {
+        Duration::from_millis(self.header_read_timeout_ms.get())
     }
 
     /// The drain delay.
@@ -371,6 +404,32 @@ mod tests {
                 other => names_key(other),
             };
             assert!(named, "{text}: {error:?}");
+        }
+    }
+
+    #[test]
+    fn the_header_bound_and_the_tls_minimum_load() {
+        let section = load(
+            "[server]\nheader_read_timeout_ms = 5000\n\n[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nmin_version = \"1.3\"\n",
+        )
+        .expect("the section loads");
+        assert_eq!(
+            std::time::Duration::from_secs(5),
+            section.header_read_timeout()
+        );
+        assert_eq!(
+            Some(super::TlsVersion::Tls13),
+            section.tls.map(|tls| tls.min_version)
+        );
+        assert_eq!(
+            std::time::Duration::from_secs(30),
+            ServerSection::default().header_read_timeout()
+        );
+        for text in [
+            "[server]\nheader_read_timeout_ms = 0\n",
+            "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nmin_version = \"1.1\"\n",
+        ] {
+            assert!(load(text).is_err(), "{text} is refused");
         }
     }
 

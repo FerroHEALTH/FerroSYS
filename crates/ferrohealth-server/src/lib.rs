@@ -47,6 +47,7 @@ pub mod health;
 pub mod healthcheck;
 pub mod overload;
 pub mod panic;
+pub mod refusal;
 pub mod request_id;
 pub mod section;
 pub mod serve;

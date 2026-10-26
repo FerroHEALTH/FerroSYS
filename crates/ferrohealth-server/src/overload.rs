@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
-use axum::response::{IntoResponse as _, Response};
+use axum::response::Response;
 use http::{HeaderValue, StatusCode, header};
 use tokio::sync::Semaphore;
 
@@ -44,11 +44,10 @@ pub async fn admit(State(admission): State<Admission>, request: Request, next: N
         tracing::warn!(
             "a request was refused: the server serves as many requests as it takes at once"
         );
-        let mut response = (
+        let mut response = crate::refusal::refused(
             StatusCode::SERVICE_UNAVAILABLE,
             "the server is busy; retry later",
-        )
-            .into_response();
+        );
         response.headers_mut().insert(
             header::RETRY_AFTER,
             HeaderValue::from(retry_seconds(admission.retry_after)),

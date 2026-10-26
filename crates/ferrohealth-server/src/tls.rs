@@ -120,6 +120,17 @@ fn chain(key: &'static str, path: &Path) -> Result<Vec<CertificateDer<'static>>,
     Ok(chain)
 }
 
+/// The versions the listener speaks from `min_version` on.
+fn protocol_versions(
+    min_version: crate::section::TlsVersion,
+) -> &'static [&'static rustls::SupportedProtocolVersion] {
+    static TLS13_ONLY: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS13];
+    match min_version {
+        crate::section::TlsVersion::Tls12 => rustls::ALL_VERSIONS,
+        crate::section::TlsVersion::Tls13 => TLS13_ONLY,
+    }
+}
+
 /// Returns the listener's TLS configuration for `section`.
 ///
 /// # Errors
@@ -132,7 +143,7 @@ pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError
     let key = private_key("server.tls.key_file", &section.key_file)?;
     let provider = provider();
     let versions = ServerConfig::builder_with_provider(Arc::clone(&provider))
-        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .with_protocol_versions(protocol_versions(section.min_version))
         .map_err(TlsError::Config)?;
     let builder = match (section.client_auth, &section.client_ca_file) {
         (ClientAuth::None, _) | (_, None) => versions.with_no_client_auth(),
@@ -397,10 +408,13 @@ mod tests {
         let product = Router::new().route(
             "/peer",
             get(
-                |peers: Option<axum::Extension<PeerCertificates>>| async move {
-                    peers
-                        .map_or(0, |axum::Extension(peers)| peers.0.len())
-                        .to_string()
+                |peers: Option<axum::Extension<PeerCertificates>>,
+                 client: Option<axum::Extension<crate::client_address::ClientAddress>>| async move {
+                    let seen = peers.map_or(0, |axum::Extension(peers)| peers.0.len());
+                    match client {
+                        Some(axum::Extension(client)) if client.0.is_loopback() => seen.to_string(),
+                        _ => "the connection's address did not reach the handler".to_owned(),
+                    }
                 },
             ),
         );
@@ -422,7 +436,9 @@ mod tests {
         address
     }
 
-    /// The body of `GET /peer` over `tls`, or `None` when no answer came.
+    /// The body of `GET /peer` over `tls`, or `None` when no answer came: how
+    /// many client certificates the handler saw, which it answers only when
+    /// the connection's client address reached it too.
     async fn peer(address: SocketAddr, tls: &HealthcheckTls) -> Option<String> {
         let stream = tokio::net::TcpStream::connect(address).await.ok()?;
         let name = rustls::pki_types::ServerName::IpAddress(address.ip().into());
@@ -496,6 +512,36 @@ mod tests {
                 Outcome::Failed(_)
             ),
             "https needs the pin"
+        );
+    }
+
+    #[test]
+    fn the_minimum_version_decides_whether_tls_1_2_is_spoken() {
+        let versions = |minimum| -> Vec<rustls::ProtocolVersion> {
+            super::protocol_versions(minimum)
+                .iter()
+                .map(|supported| supported.version)
+                .collect()
+        };
+        assert_eq!(
+            vec![
+                rustls::ProtocolVersion::TLSv1_3,
+                rustls::ProtocolVersion::TLSv1_2
+            ],
+            versions(crate::section::TlsVersion::Tls12)
+        );
+        assert_eq!(
+            vec![rustls::ProtocolVersion::TLSv1_3],
+            versions(crate::section::TlsVersion::Tls13)
+        );
+        let files = Files::new();
+        let strict = TlsSection {
+            min_version: crate::section::TlsVersion::Tls13,
+            ..files.section(ClientAuth::None, false)
+        };
+        assert!(
+            super::server_config(&strict).is_ok(),
+            "a 1.3-only listener builds"
         );
     }
 

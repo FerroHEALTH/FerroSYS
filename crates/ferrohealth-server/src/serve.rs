@@ -17,7 +17,6 @@ use std::time::Duration;
 use axum::Router;
 use ferrohealth_health::lifecycle::Lifecycle;
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
 
 /// How the drain ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,11 +31,13 @@ pub enum Drained {
 ///
 /// `lifecycle` moves to serving when this starts and to draining on the
 /// signal. `delay` is the drain delay and `bound` the time the requests in
-/// flight get once the listener closed.
+/// flight get once the listener closed. A client gets
+/// [`HEADER_READ_TIMEOUT`] to send a request head; [`run`] takes the bound
+/// from the section.
 ///
 /// # Errors
 ///
-/// Returns the I/O error from accepting or serving connections.
+/// Never fails today: an accept error is logged and the listener goes on.
 pub async fn serve<F>(
     listener: TcpListener,
     app: Router,
@@ -48,41 +49,19 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let closing = Arc::new(Notify::new());
-    let closed = Arc::clone(&closing);
-    let draining = lifecycle.clone();
-    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
-    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
-        signal.await;
-        draining.drain();
-        tracing::info!(
-            drain_delay_ms = delay.as_millis(),
-            "readiness withdrawn; the listener accepts until the drain delay ends"
-        );
-        tokio::time::sleep(delay).await;
-        tracing::info!("the listener stops accepting; draining the requests in flight");
-        closed.notify_one();
-    });
-    let server = server.into_future();
-    tokio::pin!(server);
-    lifecycle.booted();
-    tokio::select! {
-        outcome = &mut server => return outcome.map(|()| Drained::Complete),
-        () = closing.notified() => {}
-    }
-    if let Ok(outcome) = tokio::time::timeout(bound, server).await {
-        outcome.map(|()| Drained::Complete)
-    } else {
-        tracing::warn!(
-            shutdown_timeout_ms = bound.as_millis(),
-            "the drain bound passed; the connections still open are dropped"
-        );
-        Ok(Drained::Cut)
-    }
+    let connections = Connections::new(app, None, HEADER_READ_TIMEOUT);
+    Ok(drive(listener, connections, lifecycle, signal, delay, bound).await)
 }
 
 /// How long a client may take to finish the TLS handshake.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a client may take to send a request head when the caller names
+/// no bound.
+///
+/// It is hyper's own default for HTTP/1
+/// (<https://docs.rs/hyper/1/hyper/server/conn/http1/struct.Builder.html#method.header_read_timeout>).
+pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Serves `app` over TLS on `listener` until `signal` completes, then
 /// drains, as [`serve`] does over plain HTTP.
@@ -107,14 +86,162 @@ pub async fn serve_tls<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let graceful = hyper_util::server::graceful::GracefulShutdown::new();
-    let builder =
-        hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    let connections = Connections::new(app, Some(tls), HEADER_READ_TIMEOUT);
+    Ok(drive(listener, connections, lifecycle, signal, delay, bound).await)
+}
+
+/// What every accepted connection of one listener shares: the one router,
+/// the TLS, the connection builder and the drain.
+struct Connections {
+    app: Router,
+    tls: Option<Arc<crate::tls::ReloadableTls>>,
+    builder: hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
+    graceful: hyper_util::server::graceful::GracefulShutdown,
+}
+
+impl Connections {
+    fn new(
+        app: Router,
+        tls: Option<Arc<crate::tls::ReloadableTls>>,
+        header_read_timeout: Duration,
+    ) -> Self {
+        let mut builder =
+            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+        // NOTE: hyper bounds the request head only with a timer set
+        // (<https://docs.rs/hyper/1/hyper/server/conn/http1/struct.Builder.html#method.timer>).
+        builder
+            .http1()
+            .timer(hyper_util::rt::TokioTimer::new())
+            .header_read_timeout(header_read_timeout);
+        builder.http2().timer(hyper_util::rt::TokioTimer::new());
+        Self {
+            app,
+            tls,
+            builder,
+            graceful: hyper_util::server::graceful::GracefulShutdown::new(),
+        }
+    }
+
+    /// Serves one accepted connection on its own task.
+    fn accept(&self, accepted: std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>) {
+        let (stream, peer) = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                tracing::warn!(%error, "a connection could not be accepted");
+                return;
+            }
+        };
+        let app = self.app.clone();
+        let builder = self.builder.clone();
+        let watcher = self.graceful.watcher();
+        let Some(tls) = &self.tls else {
+            tokio::spawn(async move {
+                let service = connection_service(app, peer, None);
+                let connection = builder
+                    .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
+                    .into_owned();
+                if let Err(error) = watcher.watch(connection).await {
+                    tracing::debug!(error = %error, "a connection ended with an error");
+                }
+            });
+            return;
+        };
+        let acceptor = tokio_rustls::TlsAcceptor::from(tls.current());
+        tokio::spawn(async move {
+            let stream =
+                match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+                    Ok(Ok(stream)) => stream,
+                    Ok(Err(error)) => {
+                        tracing::debug!(%error, "a TLS handshake failed");
+                        return;
+                    }
+                    Err(_elapsed) => {
+                        tracing::debug!("a TLS handshake did not finish in time");
+                        return;
+                    }
+                };
+            let peers = stream.get_ref().1.peer_certificates().map(|chain| {
+                crate::tls::PeerCertificates(
+                    chain
+                        .iter()
+                        .map(|certificate| certificate.clone().into_owned())
+                        .collect(),
+                )
+            });
+            let service = connection_service(app, peer, peers);
+            let connection = builder
+                .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
+                .into_owned();
+            if let Err(error) = watcher.watch(connection).await {
+                tracing::debug!(error = %error, "a TLS connection ended with an error");
+            }
+        });
+    }
+}
+
+/// The service of one connection: the one router, with the connection's
+/// address and client certificates put on each request.
+fn connection_service(
+    app: Router,
+    peer: std::net::SocketAddr,
+    peers: Option<crate::tls::PeerCertificates>,
+) -> hyper_util::service::TowerToHyperService<WithConnection> {
+    hyper_util::service::TowerToHyperService::new(WithConnection { app, peer, peers })
+}
+
+/// The one router of a listener, putting one connection's facts on each
+/// request it serves.
+// NOTE: no specification governs this: our own design; layering the router per
+// connection would build its route table again for every connection.
+#[derive(Clone)]
+struct WithConnection {
+    app: Router,
+    peer: std::net::SocketAddr,
+    peers: Option<crate::tls::PeerCertificates>,
+}
+
+impl<B> tower::Service<http::Request<B>> for WithConnection
+where
+    Router: tower::Service<http::Request<B>>,
+{
+    type Response = <Router as tower::Service<http::Request<B>>>::Response;
+    type Error = <Router as tower::Service<http::Request<B>>>::Error;
+    type Future = <Router as tower::Service<http::Request<B>>>::Future;
+
+    fn poll_ready(
+        &mut self,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        tower::Service::<http::Request<B>>::poll_ready(&mut self.app, context)
+    }
+
+    fn call(&mut self, mut request: http::Request<B>) -> Self::Future {
+        let extensions = request.extensions_mut();
+        extensions.insert(axum::extract::ConnectInfo(self.peer));
+        if let Some(peers) = &self.peers {
+            extensions.insert(peers.clone());
+        }
+        self.app.call(request)
+    }
+}
+
+/// Accepts on `listener` until `signal` completes, then drains.
+async fn drive<F>(
+    listener: TcpListener,
+    connections: Connections,
+    lifecycle: Lifecycle,
+    signal: F,
+    delay: Duration,
+    bound: Duration,
+) -> Drained
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     lifecycle.booted();
     tokio::pin!(signal);
     loop {
         tokio::select! {
-            accepted = listener.accept() => accept(accepted, &tls, &app, &builder, &graceful),
+            accepted = listener.accept() => connections.accept(accepted),
             () = &mut signal => break,
         }
     }
@@ -127,78 +254,24 @@ where
     tokio::pin!(delayed);
     loop {
         tokio::select! {
-            accepted = listener.accept() => accept(accepted, &tls, &app, &builder, &graceful),
+            accepted = listener.accept() => connections.accept(accepted),
             () = &mut delayed => break,
         }
     }
     drop(listener);
     tracing::info!("the listener stops accepting; draining the requests in flight");
-    if tokio::time::timeout(bound, graceful.shutdown())
+    if tokio::time::timeout(bound, connections.graceful.shutdown())
         .await
         .is_ok()
     {
-        Ok(Drained::Complete)
+        Drained::Complete
     } else {
         tracing::warn!(
             shutdown_timeout_ms = bound.as_millis(),
             "the drain bound passed; the connections still open are dropped"
         );
-        Ok(Drained::Cut)
+        Drained::Cut
     }
-}
-
-/// Serves one accepted connection over TLS on its own task.
-fn accept(
-    accepted: std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>,
-    tls: &crate::tls::ReloadableTls,
-    app: &Router,
-    builder: &hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
-    graceful: &hyper_util::server::graceful::GracefulShutdown,
-) {
-    let (stream, peer) = match accepted {
-        Ok(accepted) => accepted,
-        Err(error) => {
-            tracing::warn!(%error, "a connection could not be accepted");
-            return;
-        }
-    };
-    let acceptor = tokio_rustls::TlsAcceptor::from(tls.current());
-    let app = app.clone();
-    let builder = builder.clone();
-    let watcher = graceful.watcher();
-    tokio::spawn(async move {
-        let stream = match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(error)) => {
-                tracing::debug!(%error, "a TLS handshake failed");
-                return;
-            }
-            Err(_elapsed) => {
-                tracing::debug!("a TLS handshake did not finish in time");
-                return;
-            }
-        };
-        let peers = stream.get_ref().1.peer_certificates().map(|chain| {
-            crate::tls::PeerCertificates(
-                chain
-                    .iter()
-                    .map(|certificate| certificate.clone().into_owned())
-                    .collect(),
-            )
-        });
-        let app = app.layer(axum::Extension(axum::extract::ConnectInfo(peer)));
-        let app = match peers {
-            Some(peers) => app.layer(axum::Extension(peers)),
-            None => app,
-        };
-        let service = hyper_util::service::TowerToHyperService::new(app);
-        let connection = builder
-            .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
-            .into_owned();
-        if let Err(error) = watcher.watch(connection).await {
-            tracing::debug!(error = %error, "a TLS connection ended with an error");
-        }
-    });
 }
 
 /// Serves `app` as `section` configures it, over TLS when `[server.tls]`
@@ -219,25 +292,26 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let (delay, bound) = (section.drain_delay(), section.shutdown_timeout());
-    match &section.tls {
-        Some(section) => {
-            let tls = Arc::new(crate::tls::ReloadableTls::new(section)?);
-            let reloads = tokio::spawn(reload_on_signal(Arc::clone(&tls)));
-            let interval = section.reload_interval_s.map(|seconds| {
-                tokio::spawn(reload_every(
-                    Arc::clone(&tls),
-                    Duration::from_secs(seconds.get()),
-                ))
-            });
-            let served = serve_tls(listener, app, tls, lifecycle, signal, delay, bound).await;
-            reloads.abort();
-            if let Some(interval) = interval {
-                interval.abort();
-            }
-            Ok(served?)
-        }
-        None => Ok(serve(listener, app, lifecycle, signal, delay, bound).await?),
+    let section_timeout = section.header_read_timeout();
+    let Some(section) = &section.tls else {
+        let connections = Connections::new(app, None, section_timeout);
+        return Ok(drive(listener, connections, lifecycle, signal, delay, bound).await);
+    };
+    let tls = Arc::new(crate::tls::ReloadableTls::new(section)?);
+    let reloads = tokio::spawn(reload_on_signal(Arc::clone(&tls)));
+    let interval = section.reload_interval_s.map(|seconds| {
+        tokio::spawn(reload_every(
+            Arc::clone(&tls),
+            Duration::from_secs(seconds.get()),
+        ))
+    });
+    let connections = Connections::new(app, Some(tls), section_timeout);
+    let served = drive(listener, connections, lifecycle, signal, delay, bound).await;
+    reloads.abort();
+    if let Some(interval) = interval {
+        interval.abort();
     }
+    Ok(served)
 }
 
 /// One listener of [`run_all`]: its socket, its routes and its TLS.
@@ -728,5 +802,46 @@ mod tests {
         let (address, _lifecycle, _stop, _served) =
             start(product, Duration::ZERO, Duration::from_secs(1)).await;
         assert!(fetch(address, "/who").await.ends_with("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn a_client_that_never_finishes_its_head_is_disconnected() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let lifecycle = Lifecycle::default();
+        let section = ServerSection {
+            header_read_timeout_ms: std::num::NonZeroU64::new(200).expect("not zero"),
+            ..ServerSection::default()
+        };
+        let app = app(
+            Router::new(),
+            Health::new(Registry::default(), lifecycle.clone()),
+            &section,
+            StackPolicy::default(),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let served = tokio::spawn(async move {
+            super::run(listener, app, &section, lifecycle, async move {
+                let _received = stopped.await;
+            })
+            .await
+        });
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connects");
+        stream
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n")
+            .await
+            .expect("writes half a head");
+        let mut rest = Vec::new();
+        let read =
+            tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest)).await;
+        assert!(
+            read.is_ok(),
+            "the server closes the connection instead of waiting for the head"
+        );
+        stop.send(()).expect("the server listens for the signal");
+        let _drained = served.await.expect("the task ends");
     }
 }

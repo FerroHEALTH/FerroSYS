@@ -15,21 +15,27 @@ runs the same stack, the same health routes and the same shutdown.
   - the panic catch: a `500` with the body the product supplies, and no
     panic message in the body or the log;
   - the request timeout (`408`) and the body limit (`413`);
+  - the refusals the stack writes itself (`408`, `413`, `429`, `503`) in
+    the body the product supplies, such as a FHIR `OperationOutcome`;
   - the overload bound: past `max_concurrent_requests` a request is answered
     `503` with `Retry-After`, and the health routes are never refused;
   - the request log of `ferrohealth-telemetry`.
 - `health::routes` serves `/health`, `/health/liveness` and
-  `/health/readiness` over `ferrohealth-health`.
+  `/health/readiness` over `ferrohealth-health`. Readiness names each
+  indicator and its state and never its detail, since anyone who reaches
+  the port reads it.
 - `serve::serve` runs until `SIGTERM` or `SIGINT`. It then withdraws
   readiness, waits the drain delay, and gives the requests in flight a
-  bounded time to finish.
+  bounded time to finish. A client gets `header_read_timeout_ms` to send a
+  request head, so a connection that never finishes one is closed.
 - `healthcheck::check` is the container probe: readiness over loopback,
   exit `0` only on `200`.
 - `cli::Common` holds the `serve`, `config check` and `healthcheck`
   subcommands every binary flattens into its own, and `cli::ConfigArgs`
   the `--config` and `--set` arguments.
 - `section::ServerSection` is the `[server]` section, with the listener's
-  TLS (mutual TLS, reload on `SIGHUP`), the trusted proxies, the caller
+  TLS (mutual TLS, reload on `SIGHUP`, a 1.3-only `min_version`), the
+  trusted proxies, the caller
   rate and the compression.
 - `serve::run_all` serves several listeners under one signal,
   `client_address` names a request's client, `caller_rate` limits one
