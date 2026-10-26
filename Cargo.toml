@@ -29,7 +29,7 @@ url = "2.5.8"
 # builds on, at the version it publishes.
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "display", "serde"] }
 ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "=0.2.0" }
-ferrohealth-config = { path = "crates/ferrohealth-config", version = "=0.1.0" }
+ferrohealth-config = { path = "crates/ferrohealth-config", version = "=0.2.0" }
 # ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
 # provider read by Prometheus and pushed over OTLP, on the lines FerroFED
 # resolves. Verified against crates.io on 2026-10-26.
