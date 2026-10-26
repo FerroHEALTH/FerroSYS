@@ -4,7 +4,7 @@
 name = "ferrohealth-usage-report"
 description = "The installation report of the FerroHEALTH products to FerroPULSE: envelope v2, the instance id, the latency window and the start and daily reporter"
 # Its own version line, released by the tag ferrohealth-usage-report-v<version>.
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
