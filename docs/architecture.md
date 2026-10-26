@@ -85,10 +85,13 @@ pub struct Redacted<T>(pub T);            // Debug names the type and prints RED
 pub fn read_secret(key: &str, value: Option<Secret>, file: Option<&Path>) -> Result<Option<Secret>, SecretError>;
 
 // ferrohealth-config (deps: toml, serde, ferrohealth-secret)
-pub struct Loader { prefix: &'static str, file_env: &'static str }
-impl Loader { pub fn load<T: DeserializeOwned>(&self, file: Option<&Path>, env: impl Iterator<Item = (String, String)>) -> Result<Loaded<T>, ConfigError>; }
-pub struct Loaded<T> { pub settings: T, pub provenance: Provenance }
-pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> String;
+pub struct Loader;   // Loader::new("FERROSYS")?.alias("RUST_LOG", "telemetry.filter").reserve("FERROSYS_STATE_DIR")
+impl Loader {
+    pub fn load<T: DeserializeOwned>(&self, path: Option<&Path>) -> Result<Loaded<T>, ConfigError>;
+    pub fn load_sources<T: DeserializeOwned>(&self, text: Option<&str>, path: Option<&Path>, environment: &BTreeMap<String, String>) -> Result<Loaded<T>, ConfigError>;
+}
+pub struct Loaded<T>;  // settings(), provenance(), into_parts()
+pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> Result<String, ConfigError>;
 
 // ferrohealth-telemetry
 pub struct TelemetrySection { pub format: Format, pub filter: String, pub otlp: Option<OtlpSection>, pub logged_query_parameters: Vec<String> }
