@@ -22,6 +22,9 @@ include-dev = true
 allow = [
   "Apache-2.0",
   "MIT",
+  # The ICU crates url links through idna, the Unicode data under its own
+  # licence.
+  "Unicode-3.0",
 ]
 confidence-threshold = 0.9
 # The project's own crates are BUSL-1.1 (LICENSE); each joins the list with

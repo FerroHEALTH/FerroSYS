@@ -20,6 +20,16 @@ authors = ["Ruben Talstra"]
 # day it is added, on the lines the FerroHEALTH products resolve, so a crate
 # adds no second copy to any of them.
 [workspace.dependencies]
+# ferrohealth-secret. Verified against crates.io on 2026-10-26.
+secrecy = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+url = "2.5.8"
+# Test-only: the JSON and TOML renderings a secret is checked through, and
+# the temporary files the `_file` cases read.
+serde_json = "1.0.154"
+toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "display", "serde"] }
+tempfile = "3.27.0"
 
 # The reliability bar (no specification governs it: our own design), the
 # FerroHEALTH family's lint set as FerroBRIDGE, FerroFED and FerroUI carry it.
