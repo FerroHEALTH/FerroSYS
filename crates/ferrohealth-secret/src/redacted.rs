@@ -106,8 +106,14 @@ mod tests {
             format!("{value:#?}"),
             format!("{value}"),
         ] {
-            assert!(!shown.contains(IDENTIFIER), "{shown}");
-            assert!(shown.contains(REDACTED), "{shown}");
+            assert!(
+                !shown.contains(IDENTIFIER),
+                "a rendering shows what it must hide"
+            );
+            assert!(
+                shown.contains(REDACTED),
+                "a rendering lacks what it must show"
+            );
         }
     }
 
@@ -133,8 +139,14 @@ mod tests {
             text: Redacted::new(vec!["Systolic 182, patient Jansen".to_owned()]),
         };
         let shown = format!("{observation:#?}");
-        assert!(!shown.contains("Jansen"), "{shown}");
-        assert!(shown.contains("8480-6"), "{shown}");
+        assert!(
+            !shown.contains("Jansen"),
+            "a rendering shows what it must hide"
+        );
+        assert!(
+            shown.contains("8480-6"),
+            "a rendering lacks what it must show"
+        );
     }
 
     #[test]

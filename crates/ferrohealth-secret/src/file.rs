@@ -226,7 +226,10 @@ mod tests {
             "cdr.password and cdr.password_file are both set; set exactly one",
             shown
         );
-        assert!(!shown.contains(SENTINEL), "{shown}");
+        assert!(
+            !shown.contains(SENTINEL),
+            "a rendering shows what it must hide"
+        );
     }
 
     #[test]

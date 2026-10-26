@@ -230,8 +230,14 @@ mod tests {
             format!("{:?}", RedactedUrl(url.expose())),
             format!("{}", RedactedUrl(url.expose())),
         ] {
-            assert!(!shown.contains(SENTINEL), "{shown}");
-            assert!(shown.contains(REDACTED), "{shown}");
+            assert!(
+                !shown.contains(SENTINEL),
+                "a rendering shows what it must hide"
+            );
+            assert!(
+                shown.contains(REDACTED),
+                "a rendering lacks what it must show"
+            );
         }
     }
 

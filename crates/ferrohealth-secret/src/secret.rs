@@ -124,8 +124,14 @@ mod tests {
                 .expect("a secret serializes")
                 .to_string(),
         ] {
-            assert!(!shown.contains(SENTINEL), "{shown}");
-            assert!(shown.contains(REDACTED), "{shown}");
+            assert!(
+                !shown.contains(SENTINEL),
+                "a rendering shows what it must hide"
+            );
+            assert!(
+                shown.contains(REDACTED),
+                "a rendering lacks what it must show"
+            );
         }
         assert_eq!(SENTINEL, secret.expose());
     }
@@ -146,8 +152,14 @@ mod tests {
             serde_json::to_string(&section).expect("the section serializes"),
         ];
         for text in shown {
-            assert!(!text.contains(SENTINEL), "{text}");
-            assert!(text.contains("ferrosys"), "{text}");
+            assert!(
+                !text.contains(SENTINEL),
+                "a rendering shows what it must hide"
+            );
+            assert!(
+                text.contains("ferrosys"),
+                "a rendering lacks what it must show"
+            );
         }
     }
 
