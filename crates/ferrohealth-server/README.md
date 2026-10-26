@@ -43,7 +43,8 @@ runs the same stack, the same health routes and the same shutdown.
   `tls_client` reads the TLS material of outbound calls (feature `reqwest`
   sets it on a reqwest client).
 - `console` (feature `console`) adds an operator console's nonce
-  Content-Security-Policy and the security headers beside it.
+  Content-Security-Policy and the security headers beside it, and
+  `same_origin`, which refuses a state-changing request another site sent.
 
 ## Use
 

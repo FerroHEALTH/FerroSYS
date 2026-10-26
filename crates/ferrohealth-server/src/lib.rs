@@ -32,7 +32,8 @@
 //! [`cli::ConfigArgs`] the subcommands and arguments every binary shares,
 //! [`build_info`] the build facts and the boot banner,
 //! and `console` (feature `console`) the browser security headers of an
-//! operator console.
+//! operator console, with `same_origin` the check of its state-changing
+//! requests.
 //!
 //! No specification governs the stack: our own design, with the status
 //! codes and `Retry-After` of RFC 9110.
@@ -49,6 +50,8 @@ pub mod overload;
 pub mod panic;
 pub mod refusal;
 pub mod request_id;
+#[cfg(feature = "console")]
+pub mod same_origin;
 pub mod section;
 pub mod serve;
 pub mod stack;
