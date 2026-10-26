@@ -3,8 +3,7 @@
 
 # FerroSYS architecture
 
-This is the design of record for FerroSYS and, while no code exists, the
-plan. It comes from a survey of the five FerroHEALTH servers on 2026-10-26
+This is the design of record for FerroSYS. It comes from a survey of the five FerroHEALTH servers on 2026-10-26
 and the owner's rulings on it the same day. Each section says what is
 decided; a change to a decision is made here, in the same pull request as
 the change it explains.
