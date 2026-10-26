@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Cadasto B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The strict checks: the sweep of the reserved environment namespace and
-//! the did-you-mean suggestion every refusal of an unknown name carries.
+//! The strict checks: the did-you-mean suggestion every refusal of an
+//! unknown name carries, and an opt-in sweep of the environment namespace.
 
 use std::collections::BTreeMap;
 
@@ -16,6 +16,11 @@ use crate::error::ConfigError;
 /// variable under the prefix is refused, with the spelling it probably
 /// meant: the uniform form when its first word is followed by `__`, else the
 /// closest name of `known`. The refusals come back sorted by name.
+///
+/// [`Loader`](crate::loader::Loader) does not run this sweep: product
+/// prefixes nest (`FERROTERM` and `FERROTERM_CONSOLE`), so a name under the
+/// prefix outside the override form may be another binary's. A binary whose
+/// prefix no other binary extends may run it itself.
 #[must_use]
 pub fn sweep(
     prefix: &str,

@@ -155,8 +155,9 @@ are our own design.
 - **Configuration.** One loader: FerroBRIDGE's TOML file with
   `PREFIX__A__B` overrides placed as text and retried typed, every struct
   `deny_unknown_fields`, every secret with a `_file` sibling, and FerroEHR's
-  strict checks (the reserved-prefix environment sweep and the did-you-mean
-  suggestion). Every server and console has `config check`.
+  strict checks (the did-you-mean suggestion; an unknown `PREFIX__` override
+  is refused, and any other name under the prefix is left alone because
+  product prefixes nest). Every server and console has `config check`.
 - **Metrics.** One OpenTelemetry meter provider in every product, read by
   Prometheus on `/metrics` and, when configured, pushed over OTLP.
 - **Shutdown.** On `SIGTERM` or `SIGINT` readiness turns `503`, a configured

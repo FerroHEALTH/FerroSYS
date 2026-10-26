@@ -22,8 +22,10 @@ console reads its configuration the same way, so an operator learns it once.
 - The load is strict. With `#[serde(deny_unknown_fields)]` on every struct,
   an unknown key and a value of the wrong type are refused with the dotted
   key, the variable that set it and, for an unknown key, the closest known
-  one. A variable under the prefix that is neither an override, an alias nor
-  a reserved name is refused too. No refusal quotes a value.
+  one. Only the override form `<PREFIX>__…` is checked against the tree;
+  every other variable under the prefix is left alone, because product
+  prefixes nest (`FERROTERM` and `FERROTERM_CONSOLE`). No refusal quotes a
+  value.
 - `provenance::Provenance` says where each key came from: the default, the
   file or the environment, with the variable.
 - `report::check_report` renders the running tree for `config check`, one
