@@ -4,14 +4,14 @@
 //! The loader: the defaults, the file and the environment, read into one
 //! typed tree.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 
 use crate::error::{ConfigError, mask_values, position};
-use crate::overrides::{Override, retype};
+use crate::overrides::{Override, Placement, retype};
 use crate::provenance::Provenance;
 use crate::strict::{did_you_mean, sweep};
 
@@ -64,18 +64,48 @@ use crate::strict::{did_you_mean, sweep};
 /// assert_eq!(Source::Environment, loaded.provenance().source("server.body_limit_bytes"));
 /// # Ok::<(), ferrohealth_config::error::ConfigError>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Loader {
     prefix: String,
-    aliases: Vec<(String, String)>,
+    aliases: Vec<Alias>,
     reserved: Vec<String>,
+    renames: Vec<Deprecation>,
 }
+
+/// A transform of an alias's value, such as a port into a listen address.
+pub type Transform = fn(&str) -> String;
+
+/// A variable outside the uniform form that sets one key.
+#[derive(Debug, Clone)]
+struct Alias {
+    variable: String,
+    key: String,
+    /// Whether the canonical override of the key wins over it.
+    below: bool,
+    transform: Option<Transform>,
+}
+
+/// A key renamed from one release to the next, still read under its old
+/// name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deprecation {
+    /// The old dotted key.
+    pub old: String,
+    /// The new dotted key.
+    pub new: String,
+    /// The release that refuses the old key.
+    pub refused_in: String,
+}
+
+/// The most refusals one load reports.
+pub const MAX_REFUSALS: usize = 16;
 
 /// A tree the loader read, with where each key came from.
 #[derive(Debug, Clone)]
 pub struct Loaded<T> {
     settings: T,
     provenance: Provenance,
+    deprecations: Vec<Deprecation>,
 }
 
 impl<T> Loaded<T> {
@@ -89,6 +119,13 @@ impl<T> Loaded<T> {
     #[must_use]
     pub const fn provenance(&self) -> &Provenance {
         &self.provenance
+    }
+
+    /// Returns the renamed keys this configuration still set under their
+    /// old name.
+    #[must_use]
+    pub fn deprecations(&self) -> &[Deprecation] {
+        &self.deprecations
     }
 
     /// Returns the tree and its provenance.
@@ -125,6 +162,7 @@ impl Loader {
             prefix,
             aliases: Vec::new(),
             reserved: Vec::new(),
+            renames: Vec::new(),
         })
     }
 
@@ -135,7 +173,51 @@ impl Loader {
     /// operator sets for one run, such as `RUST_LOG` for `telemetry.filter`.
     #[must_use]
     pub fn alias(mut self, variable: impl Into<String>, key: impl Into<String>) -> Self {
-        self.aliases.push((variable.into(), key.into()));
+        self.aliases.push(Alias {
+            variable: variable.into(),
+            key: key.into(),
+            below: false,
+            transform: None,
+        });
+        self
+    }
+
+    /// Adds `variable` as a fallback for the dotted key `key`: it wins over
+    /// the file, and the canonical `<PREFIX>__` override of the key wins
+    /// over it. It is the shape of a name every platform sets, such as
+    /// `DATABASE_URL`. `transform`, when given, turns the variable's value
+    /// into the key's, such as `PORT` into `0.0.0.0:<PORT>`.
+    #[must_use]
+    pub fn fallback(
+        mut self,
+        variable: impl Into<String>,
+        key: impl Into<String>,
+        transform: Option<Transform>,
+    ) -> Self {
+        self.aliases.push(Alias {
+            variable: variable.into(),
+            key: key.into(),
+            below: true,
+            transform,
+        });
+        self
+    }
+
+    /// Reads the dotted key `old` as `new` until the release `refused_in`:
+    /// the value moves, the load reports it in [`Loaded::deprecations`] and
+    /// logs it, and both set at once is refused.
+    #[must_use]
+    pub fn rename(
+        mut self,
+        old: impl Into<String>,
+        new: impl Into<String>,
+        refused_in: impl Into<String>,
+    ) -> Self {
+        self.renames.push(Deprecation {
+            old: old.into(),
+            new: new.into(),
+            refused_in: refused_in.into(),
+        });
         self
     }
 
@@ -172,6 +254,20 @@ impl Loader {
     /// whose value is not UTF-8, [`ConfigError::Read`] when the named file
     /// cannot be read, and every error of [`Loader::load_sources`].
     pub fn load<T: DeserializeOwned>(&self, path: Option<&Path>) -> Result<Loaded<T>, ConfigError> {
+        self.load_with(path, &[])
+    }
+
+    /// Reads the configuration of the running process as [`Loader::load`]
+    /// does, with the `--set key=value` pairs of `sets` applied last.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`Loader::load`].
+    pub fn load_with<T: DeserializeOwned>(
+        &self,
+        path: Option<&Path>,
+        sets: &[(String, String)],
+    ) -> Result<Loaded<T>, ConfigError> {
         let environment = self.environment(std::env::vars_os())?;
         let named = path
             .map(Path::to_path_buf)
@@ -187,7 +283,7 @@ impl Loader {
                 )
             }
         };
-        self.load_sources(text.as_deref(), named.as_deref(), &environment)
+        self.load_sources_with(text.as_deref(), named.as_deref(), &environment, sets)
     }
 
     /// Reads `text` as the TOML file (read from `path`, when it came from a
@@ -214,6 +310,25 @@ impl Loader {
         path: Option<&Path>,
         environment: &BTreeMap<String, String>,
     ) -> Result<Loaded<T>, ConfigError> {
+        self.load_sources_with(text, path, environment, &[])
+    }
+
+    /// Reads the sources as [`Loader::load_sources`] does, with the
+    /// `--set key=value` pairs of `sets` applied last, over the environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`Loader::load_sources`]. Up to
+    /// [`MAX_REFUSALS`] invalid keys are collected into one
+    /// [`ConfigError::Refusals`], and a renamed key set under both its old
+    /// and its new name is refused as [`ConfigError::Renamed`].
+    pub fn load_sources_with<T: DeserializeOwned>(
+        &self,
+        text: Option<&str>,
+        path: Option<&Path>,
+        environment: &BTreeMap<String, String>,
+        sets: &[(String, String)],
+    ) -> Result<Loaded<T>, ConfigError> {
         let file = match text {
             None => toml::Table::new(),
             Some(text) => toml::from_str(text).map_err(|error| ConfigError::Syntax {
@@ -224,7 +339,7 @@ impl Loader {
         let config_variable = self.config_variable();
         let mut known: Vec<&str> = vec![config_variable.as_str()];
         known.extend(self.reserved.iter().map(String::as_str));
-        known.extend(self.aliases.iter().map(|(variable, _)| variable.as_str()));
+        known.extend(self.aliases.iter().map(|alias| alias.variable.as_str()));
         let mut refusals = sweep(&self.prefix, environment, &known);
         if refusals.len() > 1 {
             return Err(ConfigError::Refusals { refusals });
@@ -232,72 +347,133 @@ impl Loader {
         if let Some(refusal) = refusals.pop() {
             return Err(refusal);
         }
-        let mut overrides = Vec::new();
-        for (name, raw) in environment {
-            if let Some(item) = Override::parse(&self.prefix, name, raw)? {
-                overrides.push(item);
-            }
+        let overrides = self.overrides(environment, sets)?;
+        let mut set_by: BTreeMap<String, String> = BTreeMap::new();
+        for item in &overrides {
+            let key = self.renamed(&item.key());
+            set_by.insert(key, item.name().to_owned());
         }
-        for (variable, key) in &self.aliases {
-            if let Some(raw) = environment.get(variable) {
-                overrides.push(Override::new(variable, key, raw));
-            }
-        }
-        let set_by: BTreeMap<String, String> = overrides
-            .iter()
-            .map(|item| (item.key(), item.name().to_owned()))
-            .collect();
+        let set_keys = sets.iter().map(|(key, _)| self.renamed(key)).collect();
         let provenance = Provenance::new(
             path.map(Path::to_path_buf),
             text.is_some().then_some(&file),
             set_by,
+            set_keys,
         );
-        // Each pass places one more override typed, so the loop ends after at
-        // most one pass per override.
-        let mut typed = BTreeSet::new();
+        let mut placements = BTreeMap::new();
+        let mut dropped: Vec<Vec<String>> = Vec::new();
+        let mut errors: Vec<ConfigError> = Vec::new();
+        // Each pass places one more override, or drops one more refused key, so
+        // the loop ends after at most one pass per override and per refusal.
         loop {
             let mut table = file.clone();
             for (index, item) in overrides.iter().enumerate() {
-                item.apply(&mut table, typed.contains(&index))?;
+                item.apply(
+                    &mut table,
+                    placements.get(&index).copied().unwrap_or(Placement::Text),
+                )?;
+            }
+            let deprecations = self.apply_renames(&mut table)?;
+            for path in &dropped {
+                remove(&mut table, path);
             }
             // The merged tree is written and read again so every refusal
             // carries the position of its key, which a `Table` cannot report.
             let merged =
                 toml::to_string(&table).map_err(|source| ConfigError::Assemble { source })?;
             let error = match toml::from_str::<T>(&merged) {
-                Ok(settings) => {
+                Ok(settings) if errors.is_empty() => {
+                    warn_deprecated(&deprecations);
                     return Ok(Loaded {
                         settings,
                         provenance,
+                        deprecations,
                     });
                 }
+                Ok(_) => return Err(collected(errors)),
                 Err(error) => error,
             };
             let span = error.span();
-            if let Some(index) = span
+            let wants_sequence = error.message().contains("expected a sequence");
+            if let Some((index, placement)) = span
                 .as_ref()
-                .and_then(|span| retype(&overrides, &typed, &merged, span))
+                .and_then(|span| retype(&overrides, &placements, &merged, span, wants_sequence))
             {
-                typed.insert(index);
+                placements.insert(index, placement);
                 continue;
             }
-            let key = span.as_ref().and_then(|span| key_at(&merged, span));
-            let suggestion = suggest(error.message()).map(|(name, field)| {
-                match key.as_deref().and_then(parent) {
-                    Some(parent) if field => format!("{parent}.{name}"),
-                    _ => name,
+            let (refusal, key) = invalid(&error, &merged, &provenance);
+            errors.push(refusal);
+            match key {
+                Some(key) if errors.len() < MAX_REFUSALS => {
+                    dropped.push(key.split('.').map(str::to_owned).collect());
                 }
-            });
-            return Err(ConfigError::Invalid {
-                variable: key
-                    .as_deref()
-                    .and_then(|key| provenance.variable(key))
-                    .map(str::to_owned),
-                key,
-                suggestion,
-                reason: mask_values(error.message()),
-            });
+                _ => return Err(collected(errors)),
+            }
         }
+    }
+
+    /// The overrides of `environment` and `sets`, in the order they apply:
+    /// the fallbacks, the `<PREFIX>__` overrides, the aliases, the sets.
+    fn overrides(
+        &self,
+        environment: &BTreeMap<String, String>,
+        sets: &[(String, String)],
+    ) -> Result<Vec<Override>, ConfigError> {
+        let alias = |alias: &Alias| {
+            environment.get(&alias.variable).map(|raw| {
+                let value = alias
+                    .transform
+                    .map_or_else(|| raw.clone(), |transform| transform(raw));
+                Override::new(&alias.variable, &alias.key, &value)
+            })
+        };
+        let mut overrides: Vec<Override> = self
+            .aliases
+            .iter()
+            .filter(|a| a.below)
+            .filter_map(alias)
+            .collect();
+        for (name, raw) in environment {
+            if let Some(item) = Override::parse(&self.prefix, name, raw)? {
+                overrides.push(item);
+            }
+        }
+        overrides.extend(self.aliases.iter().filter(|a| !a.below).filter_map(alias));
+        overrides.extend(
+            sets.iter()
+                .map(|(key, raw)| Override::new(&format!("--set {key}"), key, raw)),
+        );
+        Ok(overrides)
+    }
+
+    /// The key `key` is read as: its new name when it was renamed.
+    fn renamed(&self, key: &str) -> String {
+        self.renames
+            .iter()
+            .find(|rename| rename.old == key)
+            .map_or_else(|| key.to_owned(), |rename| rename.new.clone())
+    }
+
+    /// Moves every renamed key of `table` to its new name.
+    fn apply_renames(&self, table: &mut toml::Table) -> Result<Vec<Deprecation>, ConfigError> {
+        let mut found = Vec::new();
+        for rename in &self.renames {
+            let old: Vec<String> = rename.old.split('.').map(str::to_owned).collect();
+            let new: Vec<String> = rename.new.split('.').map(str::to_owned).collect();
+            let Some(value) = take(table, &old) else {
+                continue;
+            };
+            if lookup(table, &new).is_some() {
+                return Err(ConfigError::Renamed {
+                    old: rename.old.clone(),
+                    new: rename.new.clone(),
+                });
+            }
+            insert(table, &new, value);
+            found.push(rename.clone());
+        }
+        Ok(found)
     }
 
     /// Collects the variables this loader reads from the process
@@ -314,8 +490,8 @@ impl Loader {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let read =
-                name.starts_with(&reserved) || self.aliases.iter().any(|(alias, _)| alias == name);
+            let read = name.starts_with(&reserved)
+                || self.aliases.iter().any(|alias| alias.variable == name);
             if !read {
                 continue;
             }
@@ -356,6 +532,97 @@ fn find_key(table: &toml::de::DeTable<'_>, at: usize) -> Option<Vec<String>> {
     None
 }
 
+/// The refusal of `error`, read from the merged text, and the dotted key it
+/// names.
+fn invalid(
+    error: &toml::de::Error,
+    merged: &str,
+    provenance: &Provenance,
+) -> (ConfigError, Option<String>) {
+    let key = error.span().as_ref().and_then(|span| key_at(merged, span));
+    let suggestion =
+        suggest(error.message()).map(|(name, field)| match key.as_deref().and_then(parent) {
+            Some(parent) if field => format!("{parent}.{name}"),
+            _ => name,
+        });
+    let refusal = ConfigError::Invalid {
+        variable: key
+            .as_deref()
+            .and_then(|key| provenance.variable(key))
+            .map(str::to_owned),
+        key: key.clone(),
+        suggestion,
+        reason: mask_values(error.message()),
+    };
+    (refusal, key)
+}
+
+/// The one error of `errors`, or all of them together.
+fn collected(mut errors: Vec<ConfigError>) -> ConfigError {
+    if errors.len() == 1 {
+        errors.remove(0)
+    } else {
+        ConfigError::Refusals { refusals: errors }
+    }
+}
+
+/// Logs every renamed key the configuration still sets under its old name.
+fn warn_deprecated(deprecations: &[Deprecation]) {
+    for deprecation in deprecations {
+        tracing::warn!(
+            old = deprecation.old.as_str(),
+            new = deprecation.new.as_str(),
+            refused_in = deprecation.refused_in.as_str(),
+            "a renamed configuration key is set under its old name"
+        );
+    }
+}
+
+/// Returns the value at `path` in `table`.
+fn lookup<'a>(table: &'a toml::Table, path: &[String]) -> Option<&'a toml::Value> {
+    let (last, parents) = path.split_last()?;
+    let mut cursor = table;
+    for parent in parents {
+        cursor = cursor.get(parent.as_str())?.as_table()?;
+    }
+    cursor.get(last.as_str())
+}
+
+/// Removes and returns the value at `path` in `table`.
+fn take(table: &mut toml::Table, path: &[String]) -> Option<toml::Value> {
+    let (last, parents) = path.split_last()?;
+    let mut cursor = table;
+    for parent in parents {
+        cursor = cursor.get_mut(parent.as_str())?.as_table_mut()?;
+    }
+    cursor.remove(last.as_str())
+}
+
+/// Removes the value at `path` in `table`, when there is one.
+fn remove(table: &mut toml::Table, path: &[String]) {
+    // NOTE: no specification governs this: our own design; a refused key that is
+    // already gone has nothing left to remove.
+    let _removed: Option<toml::Value> = take(table, path);
+}
+
+/// Puts `value` at `path` in `table`, creating the tables above it.
+fn insert(table: &mut toml::Table, path: &[String], value: toml::Value) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    let mut cursor = table;
+    for parent in parents {
+        let entry = cursor
+            .entry(parent.clone())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let toml::Value::Table(next) = entry else {
+            return;
+        };
+        cursor = next;
+    }
+    cursor.insert(last.clone(), value);
+}
+
 /// Returns the dotted key above `key`, or `None` for a top-level key.
 fn parent(key: &str) -> Option<&str> {
     key.rsplit_once('.').map(|(parent, _)| parent)
@@ -392,6 +659,7 @@ mod tests {
     #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
     #[serde(default, deny_unknown_fields)]
     struct Config {
+        spec_profile: String,
         server: Server,
         telemetry: Telemetry,
         cdr: Option<Cdr>,
@@ -403,6 +671,7 @@ mod tests {
         listen: String,
         body_limit_bytes: usize,
         tls: bool,
+        origins: Vec<String>,
     }
 
     impl Default for Server {
@@ -411,6 +680,7 @@ mod tests {
                 listen: "127.0.0.1:8080".to_owned(),
                 body_limit_bytes: 1024,
                 tls: false,
+                origins: Vec::new(),
             }
         }
     }
@@ -707,12 +977,12 @@ mod tests {
     }
 
     #[test]
-    fn an_override_name_without_a_key_is_refused() {
+    fn an_override_name_with_an_empty_segment_is_refused() {
         let error = loader()
-            .load_sources::<Config>(None, None, &environment(&[("FERROSYS__LISTEN", "x")]))
-            .expect_err("a section and a key are required");
+            .load_sources::<Config>(None, None, &environment(&[("FERROSYS__SERVER__", "x")]))
+            .expect_err("every segment names something");
         assert_eq!(
-            "FERROSYS__LISTEN names no configuration key; use FERROSYS__<SECTION>__<KEY>",
+            "FERROSYS__SERVER__ names no configuration key; use FERROSYS__<KEY> or FERROSYS__<SECTION>__<KEY>",
             error.to_string()
         );
     }
@@ -856,5 +1126,172 @@ mod tests {
         );
         assert_eq!(None, suggest("unknown field `x`, there are no fields"));
         assert_eq!(None, suggest("invalid type: string \"x\", expected usize"));
+    }
+
+    #[test]
+    fn a_top_level_key_is_set_through_the_environment() {
+        let loaded = loader()
+            .load_sources::<Config>(
+                None,
+                None,
+                &environment(&[("FERROSYS__SPEC_PROFILE", "development")]),
+            )
+            .expect("the tree loads");
+        assert_eq!("development", loaded.settings().spec_profile);
+        assert_eq!(
+            Some("FERROSYS__SPEC_PROFILE"),
+            loaded.provenance().variable("spec_profile")
+        );
+    }
+
+    #[test]
+    fn a_set_argument_wins_over_the_environment_and_names_itself() {
+        let loaded = loader()
+            .load_sources_with::<Config>(
+                None,
+                None,
+                &environment(&[("FERROSYS__SERVER__BODY_LIMIT_BYTES", "10")]),
+                &[("server.body_limit_bytes".to_owned(), "20".to_owned())],
+            )
+            .expect("the tree loads");
+        assert_eq!(20, loaded.settings().server.body_limit_bytes);
+        assert_eq!(
+            Source::Set,
+            loaded.provenance().source("server.body_limit_bytes")
+        );
+        let error = loader()
+            .load_sources_with::<Config>(
+                None,
+                None,
+                &BTreeMap::new(),
+                &[("server.lsten".to_owned(), "x".to_owned())],
+            )
+            .expect_err("an unknown key is refused");
+        assert!(
+            matches!(&error, ConfigError::Invalid { variable: Some(variable), suggestion: Some(suggestion), .. }
+                if variable == "--set server.lsten" && suggestion == "server.listen"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_list_key_takes_comma_separated_text_or_a_toml_array() {
+        for raw in [
+            "https://a.example, https://b.example",
+            r#"["https://a.example", "https://b.example"]"#,
+        ] {
+            let loaded = loader()
+                .load_sources::<Config>(
+                    None,
+                    None,
+                    &environment(&[("FERROSYS__SERVER__ORIGINS", raw)]),
+                )
+                .expect("the list loads");
+            assert_eq!(
+                vec!["https://a.example", "https://b.example"],
+                loaded.settings().server.origins,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fallback_sits_below_the_canonical_override_and_can_transform() {
+        let fallback = || {
+            loader().fallback(
+                "PORT",
+                "server.listen",
+                Some(|port: &str| format!("0.0.0.0:{port}")),
+            )
+        };
+        let loaded = fallback()
+            .load_sources::<Config>(
+                Some("[server]\nlisten = \"127.0.0.1:1\"\n"),
+                None,
+                &environment(&[("PORT", "9090")]),
+            )
+            .expect("the tree loads");
+        assert_eq!(
+            "0.0.0.0:9090",
+            loaded.settings().server.listen,
+            "the fallback wins over the file"
+        );
+        let loaded = fallback()
+            .load_sources::<Config>(
+                None,
+                None,
+                &environment(&[("PORT", "9090"), ("FERROSYS__SERVER__LISTEN", "10.0.0.1:1")]),
+            )
+            .expect("the tree loads");
+        assert_eq!(
+            "10.0.0.1:1",
+            loaded.settings().server.listen,
+            "the canonical override wins over the fallback"
+        );
+    }
+
+    #[test]
+    fn a_renamed_key_is_read_under_its_old_name_and_reported() {
+        let renaming = || loader().rename("server.bind", "server.listen", "0.3.0");
+        let loaded = renaming()
+            .load_sources::<Config>(
+                Some("[server]\nbind = \"0.0.0.0:1\"\n"),
+                None,
+                &BTreeMap::new(),
+            )
+            .expect("the old key is read");
+        assert_eq!("0.0.0.0:1", loaded.settings().server.listen);
+        assert_eq!(
+            vec![super::Deprecation {
+                old: "server.bind".to_owned(),
+                new: "server.listen".to_owned(),
+                refused_in: "0.3.0".to_owned(),
+            }],
+            loaded.deprecations()
+        );
+        let report = crate::report::check_report(&loaded).expect("the tree renders");
+        assert!(
+            report.contains(
+                "# deprecated: server.bind is read as server.listen, and is refused from 0.3.0"
+            ),
+            "{report}"
+        );
+        let error = renaming()
+            .load_sources::<Config>(
+                Some("[server]\nbind = \"0.0.0.0:1\"\nlisten = \"0.0.0.0:2\"\n"),
+                None,
+                &BTreeMap::new(),
+            )
+            .expect_err("both names are refused");
+        assert_eq!(
+            "server.bind was renamed to server.listen; set server.listen only",
+            error.to_string()
+        );
+    }
+
+    #[test]
+    fn every_refusal_is_reported_at_once() {
+        let error = loader()
+            .load_sources::<Config>(
+                Some("[server]\nlistn = \"x\"\nbody_limit_bytes = \"many\"\n[telemetry]\nformt = \"json\"\n"),
+                None,
+                &BTreeMap::new(),
+            )
+            .expect_err("three faults are refused");
+        let ConfigError::Refusals { refusals } = &error else {
+            panic!("an unexpected refusal: {error:?}");
+        };
+        let mut keys: Vec<String> = refusals
+            .iter()
+            .filter_map(|refusal| match refusal {
+                ConfigError::Invalid { key, .. } => key.clone(),
+                _ => None,
+            })
+            .collect();
+        keys.sort();
+        assert_eq!(
+            vec!["server.body_limit_bytes", "server.listn", "telemetry.formt"],
+            keys
+        );
     }
 }

@@ -71,9 +71,17 @@ pub enum ConfigError {
         /// Every refusal, sorted by variable name.
         refusals: Vec<ConfigError>,
     },
-    /// An override names no section and key: `<PREFIX>__SECTION__KEY` needs
-    /// both, each non-empty.
-    #[error("{name} names no configuration key; use {prefix}__<SECTION>__<KEY>")]
+    /// A renamed key is set under both its old and its new name.
+    #[error("{old} was renamed to {new}; set {new} only")]
+    Renamed {
+        /// The old dotted key.
+        old: String,
+        /// The new dotted key.
+        new: String,
+    },
+    /// An override names no key: every segment of `<PREFIX>__SECTION__KEY`
+    /// must be non-empty.
+    #[error("{name} names no configuration key; use {prefix}__<KEY> or {prefix}__<SECTION>__<KEY>")]
     OverrideName {
         /// The variable.
         name: String,

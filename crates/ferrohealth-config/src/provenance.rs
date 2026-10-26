@@ -16,6 +16,8 @@ pub enum Source {
     File,
     /// An environment variable.
     Environment,
+    /// A `--set key=value` argument.
+    Set,
 }
 
 impl fmt::Display for Source {
@@ -24,19 +26,22 @@ impl fmt::Display for Source {
             Self::Default => "default",
             Self::File => "file",
             Self::Environment => "environment",
+            Self::Set => "set",
         })
     }
 }
 
 /// The keys the file and the environment set, as the load read them.
 ///
-/// A key counts as set when it, or a table above it, was set whole; the
-/// environment wins over the file, as the load applies it.
+/// A key counts as set when it, or a table above it, was set whole; a
+/// `--set` argument wins over the environment, and the environment over the
+/// file, as the load applies them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Provenance {
     file: Option<PathBuf>,
     file_keys: BTreeSet<String>,
     environment: BTreeMap<String, String>,
+    sets: BTreeSet<String>,
 }
 
 impl Provenance {
@@ -47,6 +52,7 @@ impl Provenance {
         path: Option<PathBuf>,
         file: Option<&toml::Table>,
         environment: BTreeMap<String, String>,
+        sets: BTreeSet<String>,
     ) -> Self {
         let mut file_keys = BTreeSet::new();
         if let Some(table) = file {
@@ -56,6 +62,7 @@ impl Provenance {
             file: path,
             file_keys,
             environment,
+            sets,
         }
     }
 
@@ -68,7 +75,9 @@ impl Provenance {
     /// Returns where the value of the dotted key `key` came from.
     #[must_use]
     pub fn source(&self, key: &str) -> Source {
-        if self.variable(key).is_some() {
+        if covers(&self.sets, key) {
+            Source::Set
+        } else if self.variable(key).is_some() {
             Source::Environment
         } else if covers(&self.file_keys, key) {
             Source::File
@@ -142,7 +151,10 @@ mod tests {
             Some(PathBuf::from("/etc/ferrosys.toml")),
             Some(&file),
             environment,
+            std::collections::BTreeSet::from(["cdr.endpoint".to_owned()]),
         );
+        assert_eq!(Source::Set, provenance.source("cdr.endpoint"));
+        assert_eq!("set", Source::Set.to_string());
         assert_eq!(Source::Environment, provenance.source("server.listen"));
         assert_eq!(
             Some("FERROSYS__SERVER__LISTEN"),

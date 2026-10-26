@@ -10,8 +10,11 @@
 //!
 //! 1. the defaults of the tree;
 //! 2. an optional TOML file, named by the caller or by `<PREFIX>_CONFIG`;
-//! 3. the environment: `<PREFIX>__SECTION__KEY` sets `[section] key`, and a
-//!    product's aliases (such as `RUST_LOG`) set the keys they name.
+//! 3. the environment: `<PREFIX>__SECTION__KEY` sets `[section] key` and
+//!    `<PREFIX>__KEY` a top-level key; a product's fallbacks (such as
+//!    `DATABASE_URL`) sit below them and its aliases (such as `RUST_LOG`)
+//!    above;
+//! 4. the `--set key=value` arguments, last.
 //!
 //! The load is strict. An unknown key, in the file or through an override,
 //! and a value of the wrong type are refused with the dotted key and, for an
