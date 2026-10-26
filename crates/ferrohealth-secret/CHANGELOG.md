@@ -10,6 +10,8 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - `secret::Secret`, a credential held in a `secrecy::SecretString` (zeroed
@@ -25,3 +27,6 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
   `<key>_file` sibling names, exactly one of the two, with the trailing line
   ending removed, an empty file refused, and every error naming the key and
   never the secret (#13).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-secret-v0.1.0
