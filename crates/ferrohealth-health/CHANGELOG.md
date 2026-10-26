@@ -10,6 +10,17 @@ released by the tag `ferrohealth-health-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `HealthIndicator::required`, `false` for a subsystem the process serves
+  without: its row keeps the state it found and counts at most as degraded,
+  so it never takes the process out of rotation; the document form is
+  `document::Readiness::with_optional` (#92).
+- `registry::Outcome::state` and `registry::Outcome::detail`, which read
+  what a check found (#92).
+- `document::Readiness::without_detail`, the document with the names and
+  states and no detail, for a route anyone can reach (#92).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

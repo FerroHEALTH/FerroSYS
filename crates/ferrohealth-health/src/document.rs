@@ -111,13 +111,49 @@ impl Readiness {
     /// The document of a process in `phase` whose indicators report
     /// `indicators`.
     #[must_use]
-    pub fn new(phase: Phase, mut indicators: Vec<IndicatorState>) -> Self {
-        indicators.sort_by(|a, b| a.name.cmp(&b.name));
-        let worst = indicators
+    pub fn new(phase: Phase, indicators: Vec<IndicatorState>) -> Self {
+        Self::with_optional(phase, indicators, Vec::new())
+    }
+
+    /// The document of a process in `phase` whose required indicators report
+    /// `required` and whose optional ones report `optional`.
+    ///
+    /// An optional indicator keeps its own state in the document and counts
+    /// at most as `degraded` toward the overall state, so a subsystem the
+    /// process serves without (a fail-open audit sender, an event broker)
+    /// never takes the process out of rotation.
+    ///
+    /// ```
+    /// use ferrohealth_health::document::{IndicatorState, Phase, Readiness, State};
+    ///
+    /// let readiness = Readiness::with_optional(
+    ///     Phase::Serving,
+    ///     vec![IndicatorState::up("database")],
+    ///     vec![IndicatorState::down("broker", "the connection was refused")],
+    /// );
+    /// assert_eq!(State::Degraded, readiness.state);
+    /// assert!(readiness.is_ready());
+    /// assert_eq!(State::Down, readiness.indicators[0].state);
+    /// ```
+    #[must_use]
+    pub fn with_optional(
+        phase: Phase,
+        required: Vec<IndicatorState>,
+        optional: Vec<IndicatorState>,
+    ) -> Self {
+        let worst = required
             .iter()
             .map(|indicator| indicator.state)
+            .chain(
+                optional
+                    .iter()
+                    .map(|indicator| indicator.state.min(State::Degraded)),
+            )
             .max()
             .unwrap_or(State::Up);
+        let mut indicators = required;
+        indicators.extend(optional);
+        indicators.sort_by(|a, b| a.name.cmp(&b.name));
         let state = if phase == Phase::Serving {
             worst
         } else {
@@ -134,6 +170,20 @@ impl Readiness {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.state != State::Down
+    }
+
+    /// The document with every indicator's detail removed: the names, the
+    /// states and the phase stay.
+    ///
+    /// A detail can name a dependency, a count or a position in a log, so a
+    /// route anyone can reach serves this form and the detail stays behind
+    /// authentication.
+    #[must_use]
+    pub fn without_detail(mut self) -> Self {
+        for indicator in &mut self.indicators {
+            indicator.detail = None;
+        }
+        self
     }
 
     /// The status alone, as `/health` answers it.
@@ -190,6 +240,71 @@ mod tests {
         );
         assert_eq!(State::Down, down.state);
         assert!(!down.is_ready(), "one indicator down is not ready");
+    }
+
+    #[test]
+    fn an_optional_indicator_down_degrades_and_stays_ready() {
+        let readiness = Readiness::with_optional(
+            Phase::Serving,
+            vec![IndicatorState::up("database")],
+            vec![IndicatorState::down("audit", "the sender refused")],
+        );
+        assert_eq!(State::Degraded, readiness.state);
+        assert!(
+            readiness.is_ready(),
+            "an optional indicator never flips readiness"
+        );
+        assert_eq!(
+            vec![
+                IndicatorState::down("audit", "the sender refused"),
+                IndicatorState::up("database"),
+            ],
+            readiness.indicators,
+            "the optional row keeps its own state, sorted with the others"
+        );
+        let required_down = Readiness::with_optional(
+            Phase::Serving,
+            vec![IndicatorState::down("database", "refused")],
+            vec![IndicatorState::up("audit")],
+        );
+        assert_eq!(State::Down, required_down.state);
+        let draining = Readiness::with_optional(
+            Phase::Draining,
+            Vec::new(),
+            vec![IndicatorState::up("audit")],
+        );
+        assert_eq!(State::Down, draining.state, "the phase still decides first");
+    }
+
+    #[test]
+    fn without_detail_keeps_the_names_states_and_phase() {
+        let document = Readiness::new(
+            Phase::Serving,
+            vec![
+                IndicatorState::degraded("spool", "4096 records behind"),
+                IndicatorState::up("database"),
+            ],
+        );
+        let public = document.clone().without_detail();
+        assert_eq!(
+            Readiness {
+                state: State::Degraded,
+                phase: Phase::Serving,
+                indicators: vec![
+                    IndicatorState::up("database"),
+                    IndicatorState {
+                        name: "spool".to_owned(),
+                        state: State::Degraded,
+                        detail: None,
+                    },
+                ],
+            },
+            public
+        );
+        assert_eq!(
+            r#"{"state":"degraded","phase":"serving","indicators":[{"name":"database","state":"up"},{"name":"spool","state":"degraded"}]}"#,
+            serde_json::to_string(&public).expect("the document serializes")
+        );
     }
 
     #[test]
