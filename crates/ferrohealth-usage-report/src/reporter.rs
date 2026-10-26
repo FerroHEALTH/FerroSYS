@@ -24,7 +24,7 @@ use crate::envelope::{
     CpuBucket, Event, LicenceGrant, MAX_UPTIME_S, MemoryBucket, Product, Report, SchemaV2,
 };
 use crate::section::{Deployment, UsageReportSection};
-use crate::state::{Instance, StateDir, StateError};
+use crate::state::{DailyClaim, Instance, StateDir, StateError, Store, StoreError};
 use crate::window::Window;
 
 /// The largest report body the collector takes.
@@ -131,16 +131,13 @@ pub fn prepare(section: &UsageReportSection, ci: Option<&'static str>) -> Result
 #[must_use]
 pub fn announcement(notice: &Notice, decision: &Result<Prepared, Off>) -> String {
     let Notice {
-        contents,
         switch,
         state_dir_variable,
         url,
+        ..
     } = notice;
     match decision {
-        Ok(_) => format!(
-            "usage report ON: {contents}, at each start and once a day; no clinical content, \
-             identifiers, URLs or request paths. Off: {switch}. Details: {url}"
-        ),
+        Ok(_) => on_line(notice),
         Err(Off::Switch) => {
             format!("usage report OFF: switched off ({switch}); nothing is sent. Details: {url}")
         }
@@ -195,6 +192,13 @@ pub enum ReportError {
     /// The state directory task failed.
     #[error("the state directory task failed")]
     Task(#[source] tokio::task::JoinError),
+    /// The state store failed.
+    #[error("the state store failed")]
+    Store(#[source] StoreError),
+    /// Another process of this installation sent the daily report within
+    /// the interval; this process's counts wait in the store for the next.
+    #[error("another process of this installation sent the daily report")]
+    SentElsewhere,
 }
 
 /// How a start report ended.
@@ -213,7 +217,8 @@ pub struct Reporter<P> {
     client: reqwest::Client,
     identity: Identity,
     deployment: Deployment,
-    prepared: Prepared,
+    instance: Instance,
+    store: Arc<dyn Store>,
     product: Arc<P>,
     window: Arc<Window>,
     started: Instant,
@@ -234,6 +239,32 @@ impl<P: ProductSection> Reporter<P> {
         window: Arc<Window>,
         started: Instant,
     ) -> Result<Self, ReportError> {
+        let Prepared { state, instance } = prepared;
+        Self::with_store(
+            section,
+            identity,
+            (instance, Arc::new(state)),
+            product,
+            window,
+            started,
+        )
+    }
+
+    /// A reporter as [`Reporter::new`] builds one, over the store `store`
+    /// that holds the installation `instance`, such as a database several
+    /// replicas share.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReportError::Client`] when the HTTP client cannot be built.
+    pub fn with_store(
+        section: &UsageReportSection,
+        identity: Identity,
+        (instance, store): (Instance, Arc<dyn Store>),
+        product: Arc<P>,
+        window: Arc<Window>,
+        started: Instant,
+    ) -> Result<Self, ReportError> {
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TOTAL_TIMEOUT)
@@ -246,7 +277,8 @@ impl<P: ProductSection> Reporter<P> {
             client,
             identity,
             deployment: section.deployment,
-            prepared,
+            instance,
+            store,
             product,
             window,
             started,
@@ -256,7 +288,7 @@ impl<P: ProductSection> Reporter<P> {
     /// The start report.
     pub async fn start_report(&self) -> Report<P::Status> {
         self.assemble(Event::Start {
-            first_start: self.prepared.instance.created,
+            first_start: self.instance.created,
         })
         .await
     }
@@ -276,14 +308,13 @@ impl<P: ProductSection> Reporter<P> {
     ///
     /// # Errors
     ///
-    /// Returns the [`ReportError`] of the state directory or of the send.
+    /// Returns the [`ReportError`] of the state store or of the send.
     pub async fn send_start(&self) -> Result<StartOutcome, ReportError> {
-        let state = self.prepared.state.clone();
-        let claimed =
-            tokio::task::spawn_blocking(move || state.claim_start(jiff::Timestamp::now()))
-                .await
-                .map_err(ReportError::Task)?
-                .map_err(ReportError::State)?;
+        let claimed = self
+            .store
+            .claim_start(jiff::Timestamp::now())
+            .await
+            .map_err(ReportError::Store)?;
         if !claimed {
             return Ok(StartOutcome::RateLimited);
         }
@@ -291,24 +322,51 @@ impl<P: ProductSection> Reporter<P> {
         Ok(StartOutcome::Sent(self.post(&report).await?))
     }
 
-    /// Sends the daily report and empties the window; a report that does not
-    /// reach the collector puts its counts back.
+    /// Hands the window's counts to the store and, when this process holds
+    /// the daily claim, sends the daily report of every process's counts;
+    /// a report that does not reach the collector puts its counts back.
     ///
     /// # Errors
     ///
-    /// Returns the [`ReportError`] of the send.
+    /// Returns [`ReportError::SentElsewhere`] when another process sent the
+    /// daily report within the interval, and the [`ReportError`] of the
+    /// state store or of the send otherwise. A store that refuses the claim
+    /// leaves the counts in the window.
     pub async fn send_daily(&self) -> Result<StatusCode, ReportError> {
-        let counts = self.window.take();
+        let local = self.window.take();
+        let claim = match self
+            .store
+            .claim_daily(jiff::Timestamp::now(), local.clone())
+            .await
+        {
+            Ok(claim) => claim,
+            Err(error) => {
+                self.window.restore(&local);
+                return Err(ReportError::Store(error));
+            }
+        };
+        let DailyClaim::Taken(counts) = claim else {
+            return Err(ReportError::SentElsewhere);
+        };
         let report = self
             .assemble(Event::Daily {
                 metrics: Box::new(counts.to_metrics()),
             })
             .await;
-        let sent = self.post(&report).await;
-        if sent.is_err() {
-            self.window.restore(&counts);
+        match self.post(&report).await {
+            Ok(status) => Ok(status),
+            Err(error) => {
+                match self.store.restore(counts.clone()).await {
+                    Ok(Some(kept)) => self.window.restore(&kept),
+                    Ok(None) => {}
+                    Err(restore) => {
+                        log_failure("daily", &ReportError::Store(restore));
+                        self.window.restore(&counts);
+                    }
+                }
+                Err(error)
+            }
         }
-        sent
     }
 
     /// Runs the schedule on a detached task: the start report now, the first
@@ -333,6 +391,12 @@ impl<P: ProductSection> Reporter<P> {
                         log_answer("daily", status);
                         next_daily_wait()
                     }
+                    Err(ReportError::SentElsewhere) => {
+                        tracing::debug!(
+                            "usage report: another process of this installation sent the daily report"
+                        );
+                        next_daily_wait()
+                    }
                     Err(error) => {
                         log_failure("daily", &error);
                         RETRY_AFTER_FAILURE
@@ -347,7 +411,7 @@ impl<P: ProductSection> Reporter<P> {
             schema: SchemaV2,
             event,
             product: P::PRODUCT,
-            instance_id: self.prepared.instance.id.hyphenated().to_string(),
+            instance_id: self.instance.id.hyphenated().to_string(),
             version: self.identity.version.clone(),
             git_sha: self.identity.git_sha.clone(),
             licence: self.identity.licence,
@@ -416,6 +480,68 @@ pub async fn start<P: ProductSection>(
             None
         }
     }
+}
+
+/// Starts the report for `product` over the store `store`, as [`start`] does
+/// over the state directory: decides, says so in one log line, and spawns
+/// the schedule when the report runs.
+///
+/// A store that cannot give the installation id is logged, and nothing
+/// runs.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the arguments of `start` and the store; a parameter struct would only rename them"
+)]
+pub async fn start_with_store<P: ProductSection>(
+    section: &UsageReportSection,
+    notice: &Notice,
+    identity: Identity,
+    store: Arc<dyn Store>,
+    product: Arc<P>,
+    window: Arc<Window>,
+    started: Instant,
+    ci: Option<&'static str>,
+) -> Option<JoinHandle<()>> {
+    let off = if section.enabled {
+        ci.map(Off::Ci)
+    } else {
+        Some(Off::Switch)
+    };
+    if let Some(off) = off {
+        tracing::info!("{}", announcement(notice, &Err(off)));
+        return None;
+    }
+    let instance = match store.instance().await {
+        Ok(instance) => instance,
+        Err(error) => {
+            log_failure("start", &ReportError::Store(error));
+            return None;
+        }
+    };
+    tracing::info!(endpoint = %section.endpoint.url(), "{}", on_line(notice));
+    match Reporter::with_store(
+        section,
+        identity,
+        (instance, store),
+        product,
+        window,
+        started,
+    ) {
+        Ok(reporter) => Some(reporter.spawn()),
+        Err(error) => {
+            log_failure("start", &error);
+            None
+        }
+    }
+}
+
+/// The boot line of a report that runs.
+fn on_line(notice: &Notice) -> String {
+    format!(
+        "usage report ON: {}, at each start and once a day; no clinical content, identifiers, \
+         URLs or request paths. Off: {}. Details: {}",
+        notice.contents, notice.switch, notice.url
+    )
 }
 
 /// The lower-case product name of the user agent.
@@ -501,11 +627,13 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{
-        Identity, Notice, Off, ProductSection, Reporter, StartOutcome, announcement,
+        Identity, Notice, Off, ProductSection, ReportError, Reporter, StartOutcome, announcement,
         meminfo_total_bytes, prepare,
     };
     use crate::envelope::{Key, LicenceGrant, Product};
     use crate::section::{Endpoint, UsageReportSection};
+    use crate::state::{DailyClaim, Instance, Store, StoreFuture};
+    use crate::window::Counts;
     use crate::window::Window;
 
     #[derive(Debug, serde::Serialize)]
@@ -728,6 +856,167 @@ mod tests {
             2,
             reporter.window.take().requests(),
             "the counts are kept for the next try"
+        );
+    }
+
+    /// A store two processes share, as a database would be.
+    #[derive(Debug)]
+    struct Shared {
+        id: uuid::Uuid,
+        started: std::sync::Mutex<bool>,
+        sent_today: std::sync::Mutex<bool>,
+        window: Window,
+    }
+
+    impl Shared {
+        fn new() -> Self {
+            Self {
+                id: uuid::Uuid::new_v4(),
+                started: std::sync::Mutex::new(false),
+                sent_today: std::sync::Mutex::new(false),
+                window: Window::new(grouping),
+            }
+        }
+
+        fn next_day(&self) {
+            *self.sent_today.lock().expect("the lock") = false;
+        }
+    }
+
+    impl Store for Shared {
+        fn instance(&self) -> StoreFuture<'_, Instance> {
+            Box::pin(std::future::ready(Ok(Instance {
+                id: self.id,
+                created: false,
+            })))
+        }
+
+        fn claim_start(&self, _now: jiff::Timestamp) -> StoreFuture<'_, bool> {
+            let mut started = self.started.lock().expect("the lock");
+            let claimed = !*started;
+            *started = true;
+            Box::pin(std::future::ready(Ok(claimed)))
+        }
+
+        fn claim_daily(&self, _now: jiff::Timestamp, local: Counts) -> StoreFuture<'_, DailyClaim> {
+            self.window.restore(&local);
+            let mut sent = self.sent_today.lock().expect("the lock");
+            let claim = if *sent {
+                DailyClaim::Sent
+            } else {
+                *sent = true;
+                DailyClaim::Taken(self.window.take())
+            };
+            Box::pin(std::future::ready(Ok(claim)))
+        }
+
+        fn restore(&self, counts: Counts) -> StoreFuture<'_, Option<Counts>> {
+            self.window.restore(&counts);
+            Box::pin(std::future::ready(Ok(None)))
+        }
+    }
+
+    fn shared_reporter(collector: &str, store: &Arc<Shared>, requests: u64) -> Reporter<Pix> {
+        let section = UsageReportSection {
+            endpoint: Endpoint::new(collector).expect("a loopback collector"),
+            ..UsageReportSection::default()
+        };
+        let window = Arc::new(Window::new(grouping));
+        for _ in 0..requests {
+            window.record(
+                &Method::GET,
+                Some("/fhir/Patient"),
+                StatusCode::OK,
+                Duration::from_millis(12),
+            );
+        }
+        let instance = Instance {
+            id: store.id,
+            created: false,
+        };
+        let store: Arc<dyn Store> = Arc::<Shared>::clone(store);
+        Reporter::with_store(
+            &section,
+            Identity {
+                version: "0.1.0".to_owned(),
+                git_sha: "1a2b3c4".to_owned(),
+                licence: LicenceGrant::NonCommercial,
+            },
+            (instance, store),
+            Arc::new(Pix),
+            window,
+            Instant::now(),
+        )
+        .expect("the client builds")
+    }
+
+    #[tokio::test]
+    async fn two_processes_over_one_store_send_one_start_and_one_daily_of_both_counts() {
+        let collector = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/report"))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&collector)
+            .await;
+        let url = format!("{}/v1/report", collector.uri());
+        let store = Arc::new(Shared::new());
+        let first = shared_reporter(&url, &store, 3);
+        let second = shared_reporter(&url, &store, 2);
+        assert_eq!(
+            StartOutcome::Sent(StatusCode::ACCEPTED),
+            first.send_start().await.expect("the start is sent")
+        );
+        assert_eq!(
+            StartOutcome::RateLimited,
+            second
+                .send_start()
+                .await
+                .expect("the other process skips it")
+        );
+        assert_eq!(
+            StatusCode::ACCEPTED,
+            first.send_daily().await.expect("the daily report is sent")
+        );
+        assert!(
+            matches!(second.send_daily().await, Err(ReportError::SentElsewhere)),
+            "the other process sent today"
+        );
+        assert_eq!(
+            0,
+            second.window.take().requests(),
+            "its counts wait in the store"
+        );
+        store.next_day();
+        assert_eq!(
+            StatusCode::ACCEPTED,
+            first
+                .send_daily()
+                .await
+                .expect("the next daily report is sent")
+        );
+        let received = collector
+            .received_requests()
+            .await
+            .expect("the requests are recorded");
+        let bodies: Vec<Value> = received
+            .iter()
+            .map(|request| serde_json::from_slice(&request.body).expect("JSON"))
+            .collect();
+        assert_eq!(3, bodies.len(), "one start and two daily reports");
+        let ids: Vec<&Value> = bodies.iter().map(|body| &body["instance_id"]).collect();
+        assert!(
+            ids.iter()
+                .all(|id| id.as_str() == Some(store.id.hyphenated().to_string().as_str()))
+        );
+        let histogram = |body: &Value| -> u64 {
+            body["metrics"]["window_24h"]["groups"]["pdqm_search"]["histogram"]
+                .as_array()
+                .map_or(0, |buckets| buckets.iter().filter_map(Value::as_u64).sum())
+        };
+        assert_eq!(
+            vec![3, 2],
+            bodies.iter().skip(1).map(histogram).collect::<Vec<u64>>(),
+            "the second daily report carries the other process's counts"
         );
     }
 

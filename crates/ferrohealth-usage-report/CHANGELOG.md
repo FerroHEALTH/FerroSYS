@@ -10,6 +10,26 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `state::Store`, the state the report keeps across restarts and
+  processes: the installation id, the start claim, the daily claim and the
+  counts of every process since the last daily report. `StateDir`
+  implements it for one process; a product whose replicas share a database
+  implements it there, so the replicas send one start report, one daily
+  report a day and one installation id (#90).
+- `reporter::Reporter::with_store` and `reporter::start_with_store`, the
+  reporter over a `Store` (#90).
+- `reporter::ReportError::SentElsewhere`, the answer of `send_daily` when
+  another process of the installation sent the daily report, and
+  `ReportError::Store` (#90).
+
+### Changed
+
+- `send_daily` hands the window's counts to the store before it sends, so
+  over a shared store the daily report carries every process's counts; over
+  `StateDir` nothing changes (#90).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

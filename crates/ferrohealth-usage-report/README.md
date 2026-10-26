@@ -15,6 +15,11 @@ own `status`.
   the state directory and the deployment kind. A CI run sends nothing.
 - `state::StateDir` creates the instance id once under `state_dir` and reads
   it back on every start; a damaged id is refused rather than replaced.
+- `state::Store` is where the report keeps that state. `StateDir` is the
+  store of one process; a product that runs as several replicas implements
+  `Store` over the database they share and starts the report with
+  `reporter::start_with_store`, so the replicas send one start report, one
+  daily report a day with every replica's counts, and one installation id.
 - `window::Window` holds the latency histogram and the server errors per
   request group, and the product's counters. The request log fills it with
   route templates, never paths.
