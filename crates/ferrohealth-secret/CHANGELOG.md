@@ -10,6 +10,8 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
 ### Added
 
 - `secret::WriteOnly`, a secret on its one trip from a console to its
@@ -34,5 +36,6 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
   ending removed, an empty file refused, and every error naming the key and
   never the secret (#13).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.1.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.0...HEAD
+[0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.1.0...ferrohealth-secret-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-secret-v0.1.0

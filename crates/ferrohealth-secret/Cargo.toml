@@ -4,7 +4,7 @@
 name = "ferrohealth-secret"
 description = "The secret and redaction types of the FerroHEALTH products: secrets that never render, URLs with their credentials masked, and the key-or-file rule"
 # Its own version line, released by the tag ferrohealth-secret-v<version>.
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
