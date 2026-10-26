@@ -10,6 +10,8 @@ released by the tag `ferrohealth-health-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-26
+
 ### Added
 
 - `registry::Outcome::state` and `registry::Outcome::detail`, which read
@@ -32,5 +34,6 @@ released by the tag `ferrohealth-health-vX.Y.Z`.
 - `lifecycle::Lifecycle` (feature `registry`): booting, serving and
   draining, moving forward only (#16).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-health-v0.1.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-health-v0.1.1...HEAD
+[0.1.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-health-v0.1.0...ferrohealth-health-v0.1.1
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-health-v0.1.0

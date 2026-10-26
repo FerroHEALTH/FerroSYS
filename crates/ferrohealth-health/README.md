@@ -30,7 +30,7 @@ reads the same readiness document.
 
 ```toml
 [dependencies]
-ferrohealth-health = { version = "=0.1.0", features = ["registry"] }
+ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
 ```
 
 A console's browser half and an operator-api crate take the default build.

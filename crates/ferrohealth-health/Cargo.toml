@@ -4,7 +4,7 @@
 name = "ferrohealth-health"
 description = "The health family of the FerroHEALTH products: the readiness document every server and console shares, and the indicator registry and lifecycle a server runs"
 # Its own version line, released by the tag ferrohealth-health-v<version>.
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
