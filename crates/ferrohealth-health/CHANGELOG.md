@@ -10,6 +10,8 @@ released by the tag `ferrohealth-health-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - `document::Readiness` and `document::Summary`, the readiness document
@@ -22,3 +24,6 @@ released by the tag `ferrohealth-health-vX.Y.Z`.
   panics counts as down (#16).
 - `lifecycle::Lifecycle` (feature `registry`): booting, serving and
   draining, moving forward only (#16).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-health-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-health-v0.1.0
