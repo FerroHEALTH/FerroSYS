@@ -69,7 +69,7 @@ pub enum TlsError {
 }
 
 /// The crypto provider of the listener and the healthcheck.
-fn provider() -> Arc<CryptoProvider> {
+pub(crate) fn provider() -> Arc<CryptoProvider> {
     use rustls::crypto::aws_lc_rs::{cipher_suite, default_provider};
     let mut provider = default_provider();
     // NOTE: RFC 9325 §4.2 recommends exactly these four TLS 1.2 suites, every one

@@ -22,6 +22,9 @@ default = []
 # The browser security headers of an operator console: the nonce
 # Content-Security-Policy and the headers beside it.
 console = []
+# `tls_client::TlsClient::apply`, which sets the outbound TLS material on a
+# reqwest client.
+reqwest = ["dep:reqwest"]
 
 [dependencies]
 axum = { workspace = true, features = ["tokio", "http1", "json"] }
@@ -32,6 +35,7 @@ ferrohealth-telemetry = { workspace = true, features = ["axum"] }
 http.workspace = true
 hyper-util.workspace = true
 ipnet.workspace = true
+reqwest = { workspace = true, optional = true }
 rustls.workspace = true
 secrecy.workspace = true
 serde.workspace = true
