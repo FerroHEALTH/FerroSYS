@@ -12,13 +12,16 @@ same way.
 
 - `section::TelemetrySection` is the `[telemetry]` section: the console
   format (`auto`, `json`, `pretty`), the filter, the query parameters the
-  request log may carry, and the OTLP collector. An invalid filter is
-  refused when the configuration is read.
+  request log may carry, the deployment environment, and the OTLP
+  collector. An invalid filter is refused when the configuration is read.
 - `telemetry::Telemetry` is the one provider of a process. One meter
   provider is read by Prometheus (feature `prometheus`) and pushed over
   OTLP (feature `otlp`). One tracer provider exports the product's own
   spans and never an event. Neither reads a client's `traceparent`, so
   every request starts a trace of the server's own.
+- `telemetry::Console` decides colour from the format, the terminal and
+  `NO_COLOR`, and carries the directives no filter can drop. `install`
+  returns the `FilterHandle` that replaces the filter at run time.
 - `panic::install_hook` writes one fixed line per panic, with the thread
   and the source location and never the message.
 - `request_log` (feature `axum`) writes one line and opens one span per

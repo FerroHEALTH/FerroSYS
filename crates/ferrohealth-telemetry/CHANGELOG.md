@@ -10,6 +10,25 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `telemetry::Console`, how the console is drawn: `NO_COLOR` set to any
+  non-empty value turns colour off (<https://no-color.org/>), and
+  `Console::force` names directives that write whatever the configured
+  filter says, such as a security log at `info` (#53, #54).
+- `telemetry::FilterHandle`, returned by `Telemetry::install` and in
+  `telemetry::Layers`, replaces the configured console filter at run time,
+  refuses a directive that does not parse, keeps the forced directives and
+  reads the running filter back (#55).
+- `[telemetry] environment` sets `deployment.environment.name` on the
+  resource, and `Service::environment` sets it in code (#56).
+
+### Changed
+
+- `Telemetry::layers` and `Telemetry::install` take a `Console` in place
+  of the terminal flag; `layers` returns `Layers` and `install` returns the
+  `FilterHandle` (#53, #54, #55).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

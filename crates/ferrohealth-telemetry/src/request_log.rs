@@ -220,7 +220,7 @@ mod tests {
         middleware,
     };
     use crate::section::{Format, TelemetrySection};
-    use crate::telemetry::{Service, Telemetry};
+    use crate::telemetry::{Console, Service, Telemetry};
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -302,8 +302,9 @@ mod tests {
             .expect("the telemetry builds");
         let subscriber = tracing_subscriber::registry().with(
             telemetry
-                .layers(&section, false, capture.clone())
-                .expect("the layers build"),
+                .layers(&section, &Console::new(false, None), capture.clone())
+                .expect("the layers build")
+                .layers,
         );
         let count = Arc::new(Count::default());
         let log = RequestLog::new(&["_count".to_owned()]).with_recorder(count.clone());
@@ -340,8 +341,9 @@ mod tests {
         let section = TelemetrySection::default();
         let subscriber = tracing_subscriber::registry().with(
             telemetry
-                .layers(&section, false, std::io::sink)
-                .expect("the layers build"),
+                .layers(&section, &Console::new(false, None), std::io::sink)
+                .expect("the layers build")
+                .layers,
         );
         let _default = tracing::subscriber::set_default(subscriber);
         let response = app(RequestLog::default())
