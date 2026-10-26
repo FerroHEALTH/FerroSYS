@@ -8,9 +8,13 @@
 //! installation, so a deployment with no state directory, or one that cannot
 //! be written, sends nothing. No specification governs this: our own design.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 use uuid::Uuid;
+
+use crate::window::Counts;
 
 /// The file holding the instance id, a hyphenated UUID on one line.
 pub const INSTANCE_FILE: &str = "instance-id";
@@ -158,6 +162,90 @@ impl StateDir {
             source,
         })
     }
+}
+
+/// The future a [`Store`] operation returns.
+pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
+
+/// A store operation failed.
+#[derive(Debug, thiserror::Error)]
+#[error("the usage report state store failed")]
+pub struct StoreError(#[source] Box<dyn std::error::Error + Send + Sync>);
+
+impl StoreError {
+    /// The failure `cause` of a store.
+    pub fn new(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self(Box::new(cause))
+    }
+}
+
+/// What a daily claim found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DailyClaim {
+    /// This process sends the daily report of these counts, every
+    /// process's counts merged; the store holds none of them any more.
+    Taken(Counts),
+    /// Another process sent the daily report within the interval and the
+    /// counts stay in the store for the next one.
+    Sent,
+}
+
+/// Where the report keeps what must hold across restarts and processes.
+///
+/// It holds the installation id, the start claim, the daily claim and the
+/// counts of every process since the last daily report.
+///
+/// [`StateDir`] is the store of one process with a writable directory. A
+/// product whose replicas share a database implements it there, so the
+/// replicas send one start report, one daily report a day and one
+/// installation id. No specification governs this: our own design.
+pub trait Store: std::fmt::Debug + Send + Sync + 'static {
+    /// Returns the installation id, creating it when the store holds none.
+    fn instance(&self) -> StoreFuture<'_, Instance>;
+
+    /// Claims the start report at `now`: `true` when no start report was
+    /// claimed within [`START_INTERVAL`], and the claim is then recorded.
+    fn claim_start(&self, now: jiff::Timestamp) -> StoreFuture<'_, bool>;
+
+    /// Adds this process's counts `local` to the store and claims the daily
+    /// report at `now`, as one step.
+    fn claim_daily(&self, now: jiff::Timestamp, local: Counts) -> StoreFuture<'_, DailyClaim>;
+
+    /// Puts back `counts` of a daily report that was not sent, returning
+    /// whatever the store does not keep for the process to hold itself.
+    fn restore(&self, counts: Counts) -> StoreFuture<'_, Option<Counts>>;
+}
+
+impl Store for StateDir {
+    fn instance(&self) -> StoreFuture<'_, Instance> {
+        let state = self.clone();
+        Box::pin(async move { blocking(move || state.instance()).await })
+    }
+
+    fn claim_start(&self, now: jiff::Timestamp) -> StoreFuture<'_, bool> {
+        let state = self.clone();
+        Box::pin(async move { blocking(move || state.claim_start(now)).await })
+    }
+
+    fn claim_daily(&self, _now: jiff::Timestamp, local: Counts) -> StoreFuture<'_, DailyClaim> {
+        // NOTE: no specification governs this: our own design; one process owns its
+        // directory, so every daily report is its own and the counts are its own.
+        Box::pin(std::future::ready(Ok(DailyClaim::Taken(local))))
+    }
+
+    fn restore(&self, counts: Counts) -> StoreFuture<'_, Option<Counts>> {
+        Box::pin(std::future::ready(Ok(Some(counts))))
+    }
+}
+
+/// Runs the file operation `operation` off the runtime.
+async fn blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, StateError> + Send + 'static,
+) -> Result<T, StoreError> {
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(StoreError::new)?
+        .map_err(StoreError::new)
 }
 
 #[cfg(test)]
