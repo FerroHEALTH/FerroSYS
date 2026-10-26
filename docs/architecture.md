@@ -226,7 +226,7 @@ needs them lands.
 | Corpus | Used by |
 |---|---|
 | OpenTelemetry Protocol specification and `opentelemetry-proto` at the tag of the 0.33 crate line | `-telemetry` |
-| OpenTelemetry semantic conventions, one pinned release (`service.*`, `http.route`, `http.request.method`, `http.response.status_code`, `deployment.environment.name`) | `-telemetry` |
+| OpenTelemetry semantic conventions v1.44.0, `docs/specs/otel-semconv/` (`service.*`, `http.route`, `http.request.method`, `http.response.status_code`, `deployment.environment.name`, `http.server.request.duration`) | `-telemetry` |
 | W3C Trace Context | `-telemetry` (the policy in §4) |
 | The Prometheus and OpenMetrics text exposition formats | `-telemetry` |
 | RFC 9110 (status codes, `Retry-After`) | `-server` |

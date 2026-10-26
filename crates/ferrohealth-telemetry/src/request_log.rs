@@ -9,12 +9,13 @@
 //! configured allow-list and the client's request id never reach it: a path
 //! segment, a query value or the client's free-text id can name a patient.
 //! The span carries the method, the route template and the status under
-//! the OpenTelemetry HTTP semantic conventions, and is the root of a trace
-//! of the server's own.
+//! the OpenTelemetry semantic conventions v1.44.0
+//! (`docs/http/http-spans.md`, HTTP server span), and is the root of a
+//! trace of the server's own.
 //!
 //! With [`RequestLog::with_metrics`] every request is also recorded in the
-//! `http.server.request.duration` histogram of the OpenTelemetry HTTP
-//! semantic conventions. A handler adds fields of its own to the line with
+//! `http.server.request.duration` histogram (semantic conventions v1.44.0,
+//! `docs/http/http-metrics.md`). A handler adds fields of its own to the line with
 //! [`fields::LineFields`] in its response's extensions, and a [`RouteNamer`] names
 //! the route of a request no route matched.
 
@@ -78,19 +79,21 @@ impl RequestId {
     }
 }
 
-/// The name of the histogram of request durations, in seconds
-/// (OpenTelemetry semantic conventions, HTTP metrics); Prometheus
+/// The name of the histogram of request durations, in seconds.
+///
+/// OpenTelemetry semantic conventions v1.44.0, `docs/http/http-metrics.md`,
+/// metric `http.server.request.duration`; Prometheus reads it as
 /// `http_server_request_duration_seconds`.
 pub const REQUEST_DURATION: &str = "http.server.request.duration";
 
-/// The bucket boundaries of [`REQUEST_DURATION`], in seconds: the advisory
-/// boundaries of the semantic conventions.
+/// The bucket boundaries of [`REQUEST_DURATION`], in seconds: the
+/// `ExplicitBucketBoundaries` advice of the metric's definition.
 pub const DURATION_BUCKETS: [f64; 14] = [
     0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
 ];
 
 /// The `http.request.method` of a method the semantic conventions do not
-/// know.
+/// know (v1.44.0, `docs/registry/attributes/http.md`).
 pub const OTHER_METHOD: &str = "_OTHER";
 
 /// One finished request, as a [`Recorder`] sees it.
@@ -231,8 +234,8 @@ impl RequestLog {
         if let Some(version) = protocol_version(version) {
             attributes.push(KeyValue::new("network.protocol.version", version));
         }
-        // NOTE: OpenTelemetry semantic conventions, HTTP metrics: `error.type` is the
-        // status code of a server error, and unset on a request that did not fail.
+        // NOTE: semantic conventions v1.44.0, `docs/http/http-spans.md`, Status: a 5xx is a
+        // server span's error, so `error.type` is its status code and else unset.
         if completed.status.is_server_error() {
             attributes.push(KeyValue::new(
                 "error.type",
@@ -244,9 +247,11 @@ impl RequestLog {
 }
 
 /// The `http.request.method` of `method`: its name for a method the
-/// semantic conventions know (RFC 9110 §9, `PATCH` of RFC 5789 and
-/// `QUERY`), and [`OTHER_METHOD`] for any other, so a client cannot mint a
-/// series.
+/// semantic conventions know, and [`OTHER_METHOD`] for any other.
+///
+/// The known methods are those of RFC 9110 §9, `PATCH` of RFC 5789 and
+/// `QUERY` (semantic conventions v1.44.0,
+/// `docs/registry/attributes/http.md`), so a client cannot mint a series.
 #[must_use]
 pub fn method_label(method: &Method) -> &'static str {
     match *method {
