@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-26
+
 ### Changed
 
 - Requires `ferrohealth-secret` as `0.2.0`, a caret requirement in place of the exact pin, so a product takes a patch of that crate without waiting for a release of this one.
@@ -84,7 +86,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.3...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.4...HEAD
+[0.2.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.3...ferrohealth-config-v0.2.4
 [0.2.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.2...ferrohealth-config-v0.2.3
 [0.2.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.1...ferrohealth-config-v0.2.2
 [0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.0...ferrohealth-config-v0.2.1
