@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-26
+
 ### Added
 
 - `loader::Loader::fallback_composed`, a fallback whose value is composed
@@ -70,7 +72,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.2...HEAD
+[0.2.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.1...ferrohealth-config-v0.2.2
 [0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.0...ferrohealth-config-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.1.0...ferrohealth-config-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-config-v0.1.0
