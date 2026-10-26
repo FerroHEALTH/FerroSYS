@@ -10,6 +10,13 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `serve::run`, `serve::run_all`, `serve::serve` and `serve::serve_tls`
+  close every connection still open when the drain bound passes, before
+  they return `Drained::Cut`, as documented; the connection tasks kept
+  running until the runtime ended (#123).
+
 ## [0.3.3] - 2026-10-26
 
 ### Fixed

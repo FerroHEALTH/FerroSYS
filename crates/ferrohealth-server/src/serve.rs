@@ -8,7 +8,7 @@
 //! signal readiness turns `503` at once, the drain delay passes while the
 //! listener still accepts (so an orchestrator stops routing first), the
 //! listener closes, and the requests in flight get the shutdown bound to
-//! finish; a connection still open then is dropped.
+//! finish; a connection still open then is closed before the call returns.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 pub enum Drained {
     /// Every request in flight finished inside the bound.
     Complete,
-    /// The bound passed with connections still open, and they were dropped.
+    /// The bound passed with connections still open, and they were closed.
     Cut,
 }
 
@@ -91,12 +91,14 @@ where
 }
 
 /// What every accepted connection of one listener shares: the one router,
-/// the TLS, the connection builder and the drain.
+/// the TLS, the connection builder, the drain and the task of every
+/// connection, which the drain aborts once its bound passes.
 struct Connections {
     app: Router,
     tls: Option<Arc<crate::tls::ReloadableTls>>,
     builder: hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
     graceful: hyper_util::server::graceful::GracefulShutdown,
+    tasks: tokio::task::JoinSet<()>,
 }
 
 impl Connections {
@@ -119,11 +121,13 @@ impl Connections {
             tls,
             builder,
             graceful: hyper_util::server::graceful::GracefulShutdown::new(),
+            tasks: tokio::task::JoinSet::new(),
         }
     }
 
     /// Serves one accepted connection on its own task.
-    fn accept(&self, accepted: std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>) {
+    fn accept(&mut self, accepted: std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>) {
+        while self.tasks.try_join_next().is_some() {}
         let (stream, peer) = match accepted {
             Ok(accepted) => accepted,
             Err(error) => {
@@ -135,7 +139,7 @@ impl Connections {
         let builder = self.builder.clone();
         let watcher = self.graceful.watcher();
         let Some(tls) = &self.tls else {
-            tokio::spawn(async move {
+            self.tasks.spawn(async move {
                 let service = connection_service(app, peer, None);
                 let connection = builder
                     .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
@@ -147,7 +151,7 @@ impl Connections {
             return;
         };
         let acceptor = tokio_rustls::TlsAcceptor::from(tls.current());
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             let stream =
                 match tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
                     Ok(Ok(stream)) => stream,
@@ -228,7 +232,7 @@ where
 /// Accepts on `listener` until `signal` completes, then drains.
 async fn drive<F>(
     listener: TcpListener,
-    connections: Connections,
+    mut connections: Connections,
     lifecycle: Lifecycle,
     signal: F,
     delay: Duration,
@@ -260,7 +264,12 @@ where
     }
     drop(listener);
     tracing::info!("the listener stops accepting; draining the requests in flight");
-    if tokio::time::timeout(bound, connections.graceful.shutdown())
+    let Connections {
+        graceful,
+        mut tasks,
+        ..
+    } = connections;
+    let drained = if tokio::time::timeout(bound, graceful.shutdown())
         .await
         .is_ok()
     {
@@ -268,10 +277,15 @@ where
     } else {
         tracing::warn!(
             shutdown_timeout_ms = bound.as_millis(),
-            "the drain bound passed; the connections still open are dropped"
+            "the drain bound passed; the connections still open are closed"
         );
         Drained::Cut
-    }
+    };
+    // NOTE: `JoinSet::shutdown` aborts every task and waits for each to end
+    // (<https://docs.rs/tokio/1/tokio/task/struct.JoinSet.html#method.shutdown>),
+    // so no connection outlives the drain.
+    tasks.shutdown().await;
+    drained
 }
 
 /// Serves `app` as `section` configures it, over TLS when `[server.tls]`
@@ -712,6 +726,62 @@ mod tests {
             .expect("the server serves");
         assert_eq!(Drained::Cut, drained);
         held.abort();
+    }
+
+    #[tokio::test]
+    async fn a_connection_still_open_at_the_bound_is_closed_when_run_returns() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let product = Router::new().route(
+            "/hold",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                "held"
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let lifecycle = Lifecycle::default();
+        let section = ServerSection {
+            drain_delay_ms: 0,
+            shutdown_timeout_ms: 300,
+            ..ServerSection::default()
+        };
+        let app = app(
+            product,
+            Health::new(Registry::default(), lifecycle.clone()),
+            &section,
+            StackPolicy::default(),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let served = tokio::spawn(async move {
+            super::run(listener, app, &section, lifecycle, async move {
+                let _received = stopped.await;
+            })
+            .await
+        });
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("a connection");
+        stream
+            .write_all(b"GET /hold HTTP/1.1\r\nhost: localhost\r\n\r\n")
+            .await
+            .expect("the request is sent");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stop.send(()).expect("the server listens for the signal");
+        let drained = tokio::time::timeout(Duration::from_secs(5), served)
+            .await
+            .expect("the drain is bounded")
+            .expect("the task ends")
+            .expect("the server serves");
+        assert_eq!(Drained::Cut, drained);
+        let mut rest = Vec::new();
+        let read =
+            tokio::time::timeout(Duration::from_secs(1), stream.read_to_end(&mut rest)).await;
+        assert!(
+            read.is_ok(),
+            "the held connection is closed once run returns"
+        );
+        assert!(rest.is_empty(), "the held request got no answer");
     }
 
     /// The status line and body of `GET path` on `address`.
