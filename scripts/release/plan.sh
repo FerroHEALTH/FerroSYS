@@ -32,7 +32,8 @@
 #   plan.sh support-end <YYYY-MM-DD>
 #       Prints the month the support period of a release of that date ends.
 #   plan.sh --self-test
-#       Proves prev-tag's ordering and support-end's arithmetic offline.
+#       Proves prev-tag's ordering, support-end's arithmetic and the reading
+#       of a README install line offline.
 #
 # The milestone check reads the tracker through gh (GH_TOKEN in CI, the
 # logged-in gh locally). Exit 2 on a usage error.
@@ -231,6 +232,40 @@ check_changelog_security() {
   VEX_ROOT=. bash scripts/checks/changelog-security.sh --section "$VERSION" "$CHANGELOG"
 }
 
+# readme_pins CRATE: reads a README on stdin and prints the version of every
+# install line that pins CRATE exactly (`<crate> = "=X.Y.Z"` or
+# `<crate> = { version = "=X.Y.Z", ... }`), one per line.
+readme_pins() {
+  awk -v crate="$1" '
+    index($0, crate " = ") == 1 && match($0, /"=[^"]*"/) { print substr($0, RSTART + 2, RLENGTH - 3) }
+  '
+}
+
+# The crate README is its crates.io page: its install line pins the version
+# being released. A pre-release keeps the line of the release before it.
+check_readme_pin() {
+  local readme="crates/$CRATE/README.md" pins stale
+  if [[ "$VERSION" == *-* ]]; then
+    echo "a pre-release moves no install line"
+    return 0
+  fi
+  if [[ ! -f "$readme" ]]; then
+    echo "::error::$CRATE has no $readme." >&2
+    return 1
+  fi
+  pins="$(readme_pins "$CRATE" <"$readme")"
+  if [[ -z "$pins" ]]; then
+    echo "::error::$readme has no install line pinning $CRATE as '$CRATE = \"=$VERSION\"'." >&2
+    return 1
+  fi
+  stale="$(grep -vxF "$VERSION" <<<"$pins" || true)"
+  if [[ -n "$stale" ]]; then
+    echo "::error::$readme pins $CRATE at $(paste -sd, - <<<"$stale"); the release is $VERSION." >&2
+    return 1
+  fi
+  echo "OK: $readme pins $VERSION"
+}
+
 check_notes() {
   notes "$TAG" "$NOTES"
   echo "Release notes for $VERSION ($(wc -l <"$NOTES" | tr -d ' ') lines):"
@@ -254,6 +289,7 @@ check_version The tag matches the version of the crate it releases
 check_changelog_structure Changelog structure (no duplicate subsections, Keep a Changelog types only)
 check_changelog_links The changelog links compare from the tag being cut
 check_changelog_security The Security section of the cut names its advisories and its reason
+check_readme_pin The crate README's install line pins the version being released
 check_notes The changelog section for this tag becomes the release notes
 check_notes_content The release notes carry the support period
 EOF
@@ -333,6 +369,14 @@ self_test() {
   expect "an empty date" "$(support_end "" || echo "$refused")" "$refused"
   expect "a month out of range" "$(support_end 2026-13-01 || echo "$refused")" "$refused"
   expect "a day out of range" "$(support_end 2026-04-31 || echo "$refused")" "$refused"
+  got="$(printf '%s\n' '```toml' '[dependencies]' 'ferrohealth-secret = "=0.2.0"' '```' | readme_pins ferrohealth-secret)"
+  expect "a plain install line" "$got" "0.2.0"
+  got="$(printf '%s\n' 'ferrohealth-telemetry = { version = "=0.1.0", features = ["axum"] }' | readme_pins ferrohealth-telemetry)"
+  expect "an install line with features" "$got" "0.1.0"
+  got="$(printf '%s\n' 'ferrohealth-secret = "=0.2.0"' 'ferrohealth-config = "=0.1.0"' | readme_pins ferrohealth-config)"
+  expect "another crate's line is not this crate's" "$got" "0.1.0"
+  got="$(printf '%s\n' 'Pin ferrohealth-health = "=9.9.9" in prose.' 'ferrohealth-health = "0.1"' | readme_pins ferrohealth-health)"
+  expect "prose and an inexact requirement are no install line" "$got" ""
   if [[ "$fails" -gt 0 ]]; then
     echo "plan.sh self-test FAILED ($fails case(s))" >&2
     exit 1

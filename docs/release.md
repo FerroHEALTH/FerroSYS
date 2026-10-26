@@ -30,7 +30,8 @@ On the branch `release/<tag>`:
    otherwise (`scripts/release/milestone.sh check <tag>`).
 2. **Bump the version.** Set the crate's version and run `cargo update -w`.
    A release that another workspace crate must follow also moves that
-   crate's requirement in `[workspace.dependencies]`.
+   crate's requirement in `[workspace.dependencies]`. Move the install line
+   of the crate's `README.md`, its crates.io page, to the new version.
 3. **Cut the changelog.** Rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD` and open a fresh, empty `## [Unreleased]` above
    it. The date is the day of the cut: the release notes count the support
@@ -92,6 +93,7 @@ tracker.
 | The crate's version names the tag's version | `plan.sh` |
 | Every section of the changelog holds Keep a Changelog types, each once | `scripts/checks/changelog-structure.sh` |
 | `[Unreleased]` compares from the tag, and the cut version has its link | `plan.sh` |
+| The crate's `README.md` install line pins the version being released (a pre-release is exempt) | `plan.sh` |
 | The section being cut opens its `### Security` with the reason when it sits beside other changes, and every Security entry names a GHSA id or an existing `security/vex/` path | `scripts/checks/changelog-security.sh --section X.Y.Z` |
 | The changelog section becomes the notes, with the support period appended: the month five years after the heading's date (Regulation (EU) 2024/2847 Art 13(19)) | `plan.sh notes` |
 

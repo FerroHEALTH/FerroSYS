@@ -20,14 +20,15 @@ package here takes it.
 
 ## State of the repository
 
-No code yet. The repository holds the licence, the brand, the tracker
-tooling, the contribution-licence guard and the plan in
-`docs/architecture.md`: six `ferrohealth-*` crates, their policies and the
-migration order across the five products. Read it first. Nothing is
-scaffolded before its issue is filed and its milestone set, and no crate is
-built before its crates.io name is reserved, which needs the owner.
-Describe only what exists; planned work lives on the milestones, never as a
-prose promise in the README.
+The six crates of `docs/architecture.md` exist under `crates/` and are on
+crates.io, each released on its own version line by its own tag
+(`docs/release.md`): `ferrohealth-secret`, `ferrohealth-config`,
+`ferrohealth-telemetry`, `ferrohealth-health`, `ferrohealth-server` and
+`ferrohealth-usage-report`. Each crate's `Cargo.toml` and `CHANGELOG.md`
+name its version and what it shipped. Planned work lives on the milestones,
+one per crate release, never as a prose promise in the README; describe
+only what exists. A new crate is added only after its issue is filed, its
+milestone set and its crates.io name reserved, which needs the owner.
 
 ## What belongs here, and what does not
 
