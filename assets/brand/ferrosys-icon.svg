@@ -1,6 +1,6 @@
 <!-- SPDX-FileCopyrightText: Cadasto B.V. -->
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
-<!-- The FerroSYS mark: a gauge on a stand, for the control plane every server reports to.
+<!-- The FerroSYS mark: a gauge on a stand, for the running state of a server.
      The needle is the light value so the reading is the first thing seen. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64" role="img" aria-label="FerroSYS icon">
   <title>FerroSYS</title>

@@ -8,9 +8,9 @@
   protocols, plus shared crates for cross-cutting work; nothing is
   hand-written that a shared crate or another product provides; owner
   2026-10-25
-- [What FerroSYS is](ferrosys.md): the family's shared system crates
-  (logging, OpenTelemetry, health, server plumbing, configuration) first,
-  the central log and console service later; owner 2026-10-26
+- [What FerroSYS is](ferrosys.md): a repository of shared crates like
+  FerroAUTH and FerroAUDIT, with no service of its own; six `ferrohealth-*`
+  crates, per-crate tags, lockstep; owner 2026-10-26
 - [Memory lives in the repo](memory-lives-in-repo.md): every learning is a
   tracked file here, never a per-user note
 - [Licence: BUSL 1.1](license-busl.md): the FerroHEALTH terms, Cadasto B.V.

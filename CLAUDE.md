@@ -10,9 +10,9 @@ health family with its indicator registry and the container healthcheck,
 the HTTP server stack with the bounded drain, and configuration loading
 with secret handling. It is the same kind of repository as FerroAUTH and
 FerroAUDIT: shared crates that run inside the products and take no call
-(`.claude/memory/family-architecture.md`). A central log and console
-service, the central half of the logging component, is later work in this
-repository, built on the crates once the products use them.
+(`.claude/memory/family-architecture.md`). FerroSYS distributes no
+configuration, deploys nothing and runs no service, by the
+owner's ruling of 2026-10-26 (`.claude/memory/ferrosys.md`).
 
 FerroSYS in prose, `ferrosys` in identifiers that are not crate names. The
 crate name `ferrosys` on crates.io belongs to an unrelated project, so no
@@ -21,11 +21,13 @@ package here takes it.
 ## State of the repository
 
 No code yet. The repository holds the licence, the brand, the tracker
-tooling and the contribution-licence guard. The crate layout, the public
-API and the migration order across the five products are open for the
-owner's decision; nothing is scaffolded before its issue is filed and its
-milestone set. Describe only what exists; planned work lives on the
-milestones, never as a prose promise.
+tooling, the contribution-licence guard and the plan in
+`docs/architecture.md`: six `ferrohealth-*` crates, their policies and the
+migration order across the five products. Read it first. Nothing is
+scaffolded before its issue is filed and its milestone set, and no crate is
+built before its crates.io name is reserved, which needs the owner.
+Describe only what exists; planned work lives on the milestones, never as a
+prose promise in the README.
 
 ## What belongs here, and what does not
 
@@ -34,10 +36,10 @@ milestones, never as a prose promise.
   route and never a body, OTLP traces and metrics, liveness and readiness,
   the request id, the panic catch, timeouts and body limits, the console
   security headers, the configuration file and environment overrides with
-  `_file` secrets, the shutdown drain.
+  `_file` secrets, the shutdown drain, the usage report to FerroPULSE.
 - **Not here:** a product's domain (FHIR, OMOP, openEHR, federation,
-  identity, terminology), authentication and the policy decision
-  (FerroAUTH), the audit trail and the EHDS access record (FerroAUDIT), and
+  identity, terminology), authentication, the policy decision and the
+  console sign-in and session (FerroAUTH), the audit trail and the EHDS access record (FerroAUDIT), and
   UI components (FerroUI). When FerroSYS needs one of those, it depends on
   the owning crate; no FerroSYS crate is ever a copy of one.
 - **No dependency cycle:** a crate here that FerroAUTH or FerroAUDIT
@@ -72,7 +74,8 @@ milestones, never as a prose promise.
 
 ## Repo map
 
-- `assets/brand/`: the gauge mark, the lockup and the "Olive & Iron" tokens.
+- `docs/architecture.md`: the design of record, the plan for the six crates.
+- `assets/brand/`: the gauge mark, the steel lockup and the "Olive & Iron" tokens.
 - `scripts/gh/`: the tracker helpers (`fields.sh` for the issue type and the
   `Priority` and `Effort` fields, `labels.sh`, `rel.sh` for sub-issue and
   dependency edges).
