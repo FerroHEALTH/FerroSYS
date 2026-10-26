@@ -25,7 +25,9 @@
 //!
 //! No specification governs the console, the request log or the panic
 //! line: our own design. The export follows the OpenTelemetry protocol and
-//! its semantic conventions for the resource and the HTTP span.
+//! its semantic conventions v1.44.0 for the resource, the HTTP span and the
+//! HTTP server metrics; the pages cited are vendored in the repository under
+//! `docs/specs/otel-semconv/`.
 
 pub mod console;
 pub mod panic;

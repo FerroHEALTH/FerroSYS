@@ -69,7 +69,8 @@ impl Service {
     }
 
     /// Names the deployment environment as `deployment.environment.name`
-    /// (OpenTelemetry semantic conventions, deployment attributes), such as
+    /// (OpenTelemetry semantic conventions v1.44.0,
+    /// `docs/resource/deployment-environment.md`), such as
     /// `production`.
     #[must_use]
     pub fn environment(mut self, name: impl Into<String>) -> Self {
