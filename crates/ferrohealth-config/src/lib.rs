@@ -18,9 +18,10 @@
 //!
 //! The load is strict. An unknown key, in the file or through an override,
 //! and a value of the wrong type are refused with the dotted key and, for an
-//! unknown key, the closest known one; a variable under the prefix that is
-//! neither an override, an alias nor a name the product reserved is refused
-//! too, so a variable that is set and never read cannot exist.
+//! unknown key, the closest known one. Only the override form
+//! `<PREFIX>__…` is checked against the tree; every other variable under the
+//! prefix is left alone, because product prefixes nest (`FERROTERM` and
+//! `FERROTERM_CONSOLE`) and such a name may belong to another binary.
 //!
 //! [`loader::Loaded`] keeps where each key came from
 //! ([`provenance::Provenance`]), and [`report::check_report`] renders the

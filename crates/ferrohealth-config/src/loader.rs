@@ -13,14 +13,15 @@ use serde::de::DeserializeOwned;
 use crate::error::{ConfigError, mask_values, position};
 use crate::overrides::{Override, Placement, retype};
 use crate::provenance::Provenance;
-use crate::strict::{did_you_mean, sweep};
+use crate::strict::did_you_mean;
 
 /// The loader of one product's configuration.
 ///
 /// `prefix` names the product's environment namespace: with `FERROSYS`, the
 /// variable `FERROSYS__SERVER__LISTEN` sets `[server] listen` and
-/// `FERROSYS_CONFIG` names the file. Every other variable that starts with
-/// `FERROSYS_` must be an alias or a reserved name, or the load is refused.
+/// `FERROSYS_CONFIG` names the file. An override that names no key is
+/// refused; every other variable that starts with `FERROSYS_` is left alone,
+/// because product prefixes nest (`FERROTERM` and `FERROTERM_CONSOLE`).
 ///
 /// # Examples
 ///
@@ -282,11 +283,21 @@ impl Loader {
     }
 
     /// Reserves `variable`, a name under the prefix the product reads
-    /// itself and that sets no key, so the sweep passes it.
+    /// itself and that sets no key.
+    ///
+    /// The loader leaves every name outside the `<PREFIX>__` override form
+    /// alone, so a reserved name needs no declaration to pass; it records
+    /// which names the product owns.
     #[must_use]
     pub fn reserve(mut self, variable: impl Into<String>) -> Self {
         self.reserved.push(variable.into());
         self
+    }
+
+    /// Returns the names [`Loader::reserve`] recorded, in the order given.
+    #[must_use]
+    pub fn reserved(&self) -> &[String] {
+        &self.reserved
     }
 
     /// Returns the namespace prefix.
@@ -355,9 +366,6 @@ impl Loader {
     /// # Errors
     ///
     /// - [`ConfigError::Syntax`] when `text` is not TOML;
-    /// - [`ConfigError::UnknownVariable`] for a variable under the prefix
-    ///   that is neither an override, an alias nor reserved, or
-    ///   [`ConfigError::Refusals`] naming every one when there are several;
     /// - [`ConfigError::OverrideName`] and [`ConfigError::OverrideShape`] for
     ///   an override that names no key;
     /// - [`ConfigError::Invalid`] for an unknown key or a value the tree
@@ -396,21 +404,6 @@ impl Loader {
                 reason: mask_values(error.message()),
             })?,
         };
-        let config_variable = self.config_variable();
-        let mut known: Vec<&str> = vec![config_variable.as_str()];
-        known.extend(self.reserved.iter().map(String::as_str));
-        known.extend(
-            self.aliases
-                .iter()
-                .flat_map(|alias| alias.reads.iter().map(String::as_str)),
-        );
-        let mut refusals = sweep(&self.prefix, environment, &known);
-        if refusals.len() > 1 {
-            return Err(ConfigError::Refusals { refusals });
-        }
-        if let Some(refusal) = refusals.pop() {
-            return Err(refusal);
-        }
         let overrides = self.overrides(environment, sets)?;
         let mut set_by: BTreeMap<String, String> = BTreeMap::new();
         for item in &overrides {
@@ -1089,41 +1082,52 @@ mod tests {
     }
 
     #[test]
-    fn an_unread_variable_under_the_prefix_is_refused() {
+    fn a_nested_sibling_prefix_is_left_alone() {
+        let loaded = loader()
+            .load_sources::<Config>(
+                None,
+                None,
+                &environment(&[
+                    ("FERROSYS_CONSOLE__SERVER__LISTEN", "0.0.0.0:9"),
+                    ("FERROSYS_CONSOLE_CONFIG", "/etc/console.toml"),
+                    ("FERROSYS_SYNC__BOGUS", "1"),
+                    ("FERROSYS_INDEX_ROOT", "/srv/index"),
+                ]),
+            )
+            .expect("another binary's variables are not this one's to refuse");
+        assert_eq!("127.0.0.1:8080", loaded.settings().server.listen);
+        assert_eq!(Source::Default, loaded.provenance().source("server.listen"));
+    }
+
+    #[test]
+    fn a_typo_in_the_override_form_is_refused() {
         let error = loader()
             .load_sources::<Config>(
                 None,
                 None,
-                &environment(&[("FERROSYS_SERVER__LISTEN", "x")]),
+                &environment(&[
+                    ("FERROSYS_CONSOLE__SERVER__LISTEN", "0.0.0.0:9"),
+                    ("FERROSYS__SERVER__LISTN", "0.0.0.0:9"),
+                ]),
             )
-            .expect_err("the single-underscore form is no override");
+            .expect_err("an override that names no key is refused");
         assert!(
-            matches!(&error, ConfigError::UnknownVariable { suggestion: Some(suggestion), .. } if suggestion == "FERROSYS__SERVER__LISTEN"),
+            matches!(
+                &error,
+                ConfigError::Invalid { key: Some(key), variable: Some(variable), suggestion: Some(suggestion), .. }
+                    if key == "server.listn"
+                        && variable == "FERROSYS__SERVER__LISTN"
+                        && suggestion == "server.listen"
+            ),
             "{error:?}"
-        );
-        let error = loader()
-            .load_sources::<Config>(
-                None,
-                None,
-                &environment(&[("FERROSYS_BOGUS", "1"), ("FERROSYS_LOG_FORMT", "json")]),
-            )
-            .expect_err("both are refused");
-        let ConfigError::Refusals { refusals } = &error else {
-            panic!("an unexpected refusal: {error:?}");
-        };
-        assert_eq!(2, refusals.len(), "{error}");
-        assert!(
-            error
-                .to_string()
-                .contains("did you mean `FERROSYS_LOG_FORMAT`?"),
-            "{error}"
         );
     }
 
     #[test]
-    fn the_config_variable_and_a_reserved_name_pass_the_sweep() {
-        let loaded = loader()
-            .reserve("FERROSYS_STATE_DIR")
+    fn the_config_variable_and_a_reserved_name_pass() {
+        let reserving = loader().reserve("FERROSYS_STATE_DIR");
+        assert_eq!(["FERROSYS_STATE_DIR".to_owned()], reserving.reserved());
+        let loaded = reserving
             .load_sources::<Config>(
                 None,
                 None,

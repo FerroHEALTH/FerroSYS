@@ -10,6 +10,19 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The loader no longer refuses a variable under the prefix outside the
+  override form. Product prefixes nest (`FERROTERM`, `FERROTERM_CONSOLE`,
+  `FERROTERM_SYNC`), so a shell that set one binary's variables stopped
+  another from starting. Only an unknown key named by a `<PREFIX>__…`
+  override is refused; `strict::sweep` stays for a binary whose prefix no
+  other extends (#114).
+
+### Added
+
+- `Loader::reserved` returns the names `Loader::reserve` recorded.
+
 ## [0.2.4] - 2026-10-26
 
 ### Changed
