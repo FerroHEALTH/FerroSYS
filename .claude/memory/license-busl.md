@@ -13,10 +13,10 @@ terms every FerroHEALTH repository uses. Cadasto B.V. is the Licensor and
 handles the business side (info@cadasto.com); the maintainer handles the
 technical side.
 
-The Additional Use Grant names offering the Licensed Work as a service
-through which others monitor, configure or operate health-data services;
-that wording predates the decision to build the shared system crates first
-and is the owner's to keep or trim.
+The Additional Use Grant follows the shared-library grant the owner approved
+for FerroAUTH, with only the description changed: no hosted, managed or
+embedded service through which others operate a health-data server built
+with the Licensed Work, and no distribution for a fee.
 
 **How to apply:**
 

@@ -4,7 +4,7 @@
 
 <img src="assets/brand/ferrosys-lockup-auto.svg" alt="FerroSYS" width="290">
 
-**The system plumbing every FerroHEALTH server shares: logging, telemetry, health checks, the HTTP server and configuration.**
+**The system plumbing every FerroHEALTH server shares, as Rust libraries: secrets, configuration, logging and telemetry, health checks and the HTTP server.**
 
 [Family site](https://ferrohealth.eu/) ·
 [What ships today](#what-ships-today) ·
@@ -74,21 +74,22 @@ configuration). The family rule is that nothing is hand-written that a
 shared library provides; when a library lacks something, it is added there
 and released.
 
-A central log and console service, where an operator sees every server of a
-deployment in one place, belongs in this repository too. It is later work,
-built on these libraries once the servers use them.
+FerroSYS is a repository of shared crates, like FerroAUTH and FerroAUDIT:
+the crates run inside each server and take no call of their own. It
+distributes no configuration, deploys nothing and runs no service.
 
 ## What ships today
 
 Nothing yet: FerroSYS has no released crate and no code. The repository
-holds the licence, the brand and the tracker tooling. What is built, and in
-which order, is on the
+holds the licence, the brand, the tracker tooling and the plan in
+[`docs/architecture.md`](docs/architecture.md). What is built, and in which
+order, is on the
 [milestones](https://github.com/FerroHEALTH/FerroSYS/milestones).
 
 ## Learn more
 
 - The [FerroHEALTH family site](https://ferrohealth.eu/) and the [family book](https://ferrohealth.eu/docs/)
-- The [milestones](https://github.com/FerroHEALTH/FerroSYS/milestones) and the [tracker](https://github.com/FerroHEALTH/FerroSYS/issues)
+- The [architecture](docs/architecture.md), the [milestones](https://github.com/FerroHEALTH/FerroSYS/milestones) and the [tracker](https://github.com/FerroHEALTH/FerroSYS/issues)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md) and [maintainers](MAINTAINERS.md)
 - [Brand](assets/brand/README.md)
