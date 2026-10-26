@@ -10,6 +10,12 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- An invalid value in a nested table is refused once: the loader no longer
+  adds a `missing field` refusal for the table it dropped the value from to
+  look for further refusals (#84).
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

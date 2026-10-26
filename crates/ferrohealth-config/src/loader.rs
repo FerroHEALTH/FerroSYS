@@ -363,8 +363,9 @@ impl Loader {
         let mut placements = BTreeMap::new();
         let mut dropped: Vec<Vec<String>> = Vec::new();
         let mut errors: Vec<ConfigError> = Vec::new();
-        // Each pass places one more override, or drops one more refused key, so
-        // the loop ends after at most one pass per override and per refusal.
+        // Each pass places one more override, or drops one more refused key or
+        // the table it left incomplete, so the loop ends after at most one pass
+        // per override and per key.
         loop {
             let mut table = file.clone();
             for (index, item) in overrides.iter().enumerate() {
@@ -403,6 +404,17 @@ impl Loader {
                 continue;
             }
             let (refusal, key) = invalid(&error, &merged, &provenance);
+            // NOTE: no specification governs this: our own design; a field missing only
+            // because its refused value was dropped is no refusal, so its table goes too.
+            if follows_a_drop(&error, key.as_deref(), &dropped) {
+                match key {
+                    Some(table) => {
+                        dropped.push(table.split('.').map(str::to_owned).collect());
+                        continue;
+                    }
+                    None => return Err(collected(errors)),
+                }
+            }
             errors.push(refusal);
             match key {
                 Some(key) if errors.len() < MAX_REFUSALS => {
@@ -555,6 +567,25 @@ fn invalid(
         reason: mask_values(error.message()),
     };
     (refusal, key)
+}
+
+/// Whether `error` reports a field missing only because a refused key was
+/// dropped to look for further refusals: `missing field` under the table at
+/// `key` (the root when `None`), naming a dropped key.
+fn follows_a_drop(error: &toml::de::Error, key: Option<&str>, dropped: &[Vec<String>]) -> bool {
+    let Some(field) = error
+        .message()
+        .split_once("missing field `")
+        .and_then(|(_, rest)| rest.split_once('`'))
+        .map(|(field, _)| field)
+    else {
+        return false;
+    };
+    let mut path: Vec<String> = key
+        .map(|key| key.split('.').map(str::to_owned).collect())
+        .unwrap_or_default();
+    path.push(field.to_owned());
+    dropped.contains(&path)
 }
 
 /// The one error of `errors`, or all of them together.
@@ -904,6 +935,61 @@ mod tests {
                 if key == "telemetry.format" && variable == "FERROSYS_LOG_FORMAT" && suggestion == "json"),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn an_invalid_nested_value_is_refused_once() {
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[expect(dead_code, reason = "the fields are only deserialized")]
+        struct Rate {
+            requests_per_second: std::num::NonZeroU32,
+            burst: std::num::NonZeroU32,
+        }
+        #[derive(Debug, Default, serde::Deserialize)]
+        #[serde(default, deny_unknown_fields)]
+        struct Server {
+            caller_rate: Option<Rate>,
+            port: u16,
+        }
+        #[derive(Debug, Default, serde::Deserialize)]
+        #[serde(default, deny_unknown_fields)]
+        struct Nested {
+            server: Server,
+        }
+        let error = loader()
+            .load_sources::<Nested>(
+                Some("[server.caller_rate]\nrequests_per_second = 0\nburst = 1\n"),
+                None,
+                &BTreeMap::new(),
+            )
+            .expect_err("a zero rate is refused");
+        assert!(
+            matches!(&error, ConfigError::Invalid { key: Some(key), .. } if key == "server.caller_rate.requests_per_second"),
+            "exactly the one refusal: {error:?}"
+        );
+        let error = loader()
+            .load_sources::<Nested>(
+                Some("[server]\nport = \"x\"\n[server.caller_rate]\nrequests_per_second = 0\nburst = 0\n"),
+                None,
+                &BTreeMap::new(),
+            )
+            .expect_err("three values are refused");
+        let ConfigError::Refusals { refusals } = &error else {
+            panic!("an unexpected refusal: {error:?}");
+        };
+        let keys: Vec<_> = refusals
+            .iter()
+            .map(|refusal| match refusal {
+                ConfigError::Invalid { key, .. } => key.clone().unwrap_or_default(),
+                other => other.to_string(),
+            })
+            .collect();
+        assert!(
+            keys.iter().all(|key| key != "server.caller_rate"),
+            "no refusal for the table itself: {keys:?}"
+        );
+        assert!(keys.contains(&"server.port".to_owned()), "{keys:?}");
     }
 
     #[test]
