@@ -46,17 +46,14 @@ const USERINFO: &AsciiSet = &NON_ALPHANUMERIC
 /// ```
 /// use std::collections::BTreeMap;
 ///
-/// let environment = BTreeMap::from([
-///     ("PGHOST".to_owned(), "db.example".to_owned()),
-///     ("PGUSER".to_owned(), "app".to_owned()),
-///     ("PGPASSWORD".to_owned(), "p@ss word".to_owned()),
-///     ("PGDATABASE".to_owned(), "records".to_owned()),
-///     ("PGSSLMODE".to_owned(), "require".to_owned()),
-/// ]);
-/// assert_eq!(
-///     Some("postgres://app:p%40ss%20word@db.example/records?sslmode=require".to_owned()),
-///     ferrohealth_config::libpq::url(&environment)
-/// );
+/// let mut environment = BTreeMap::new();
+/// environment.insert("PGHOST".to_owned(), "db.example".to_owned());
+/// environment.insert("PGUSER".to_owned(), "app".to_owned());
+/// environment.insert("PGPASSWORD".to_owned(), "p@ss word".to_owned());
+/// environment.insert("PGDATABASE".to_owned(), "records".to_owned());
+/// environment.insert("PGSSLMODE".to_owned(), "require".to_owned());
+/// let expected = "postgres://app:p%40ss%20word@db.example/records?sslmode=require";
+/// assert_eq!(Some(expected.to_owned()), ferrohealth_config::libpq::url(&environment));
 /// ```
 #[must_use]
 pub fn url(environment: &BTreeMap<String, String>) -> Option<String> {
