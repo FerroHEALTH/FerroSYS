@@ -7,6 +7,11 @@
 # The only advisory gate: it reads the RustSec database cargo audit does and
 # adds yanked, licences, bans and sources.
 
+# Every feature of every crate is in the graph, so a dependency an optional
+# feature links is checked as one a default build links.
+[graph]
+all-features = true
+
 [advisories]
 version = 2
 yanked = "deny"
@@ -25,6 +30,11 @@ allow = [
   # The ICU crates url links through idna, the Unicode data under its own
   # licence.
   "Unicode-3.0",
+  # aws-lc-rs and aws-lc-sys, the crypto provider rustls links for the OTLP
+  # export's TLS, and the crates beside them.
+  "ISC",
+  "MIT-0",
+  "BSD-3-Clause",
 ]
 confidence-threshold = 0.9
 # The project's own crates are BUSL-1.1 (LICENSE); each joins the list with
@@ -32,6 +42,7 @@ confidence-threshold = 0.9
 exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-secret" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-config" },
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-telemetry" },
 ]
 
 [bans]
