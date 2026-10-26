@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-usage-report"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ferrohealth-config",
  "http",

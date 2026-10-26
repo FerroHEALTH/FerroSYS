@@ -10,6 +10,8 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - `section::UsageReportSection`, the `[usage_report]` section with its off
@@ -25,3 +27,6 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 - `reporter::Reporter` and `reporter::ProductSection`: the start and daily
   reports, a refusal logged with the collector's status, and a daily report
   that does not arrive keeping its counts for the next try (#18).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-usage-report-v0.1.0
