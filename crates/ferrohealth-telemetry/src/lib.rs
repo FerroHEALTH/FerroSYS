@@ -19,7 +19,9 @@
 //! - `request_log` (feature `axum`) writes one line and opens one span per
 //!   request: the method, the matched route template, the status, the
 //!   latency and the server's request id, never a body, the raw path, a
-//!   header value or the client's request id.
+//!   header value or the client's request id. It records the
+//!   `http.server.request.duration` histogram, and writes the fields a
+//!   handler adds to its response.
 //!
 //! No specification governs the console, the request log or the panic
 //! line: our own design. The export follows the OpenTelemetry protocol and

@@ -22,6 +22,22 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   reads the running filter back (#55).
 - `[telemetry] environment` sets `deployment.environment.name` on the
   resource, and `Service::environment` sets it in code (#56).
+- `RequestLog::with_metrics` records every request in the
+  `http.server.request.duration` histogram (seconds, the advisory buckets)
+  of the OpenTelemetry HTTP semantic conventions, with
+  `http.request.method`, `url.scheme`, `http.response.status_code`,
+  `http.route`, `network.protocol.version` and, on a server error,
+  `error.type`; `RequestLog::serving_tls` sets `url.scheme` to `https`
+  (#51).
+- `request_log::fields::LineFields`, a response extension whose fields the request
+  log writes as named fields of the line, each a lower-case name and a
+  short visible-ASCII `Token` the product vouches for (#52).
+- `request_log::RouteNamer`, set with `RequestLog::with_route_namer`,
+  names the route of a request no route matched, for the line, the span,
+  the histogram and the recorders (#52).
+- `telemetry::prometheus_route` (features `axum` and `prometheus`) answers
+  `GET` with the metrics in the Prometheus text format under
+  `text/plain; version=0.0.4` (#57).
 
 ### Changed
 
