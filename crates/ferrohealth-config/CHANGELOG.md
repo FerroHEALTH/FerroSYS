@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-26
+
 ### Fixed
 
 - The loader no longer refuses a variable under the prefix outside the
@@ -99,7 +101,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.4...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.5...HEAD
+[0.2.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.4...ferrohealth-config-v0.2.5
 [0.2.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.3...ferrohealth-config-v0.2.4
 [0.2.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.2...ferrohealth-config-v0.2.3
 [0.2.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.1...ferrohealth-config-v0.2.2
