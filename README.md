@@ -1,35 +1,101 @@
 <!-- SPDX-FileCopyrightText: Cadasto B.V. -->
 <!-- SPDX-License-Identifier: BUSL-1.1 -->
-# <img src="assets/brand/ferrosys-icon.svg" alt="" width="40" height="40" align="top"> FerroSYS
+<div align="center">
 
-[![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-blue.svg)](LICENSE)
+<img src="assets/brand/ferrosys-lockup-auto.svg" alt="FerroSYS" width="290">
 
-The control plane of the FerroHEALTH family, in pure Rust: how it all runs.
+**The system plumbing every FerroHEALTH server shares: logging, telemetry, health checks, the HTTP server and configuration.**
 
-The control plane touches no clinical content and carries what every server would otherwise invent for itself: liveness and readiness across the deployment, telemetry, the event log, notification subscriptions, and how the whole family is installed, configured and deployed. Every server reports to it and is configured from it.
+[Family site](https://ferrohealth.eu/) ·
+[What ships today](#what-ships-today) ·
+[Milestones](https://github.com/FerroHEALTH/FerroSYS/milestones) ·
+[Licensing](https://ferrohealth.eu/docs/licensing.html)
 
-FerroSYS is one of the [FerroHEALTH](https://ferrohealth.eu/) family. The family
-page shows where it sits among the eight and what calls what, and this
-repository is where the design and the build happen; the tracker is the
-record of both. Its site will be <https://ferrosys.eu/>.
+**Project**<br>
+[![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-blue)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/FerroHEALTH/FerroSYS?logo=github&label=last%20commit)](https://github.com/FerroHEALTH/FerroSYS/commits/main)
+[![Open issues](https://img.shields.io/github/issues/FerroHEALTH/FerroSYS?logo=github&label=issues)](https://github.com/FerroHEALTH/FerroSYS/issues)
+[![Family](https://img.shields.io/badge/family-FerroHEALTH-3F6070?logo=rust&logoColor=white)](https://ferrohealth.eu/)
+
+**Quality and security**<br>
+[![Contribution licence](https://img.shields.io/github/actions/workflow/status/FerroHEALTH/FerroSYS/contribution-licence.yml?logo=githubactions&logoColor=white&label=contribution%20licence)](https://github.com/FerroHEALTH/FerroSYS/actions/workflows/contribution-licence.yml)
+[![Security policy](https://img.shields.io/badge/security-policy-brightgreen?logo=github)](SECURITY.md)
+
+</div>
+
+## What FerroSYS does
+
+Every FerroHEALTH server has to do the same handful of things before it can
+do its real job. It writes a log that a person or a log pipeline can read. It
+sends traces and measurements to the monitoring system a hospital already
+runs. It tells the container platform whether it is alive and ready for
+work. It stops cleanly when asked to, without dropping a request halfway. It
+reads its settings from a file and the environment, and keeps passwords out
+of every log line.
+
+Today each server has its own copy of that code, and the copies have drifted
+apart: one setting has a different name in two products, and a log line
+looks different from one server to the next. FerroSYS is where that code
+moves, so every server behaves the same way and an operator learns it once.
+
+The libraries touch no clinical content. They carry how a server runs,
+never what it stores or translates.
+
+### Who it is for
+
+- **Hospital IT and operations teams**, who run several FerroHEALTH servers
+  and want one log format, one set of health checks and one way to configure
+  each of them.
+- **Developers of the FerroHEALTH servers**, who take these libraries
+  instead of writing the plumbing again.
+
+### Why you can trust what it claims
+
+The source is public, and the design is recorded on the
+[tracker](https://github.com/FerroHEALTH/FerroSYS/issues) of this
+repository, where you can follow every decision. There is no paid edition
+with extra features. This README describes only what exists; what is planned
+is on the milestones.
+
+## Part of FerroHEALTH
+
+FerroHEALTH is five servers, each its own product, that reach each other
+only over published standards: FerroEHR stores the record, FerroBRIDGE
+translates it to FHIR and the OMOP research model, FerroFED connects records
+across organisations and borders, FerroPIX matches patient identities, and
+FerroTERM serves the code systems (the shared lists of medical terms). No
+server is built into another.
+
+Work that every server needs lives in shared libraries, so it is written
+once: FerroAUTH for sign-in and access control, FerroAUDIT for the audit
+trail, FerroUI for the web consoles, and FerroSYS for the system plumbing
+(logging, OpenTelemetry, health checks, the HTTP server stack and
+configuration). The family rule is that nothing is hand-written that a
+shared library provides; when a library lacks something, it is added there
+and released.
+
+A central log and console service, where an operator sees every server of a
+deployment in one place, belongs in this repository too. It is later work,
+built on these libraries once the servers use them.
+
+## What ships today
+
+Nothing yet: FerroSYS has no released crate and no code. The repository
+holds the licence, the brand and the tracker tooling. What is built, and in
+which order, is on the
+[milestones](https://github.com/FerroHEALTH/FerroSYS/milestones).
+
+## Learn more
+
+- The [FerroHEALTH family site](https://ferrohealth.eu/) and the [family book](https://ferrohealth.eu/docs/)
+- The [milestones](https://github.com/FerroHEALTH/FerroSYS/milestones) and the [tracker](https://github.com/FerroHEALTH/FerroSYS/issues)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md) and [maintainers](MAINTAINERS.md)
+- [Brand](assets/brand/README.md)
 
 ## Licence
 
-FerroSYS is source-available under the Business Source License 1.1. The
-parameters that apply, the Licensor, the Licensed Work, the Additional Use
-Grant and the Change Date, are in [LICENSE](LICENSE): free for non-commercial
-production use, a commercial licence for any other production use, and Apache
-2.0 four years after each version is published.
-
-A commercial licence is arranged with [Cadasto B.V.](https://www.cadasto.com),
-the Licensor, which handles the business side of FerroSYS: write to
-[info@cadasto.com](mailto:info@cadasto.com) or use
-[cadasto.com/contact](https://www.cadasto.com/contact/). Technical questions go
-to the maintainer named in [MAINTAINERS.md](MAINTAINERS.md).
-
-The brand assets under `assets/brand/` are part of the Licensed Work.
-
-Contributions carry the terms in
-[CONTRIBUTING.md](CONTRIBUTING.md#licensing-of-contributions): you keep your
-copyright, and you grant the Licensor the relicensing right that keeps the work
-one work under one licensor. There is no separate agreement to sign.
+Business Source License 1.1 ([LICENSE](LICENSE)), with Apache License 2.0 as
+the Change License four years after each version; the
+[licensing page](https://ferrohealth.eu/docs/licensing.html) says when you
+need a commercial licence from Cadasto B.V.
