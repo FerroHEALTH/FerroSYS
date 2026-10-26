@@ -557,6 +557,43 @@ impl FilterHandle {
     }
 }
 
+/// Returns the route that answers `GET` and `HEAD` with every metric of
+/// `telemetry` in the Prometheus text exposition format.
+///
+/// The content type is `text/plain; version=0.0.4` (Prometheus, exposition
+/// formats, text format). Mount it as
+/// `.route("/metrics", prometheus_route(telemetry))`.
+///
+/// A rendering that fails answers `500` with no body and logs one line.
+#[cfg(all(feature = "axum", feature = "prometheus"))]
+pub fn prometheus_route<S>(telemetry: Arc<Telemetry>) -> axum::routing::MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    axum::routing::get(move || {
+        let telemetry = Arc::clone(&telemetry);
+        async move { exposition(&telemetry) }
+    })
+}
+
+/// The answer of the Prometheus route.
+#[cfg(all(feature = "axum", feature = "prometheus"))]
+fn exposition(telemetry: &Telemetry) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+
+    match telemetry.render_prometheus() {
+        Ok(text) => (
+            [(http::header::CONTENT_TYPE, prometheus::TEXT_FORMAT)],
+            text,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(error = %error, "the metrics could not be rendered");
+            http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// Returns the sampler of the span export: a root span is sampled by its
 /// trace id at `ratio`, and every other span as its parent was, so a
 /// request's whole span tree is exported or none of it is.

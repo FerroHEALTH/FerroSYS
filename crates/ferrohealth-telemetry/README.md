@@ -27,7 +27,12 @@ same way.
 - `request_log` (feature `axum`) writes one line and opens one span per
   request: the method, the route template, the status, the latency and the
   server's request id. It never carries a body, the raw path, a header
-  value, an unlisted query value or the client's request id.
+  value, an unlisted query value or the client's request id. It records
+  `http.server.request.duration` on the one meter provider, writes the
+  fields a handler adds with `LineFields`, and asks a `RouteNamer` for the
+  route of a request no route matched.
+- `telemetry::prometheus_route` (features `axum` and `prometheus`) serves
+  the metrics in the Prometheus text format.
 
 ## Use
 
