@@ -71,11 +71,14 @@ pub async fn render(body: PanicBody, request: Request, next: Next) -> Response {
     if response.extensions().get::<Panicked>().is_none() {
         return response;
     }
-    tracing::error!(
-        request_id = request_id.as_str(),
-        "the request handler panicked"
-    );
-    let mut rendered = body(&uri, &request_id);
+    answer(&body, &uri, &request_id)
+}
+
+/// Logs one line naming the server's `request_id` and answers the panicked
+/// request with the product's `body`.
+pub(crate) fn answer(body: &PanicBody, uri: &Uri, request_id: &str) -> Response {
+    tracing::error!(request_id, "the request handler panicked");
+    let mut rendered = body(uri, request_id);
     *rendered.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
     rendered
 }

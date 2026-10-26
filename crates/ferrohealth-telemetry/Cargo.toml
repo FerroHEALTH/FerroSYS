@@ -24,7 +24,7 @@ otlp = ["dep:opentelemetry-otlp", "dep:rustls"]
 # The Prometheus text exposition of the metrics.
 prometheus = ["dep:opentelemetry-prometheus", "dep:prometheus"]
 # The request-log middleware and the metrics route for axum.
-axum = ["dep:axum", "dep:http"]
+axum = ["dep:axum", "dep:http", "dep:pin-project-lite", "dep:tower"]
 
 [dependencies]
 ferrohealth-secret.workspace = true
@@ -38,6 +38,8 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 axum = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
+pin-project-lite = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry-prometheus = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }

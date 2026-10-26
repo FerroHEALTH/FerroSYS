@@ -48,6 +48,24 @@ pub fn of_client(headers: &HeaderMap) -> Option<&str> {
         .filter(|value| is_legal(value))
 }
 
+/// The client's id in `headers` as it was sent, when it is legal, which the
+/// server echoes byte for byte.
+pub(crate) fn client_value(headers: &HeaderMap) -> Option<HeaderValue> {
+    headers
+        .get(HEADER)
+        .filter(|value| value.to_str().is_ok_and(is_legal))
+        .cloned()
+}
+
+/// A fresh server id, minted without an intermediate string.
+pub(crate) fn mint_id(client_named: bool) -> RequestId {
+    let mut buffer = uuid::Uuid::encode_buffer();
+    RequestId::new(
+        &*uuid::Uuid::new_v4().hyphenated().encode_lower(&mut buffer),
+        client_named,
+    )
+}
+
 /// The middleware: mints the server's id, records whether the client named
 /// one, and echoes the client's id or the server's on the response.
 pub async fn assign(mut request: Request, next: Next) -> Response {

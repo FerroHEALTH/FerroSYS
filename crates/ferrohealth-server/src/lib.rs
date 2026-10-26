@@ -44,6 +44,7 @@ pub mod cli;
 pub mod client_address;
 #[cfg(feature = "console")]
 pub mod console;
+mod edge;
 pub mod health;
 pub mod healthcheck;
 pub mod overload;
