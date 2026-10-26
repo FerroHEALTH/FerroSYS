@@ -10,6 +10,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-26
+
 ### Changed
 
 - Requires `ferrohealth-secret` as `0.2.0`, caret requirements in place of exact pins, so a product takes a patch of those crates without waiting for a release of this one.
@@ -73,6 +75,7 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.1...HEAD
+[0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.0...ferrohealth-telemetry-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.1.0...ferrohealth-telemetry-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-telemetry-v0.1.0
