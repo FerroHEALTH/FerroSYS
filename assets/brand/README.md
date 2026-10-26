@@ -35,7 +35,8 @@ values from `tokens.css` here verbatim.
 | File | What it is |
 |---|---|
 | `ferrosys-icon.svg` | primary icon, full colour, transparent background, 64-unit viewBox at a 512 intrinsic size |
+| `ferrosys-lockup-auto.svg` | the mark beside the "FerroSYS" wordmark (Bricolage Grotesque 700, the family's wordmark face), switching between the light and dark tones on `prefers-color-scheme`, for the README and any page that serves one file to both themes; on a dark ground the dial takes olive-light and the needle and stand take mist |
 | `tokens.css` | the palette as CSS custom properties |
 
-The lockups, the favicon set and the social card follow when the product has a
-site to carry them.
+The favicon set and the social card follow when the product has a site to
+carry them.

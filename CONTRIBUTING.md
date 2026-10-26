@@ -3,10 +3,14 @@
 
 # Contributing to FerroSYS
 
-FerroSYS is one of the [FerroHEALTH](https://ferrohealth.eu/) family and has no
-code yet. The design happens on the tracker of this repository, and the
-tracker is the record of it. The conventions the family shares apply from the
-first commit.
+FerroSYS holds the system plumbing the FerroHEALTH servers share: logging,
+OpenTelemetry, health checks, the HTTP server stack and configuration, as
+Rust libraries. It has no code yet. The design happens on the tracker of this
+repository, and the tracker is the record of it. The working discipline is
+[`CLAUDE.md`](CLAUDE.md); read it before making a change. The conventions
+the family shares apply from the first commit, and the contribution terms
+every FerroHEALTH product shares are in the family book at
+<https://ferrohealth.eu/docs/licensing.html#contributions>.
 
 ## Issues
 

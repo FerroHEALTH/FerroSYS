@@ -1,0 +1,27 @@
+<!-- SPDX-FileCopyrightText: Cadasto B.V. -->
+<!-- SPDX-License-Identifier: BUSL-1.1 -->
+<!-- One lockup for both themes: the media query inside the SVG switches the
+     mark and wordmark tones on prefers-color-scheme, so a README or a page
+     serves one file to a light and a dark reader. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="230" height="64" viewBox="0 0 230 64" role="img" aria-label="FerroSYS">
+  <title>FerroSYS</title>
+  <style>
+    .c0-fill { fill: #5B6B16 }
+    .c0-stroke { stroke: #5B6B16 }
+    .c1-stroke { stroke: #BEF264 }
+    .wm { fill: #0F172A; }
+    @media (prefers-color-scheme: dark) {
+      .c0-fill { fill: #BEF264 }
+      .c0-stroke { stroke: #BEF264 }
+      .c1-stroke { stroke: #F1F5F9 }
+      .wm { fill: #F1F5F9; }
+    }
+  </style>
+  <g>
+  <path d="M11 42 A21 21 0 0 1 53 42" fill="none" class="c0-stroke" stroke-width="4.6" stroke-linecap="round"/>
+  <path d="M32 42 L44 27" fill="none" class="c1-stroke" stroke-width="4.6" stroke-linecap="round"/>
+  <circle cx="32" cy="42" r="5" class="c0-fill"/>
+  <path d="M20 54 H44" fill="none" class="c1-stroke" stroke-width="4.6" stroke-linecap="round"/>
+  </g>
+  <text class="wm" x="76" y="44" font-family="'Bricolage Grotesque',system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="30" font-weight="700" letter-spacing="-0.3">FerroSYS</text>
+</svg>
