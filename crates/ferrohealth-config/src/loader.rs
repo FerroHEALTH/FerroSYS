@@ -624,7 +624,11 @@ fn invalid(
     let refusal = ConfigError::Invalid {
         variable: key
             .as_deref()
-            .and_then(|key| provenance.variable(key))
+            .and_then(|key| {
+                provenance
+                    .variable(key)
+                    .or_else(|| provenance.variable_below(key))
+            })
             .map(str::to_owned),
         key: key.clone(),
         suggestion,
@@ -946,8 +950,14 @@ mod tests {
             )
             .expect_err("an unknown section is refused");
         assert!(
-            matches!(&error, ConfigError::Invalid { suggestion: Some(suggestion), .. } if suggestion == "server"),
-            "{error:?}"
+            matches!(
+                &error,
+                ConfigError::Invalid { key: Some(key), variable: Some(variable), suggestion: Some(suggestion), .. }
+                    if key == "servr"
+                        && variable == "FERROSYS__SERVR__LISTEN"
+                        && suggestion == "server"
+            ),
+            "the refusal names the variable that created the section: {error:?}"
         );
     }
 
