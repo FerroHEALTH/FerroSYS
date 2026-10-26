@@ -54,6 +54,18 @@ impl Outcome {
         }
     }
 
+    /// The state the check found.
+    #[must_use]
+    pub const fn state(&self) -> State {
+        self.state
+    }
+
+    /// Why the state is not up, when the check said.
+    #[must_use]
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+
     /// The indicator state of the indicator `name`.
     fn named(self, name: &str) -> IndicatorState {
         IndicatorState {
@@ -350,6 +362,24 @@ mod tests {
         assert_eq!(
             State::Up,
             Registry::default().readiness(&serving()).await.state
+        );
+    }
+
+    #[test]
+    fn an_outcome_reads_back_what_the_check_found() {
+        assert_eq!(
+            (State::Up, None),
+            (Outcome::up().state(), Outcome::up().detail())
+        );
+        let degraded = Outcome::degraded("the backlog grows");
+        assert_eq!(
+            (State::Degraded, Some("the backlog grows")),
+            (degraded.state(), degraded.detail())
+        );
+        let down = Outcome::down("refused");
+        assert_eq!(
+            (State::Down, Some("refused")),
+            (down.state(), down.detail())
         );
     }
 }

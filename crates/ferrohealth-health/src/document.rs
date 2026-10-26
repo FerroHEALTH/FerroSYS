@@ -136,6 +136,20 @@ impl Readiness {
         self.state != State::Down
     }
 
+    /// The document with every indicator's detail removed: the names, the
+    /// states and the phase stay.
+    ///
+    /// A detail can name a dependency, a count or a position in a log, so a
+    /// route anyone can reach serves this form and the detail stays behind
+    /// authentication.
+    #[must_use]
+    pub fn without_detail(mut self) -> Self {
+        for indicator in &mut self.indicators {
+            indicator.detail = None;
+        }
+        self
+    }
+
     /// The status alone, as `/health` answers it.
     #[must_use]
     pub const fn summary(&self) -> Summary {
@@ -190,6 +204,37 @@ mod tests {
         );
         assert_eq!(State::Down, down.state);
         assert!(!down.is_ready(), "one indicator down is not ready");
+    }
+
+    #[test]
+    fn without_detail_keeps_the_names_states_and_phase() {
+        let document = Readiness::new(
+            Phase::Serving,
+            vec![
+                IndicatorState::degraded("spool", "4096 records behind"),
+                IndicatorState::up("database"),
+            ],
+        );
+        let public = document.clone().without_detail();
+        assert_eq!(
+            Readiness {
+                state: State::Degraded,
+                phase: Phase::Serving,
+                indicators: vec![
+                    IndicatorState::up("database"),
+                    IndicatorState {
+                        name: "spool".to_owned(),
+                        state: State::Degraded,
+                        detail: None,
+                    },
+                ],
+            },
+            public
+        );
+        assert_eq!(
+            r#"{"state":"degraded","phase":"serving","indicators":[{"name":"database","state":"up"},{"name":"spool","state":"degraded"}]}"#,
+            serde_json::to_string(&public).expect("the document serializes")
+        );
     }
 
     #[test]
