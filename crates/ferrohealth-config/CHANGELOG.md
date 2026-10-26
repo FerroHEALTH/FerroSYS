@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-26
+
 ### Fixed
 
 - An invalid value in a nested table is refused once: the loader no longer
@@ -59,6 +61,7 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.1...HEAD
+[0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.0...ferrohealth-config-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.1.0...ferrohealth-config-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-config-v0.1.0
