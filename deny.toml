@@ -44,6 +44,7 @@ exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-config" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-telemetry" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-health" },
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-server" },
 ]
 
 [bans]

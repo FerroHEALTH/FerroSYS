@@ -44,8 +44,14 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
 http = "1.5.0"
-# Test-only: the runtime and the one-shot service call of the request-log
-# cases.
+ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "=0.1.0" }
+ferrohealth-health = { path = "crates/ferrohealth-health", version = "=0.1.0" }
+# ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.
+# Verified against crates.io on 2026-10-26.
+tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit"] }
+clap = { version = "4.6.7", features = ["derive"] }
+uuid = { version = "1.29.0", default-features = false, features = ["v4", "std"] }
+# The runtime, and the one-shot service call of the request-log cases.
 tokio = { version = "1.53.3", default-features = false }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
 # Test-only: the JSON rendering a secret is checked through, and the

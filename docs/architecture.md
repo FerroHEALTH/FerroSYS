@@ -109,10 +109,10 @@ pub trait HealthIndicator: Debug + Send + Sync { fn name(&self) -> &'static str;
 impl Registry { pub async fn readiness(&self, lifecycle: &Lifecycle) -> Readiness; }
 
 // ferrohealth-server
-pub fn stack(section: &ServerSection, policy: &StackPolicy) -> impl Layer<..>;
-pub fn health_routes(registry: Registry, lifecycle: Lifecycle) -> Router;
-pub async fn serve(listener: TcpListener, app: Router, section: &ServerSection, lifecycle: Lifecycle) -> io::Result<()>;
-pub async fn healthcheck(section: &ServerSection) -> Outcome;
+pub fn stack::app(product: Router, health: Health, section: &ServerSection, policy: StackPolicy) -> Router;
+pub fn health::routes(health: Health) -> Router;
+pub async fn serve::serve(listener: TcpListener, app: Router, lifecycle: Lifecycle, signal: F, delay: Duration, bound: Duration) -> io::Result<Drained>;
+pub async fn healthcheck::check(address: SocketAddr, base_path: &str, timeout: Duration) -> Outcome;
 #[derive(clap::Subcommand)] pub enum Common { Serve, Config { cmd: ConfigCmd }, Healthcheck }
 
 // ferrohealth-usage-report
