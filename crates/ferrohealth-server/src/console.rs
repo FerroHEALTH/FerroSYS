@@ -7,7 +7,10 @@
 //! nonce minted for that response alone (W3C Content Security Policy Level
 //! 3), with `'wasm-unsafe-eval'` so the WebAssembly bundle compiles and
 //! nothing admitting `'unsafe-inline'` or `'unsafe-eval'`. Beside it:
-//! `nosniff`, `DENY` framing, no referrer, and a same-origin opener.
+//! `nosniff`, `DENY` framing, no referrer, and a same-origin opener. A
+//! document is marked `Cache-Control: no-store` and the site bundle
+//! `no-cache` (RFC 9111 §5.2.2.4, §5.2.2.5), so a rebuilt bundle is fetched
+//! again; a response that set its own `Cache-Control` keeps it.
 
 use std::sync::Arc;
 
@@ -15,7 +18,8 @@ use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use http::header::{
-    CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS,
 };
 use http::{HeaderName, HeaderValue};
 
@@ -46,6 +50,7 @@ impl CspNonce {
 #[derive(Debug, Clone)]
 pub struct ConsoleHeaders {
     form_action: Arc<str>,
+    bundle: Option<Arc<str>>,
 }
 
 impl ConsoleHeaders {
@@ -55,7 +60,26 @@ impl ConsoleHeaders {
     pub fn new(form_action: impl Into<Arc<str>>) -> Self {
         Self {
             form_action: form_action.into(),
+            bundle: None,
         }
+    }
+
+    /// Serves the paths under `bundle`, such as `/pkg`, as the site bundle:
+    /// `no-cache` there, and `no-store` on every other response.
+    #[must_use]
+    pub fn with_bundle(mut self, bundle: impl Into<Arc<str>>) -> Self {
+        self.bundle = Some(bundle.into());
+        self
+    }
+
+    /// Whether `path` is the bundle directory or under it.
+    fn is_bundle(&self, path: &str) -> bool {
+        let Some(bundle) = self.bundle.as_deref() else {
+            return false;
+        };
+        let bundle = bundle.trim_end_matches('/');
+        path.strip_prefix(bundle)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     }
 
     /// The Content-Security-Policy that names `nonce`.
@@ -85,9 +109,15 @@ impl ConsoleHeaders {
 pub async fn headers(headers: ConsoleHeaders, mut request: Request, next: Next) -> Response {
     let nonce = CspNonce::mint();
     let policy = HeaderValue::from_str(&headers.policy(&nonce));
+    let caching = if headers.is_bundle(request.uri().path()) {
+        HeaderValue::from_static("no-cache")
+    } else {
+        HeaderValue::from_static("no-store")
+    };
     request.extensions_mut().insert(nonce);
     let mut response = next.run(request).await;
     let set = response.headers_mut();
+    set.entry(CACHE_CONTROL).or_insert(caching);
     match policy {
         Ok(policy) => {
             set.insert(CONTENT_SECURITY_POLICY, policy);
@@ -188,6 +218,53 @@ mod tests {
         assert!(
             policy.contains(&format!("'nonce-{nonce}'")),
             "the header names the renderer's nonce: {policy}"
+        );
+    }
+
+    async fn cache_control(app: &Router, uri: &str) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                http::Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the request is served");
+        response
+            .headers()
+            .get(http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[tokio::test]
+    async fn a_document_is_no_store_and_the_bundle_no_cache() {
+        let console = ConsoleHeaders::new("'self'").with_bundle("/pkg");
+        let app = Router::new()
+            .route("/", get(|| async { "page" }))
+            .route("/pkg/console.wasm", get(|| async { "wasm" }))
+            .route("/pkgx", get(|| async { "page" }))
+            .route(
+                "/own",
+                get(|| async { ([(http::header::CACHE_CONTROL, "max-age=60")], "own") }),
+            )
+            .layer(axum::middleware::from_fn(move |request, next| {
+                headers(console.clone(), request, next)
+            }));
+        assert_eq!("no-store", cache_control(&app, "/").await);
+        assert_eq!("no-cache", cache_control(&app, "/pkg/console.wasm").await);
+        assert_eq!(
+            "no-store",
+            cache_control(&app, "/pkgx").await,
+            "the bundle is a directory"
+        );
+        assert_eq!(
+            "max-age=60",
+            cache_control(&app, "/own").await,
+            "a handler's own header stays"
         );
     }
 }

@@ -34,6 +34,24 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `[server.tls] healthcheck_identity_file` and `healthcheck::check_url`: the
   probe presents a client identity to a listener that requires one, and
   checks a full `http://` or `https://` URL (#42).
+- `serve::run_all` and `serve::Listener`: several listeners, each with its
+  own routes and TLS, served under one signal and one lifecycle and drained
+  together within one bound (#43).
+- `client_address`: `[server] trusted_proxies` and `forwarded_header`; the
+  stack puts the `ClientAddress` of every request in its extensions, read
+  from `Forwarded` (RFC 7239) or `X-Forwarded-For` only behind a trusted
+  proxy, and the peer address otherwise (#44).
+- `caller_rate`: `[server.caller_rate]` and the `limit` middleware a product
+  mounts inside its authentication, keyed by the `CallerKey` it sets; a
+  caller over its rate is answered `429` with `Retry-After` (#45).
+- `[server] compression` (on by default) and `compression_min_bytes`: gzip
+  and Brotli by `Accept-Encoding` (#46).
+- `Health::with_info`: `GET /health/info` with the build facts and the
+  product's own (#47).
+- `cli::ConfigArgs`: `--config` and the repeatable `--set key=value` every
+  binary shares (#49).
+- `ConsoleHeaders::with_bundle`: console documents are `Cache-Control:
+  no-store` and the site bundle `no-cache` (#50).
 
 ### Changed
 

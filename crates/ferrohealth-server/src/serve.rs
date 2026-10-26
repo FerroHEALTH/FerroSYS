@@ -51,6 +51,7 @@ where
     let closing = Arc::new(Notify::new());
     let closed = Arc::clone(&closing);
     let draining = lifecycle.clone();
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {
         signal.await;
         draining.drain();
@@ -154,8 +155,8 @@ fn accept(
     builder: &hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
     graceful: &hyper_util::server::graceful::GracefulShutdown,
 ) {
-    let stream = match accepted {
-        Ok((stream, _peer)) => stream,
+    let (stream, peer) = match accepted {
+        Ok(accepted) => accepted,
         Err(error) => {
             tracing::warn!(%error, "a connection could not be accepted");
             return;
@@ -185,6 +186,7 @@ fn accept(
                     .collect(),
             )
         });
+        let app = app.layer(axum::Extension(axum::extract::ConnectInfo(peer)));
         let app = match peers {
             Some(peers) => app.layer(axum::Extension(peers)),
             None => app,
@@ -236,6 +238,94 @@ where
         }
         None => Ok(serve(listener, app, lifecycle, signal, delay, bound).await?),
     }
+}
+
+/// One listener of [`run_all`]: its socket, its routes and its TLS.
+#[derive(Debug)]
+pub struct Listener {
+    socket: TcpListener,
+    app: Router,
+    tls: Option<crate::section::TlsSection>,
+}
+
+impl Listener {
+    /// Serves `app` on `listener` over plain HTTP.
+    #[must_use]
+    pub const fn new(listener: TcpListener, app: Router) -> Self {
+        Self {
+            socket: listener,
+            app,
+            tls: None,
+        }
+    }
+
+    /// Serves over the TLS `tls` configures.
+    #[must_use]
+    pub fn with_tls(mut self, tls: crate::section::TlsSection) -> Self {
+        self.tls = Some(tls);
+        self
+    }
+}
+
+/// Serves every listener in `listeners` until `signal` completes, then
+/// drains them together, as [`run`] drains one.
+///
+/// Each listener keeps its own routes and TLS; `section` gives the drain
+/// delay and the shutdown bound, which every listener spends at the same
+/// time. A listener that ends on its own, as on an error, starts the drain
+/// of the others.
+///
+/// # Errors
+///
+/// Returns the first error of a listener, as [`run`] does, and
+/// [`ServeError::Listener`] when a listener's task panicked.
+pub async fn run_all<F>(
+    listeners: Vec<Listener>,
+    section: &crate::section::ServerSection,
+    lifecycle: Lifecycle,
+    signal: F,
+) -> Result<Drained, ServeError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let mut tasks = tokio::task::JoinSet::new();
+    for one in listeners {
+        let section = crate::section::ServerSection {
+            tls: one.tls,
+            ..section.clone()
+        };
+        let lifecycle = lifecycle.clone();
+        let mut stopped = stopped.clone();
+        tasks.spawn(async move {
+            let signal = async move {
+                let _stopped: bool = stopped.wait_for(|stop| *stop).await.is_ok();
+            };
+            run(one.socket, one.app, &section, lifecycle, signal).await
+        });
+    }
+    let signalled = {
+        let stop = stop.clone();
+        tokio::spawn(async move {
+            signal.await;
+            stop.send_replace(true);
+        })
+    };
+    let mut outcome = Ok(Drained::Complete);
+    while let Some(joined) = tasks.join_next().await {
+        stop.send_replace(true);
+        let ended = joined
+            .map_err(ServeError::Listener)
+            .and_then(|served| served);
+        outcome = match (outcome, ended) {
+            (Err(first), _) => Err(first),
+            (Ok(_), Err(error)) => Err(error),
+            (Ok(Drained::Cut), Ok(_)) | (Ok(_), Ok(Drained::Cut)) => Ok(Drained::Cut),
+            (Ok(Drained::Complete), Ok(Drained::Complete)) => Ok(Drained::Complete),
+        };
+    }
+    signalled.abort();
+    outcome
 }
 
 /// Reads the listener's TLS files again on every `SIGHUP`.
@@ -292,6 +382,9 @@ pub enum ServeError {
     /// The listener failed.
     #[error("the listener failed")]
     Io(#[from] std::io::Error),
+    /// A listener's task of [`run_all`] panicked or was cancelled.
+    #[error("a listener's task ended without an outcome")]
+    Listener(#[source] tokio::task::JoinError),
 }
 
 /// Completes when the process receives `SIGTERM` or `SIGINT`.
@@ -545,5 +638,95 @@ mod tests {
             .expect("the server serves");
         assert_eq!(Drained::Cut, drained);
         held.abort();
+    }
+
+    /// The status line and body of `GET path` on `address`.
+    async fn fetch(address: std::net::SocketAddr, path: &str) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("a connection");
+        stream
+            .write_all(
+                format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .expect("the request is written");
+        let mut answer = String::new();
+        let _read = stream.read_to_string(&mut answer).await;
+        answer
+    }
+
+    #[tokio::test]
+    async fn every_listener_drains_on_one_signal() {
+        let lifecycle = Lifecycle::default();
+        let health = Health::new(Registry::default(), lifecycle.clone());
+        let public = Router::new().route(
+            "/hold",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                "held"
+            }),
+        );
+        let section = ServerSection {
+            shutdown_timeout_ms: 5_000,
+            ..ServerSection::default()
+        };
+        let mut listeners = Vec::new();
+        let mut addresses = Vec::new();
+        for product in [
+            public,
+            Router::new().route("/metrics", get(|| async { "up 1" })),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+            addresses.push(listener.local_addr().expect("the address"));
+            let app = app(product, health.clone(), &section, StackPolicy::default());
+            listeners.push(super::Listener::new(listener, app));
+        }
+        let [public, admin] = addresses[..] else {
+            panic!("two listeners")
+        };
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let served = tokio::spawn({
+            let lifecycle = lifecycle.clone();
+            async move {
+                super::run_all(listeners, &section, lifecycle, async move {
+                    let _received = stopped.await;
+                })
+                .await
+            }
+        });
+        assert!(fetch(admin, "/metrics").await.ends_with("up 1"));
+        let held = tokio::spawn(fetch(public, "/hold"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        stop.send(()).expect("the server listens");
+        assert!(
+            held.await.expect("the request").ends_with("held"),
+            "the request in flight finishes"
+        );
+        let drained = served.await.expect("the task").expect("the drain");
+        assert_eq!(Drained::Complete, drained);
+        assert_eq!(Phase::Draining, lifecycle.phase());
+        for address in [public, admin] {
+            assert!(
+                tokio::net::TcpStream::connect(address).await.is_err(),
+                "{address} is closed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_over_a_connection_names_its_client_address() {
+        use crate::client_address::ClientAddress;
+        let product = Router::new().route(
+            "/who",
+            get(|axum::Extension(ClientAddress(client)): axum::Extension<ClientAddress>| async move {
+                client.to_string()
+            }),
+        );
+        let (address, _lifecycle, _stop, _served) =
+            start(product, Duration::ZERO, Duration::from_secs(1)).await;
+        assert!(fetch(address, "/who").await.ends_with("127.0.0.1"));
     }
 }

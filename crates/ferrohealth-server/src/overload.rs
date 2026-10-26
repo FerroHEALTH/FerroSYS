@@ -59,7 +59,7 @@ pub async fn admit(State(admission): State<Admission>, request: Request, next: N
 }
 
 /// The whole seconds of `wait`, rounded up and at least one.
-fn retry_seconds(wait: Duration) -> u64 {
+pub(crate) fn retry_seconds(wait: Duration) -> u64 {
     wait.as_secs()
         .saturating_add(u64::from(wait.subsec_nanos() > 0))
         .max(1)

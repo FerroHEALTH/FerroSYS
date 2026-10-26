@@ -3,14 +3,19 @@
 
 //! The one stack every server runs around its routes.
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use ferrohealth_telemetry::request_log::{self, RequestLog};
 use http::StatusCode;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
+use crate::client_address::{self, Forwarding};
 use crate::health::{self, Health};
 use crate::overload::{self, Admission};
 use crate::panic::{self, PanicBody};
@@ -46,10 +51,11 @@ impl Default for StackPolicy {
 
 /// Wraps `product` and the health routes in the stack, under the base path.
 ///
-/// From the outside in: the request id, the panic rendering, the panic
-/// catch, the request timeout (`408`), the body limit (`413`, and the same
-/// ceiling for every extractor), then each route with the request log, and
-/// the product's routes behind the overload bound when one is configured.
+/// From the outside in: the request id, the client address, the panic
+/// rendering, the panic catch, the request timeout (`408`), the body limit
+/// (`413`, and the same ceiling for every extractor), the response
+/// compression when it is on, the request log, then the routes, the
+/// product's behind the overload bound when one is configured.
 pub fn app(
     product: Router,
     health: Health,
@@ -72,11 +78,23 @@ pub fn app(
     let body = policy.panic_body;
     // NOTE: axum `Router::layer` wraps every route and the fallback, so the matched
     // route is still known and a request no route matched is logged too.
+    let routes = routes.layer(axum::middleware::from_fn_with_state(
+        policy.request_log,
+        request_log::middleware,
+    ));
+    let routes = if section.compression {
+        routes.layer(
+            CompressionLayer::new().gzip(true).br(true).compress_when(
+                SizeAbove::new(section.compression_min_bytes)
+                    .and(NotForContentType::GRPC)
+                    .and(NotForContentType::IMAGES)
+                    .and(NotForContentType::SSE),
+            ),
+        )
+    } else {
+        routes
+    };
     routes
-        .layer(axum::middleware::from_fn_with_state(
-            policy.request_log,
-            request_log::middleware,
-        ))
         .layer(DefaultBodyLimit::max(section.body_limit_bytes))
         .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
         .layer(TimeoutLayer::with_status_code(
@@ -87,6 +105,10 @@ pub fn app(
         .layer(axum::middleware::from_fn(move |request, next| {
             panic::render(body.clone(), request, next)
         }))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::new(Forwarding::from_section(section)),
+            client_address::attach,
+        ))
         .layer(axum::middleware::from_fn(request_id::assign))
 }
 
@@ -391,5 +413,59 @@ mod tests {
         assert_eq!((StatusCode::OK, "held"), (status, body.as_str()));
         let (status, _, _) = get_status(app, "/ferrosys/fhir/Patient/7").await;
         assert_eq!(StatusCode::OK, status, "the slot is free again");
+    }
+
+    async fn encoding(app: Router, uri: &str, accept: Option<&str>) -> Option<String> {
+        let mut request = http::Request::builder().uri(uri);
+        if let Some(accept) = accept {
+            request = request.header(http::header::ACCEPT_ENCODING, accept);
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).expect("the request builds"))
+            .await
+            .expect("the request is served");
+        response
+            .headers()
+            .get(http::header::CONTENT_ENCODING)
+            .map(|value| value.to_str().expect("ASCII").to_owned())
+    }
+
+    #[tokio::test]
+    async fn a_large_answer_is_compressed_as_the_client_accepts() {
+        let product = || {
+            Router::new()
+                .route("/large", get(|| async { "a".repeat(4096) }))
+                .route("/small", get(|| async { "a" }))
+        };
+        let on = app(
+            product(),
+            serving(),
+            &ServerSection::default(),
+            StackPolicy::default(),
+        );
+        assert_eq!(
+            Some("gzip".to_owned()),
+            encoding(on.clone(), "/large", Some("gzip")).await
+        );
+        assert_eq!(
+            Some("br".to_owned()),
+            encoding(on.clone(), "/large", Some("br")).await
+        );
+        assert_eq!(
+            None,
+            encoding(on.clone(), "/large", None).await,
+            "nothing accepted, nothing compressed"
+        );
+        assert_eq!(
+            None,
+            encoding(on, "/small", Some("gzip")).await,
+            "below the threshold"
+        );
+        let off = ServerSection {
+            compression: false,
+            ..ServerSection::default()
+        };
+        let off = app(product(), serving(), &off, StackPolicy::default());
+        assert_eq!(None, encoding(off, "/large", Some("gzip")).await);
     }
 }

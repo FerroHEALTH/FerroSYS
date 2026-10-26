@@ -48,7 +48,10 @@ ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "=0.2
 ferrohealth-health = { path = "crates/ferrohealth-health", version = "=0.1.0" }
 # ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.
 # Verified against crates.io on 2026-10-26.
-tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit"] }
+tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit", "compression-gzip", "compression-br"] }
+# The trusted proxies a client address is read behind. Verified against
+# crates.io on 2026-10-26.
+ipnet = { version = "2.12.2", default-features = false, features = ["std"] }
 clap = { version = "4.6.7", features = ["derive"] }
 uuid = { version = "1.29.0", default-features = false, features = ["v4", "std"] }
 # The listener's TLS: rustls behind tokio-rustls on the lines the products

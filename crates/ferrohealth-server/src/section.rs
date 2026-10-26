@@ -35,6 +35,29 @@ pub struct ServerSection {
     /// The listener's TLS; unset, the listener speaks plain HTTP behind a
     /// proxy that terminates TLS.
     pub tls: Option<TlsSection>,
+    /// The reverse proxies whose forwarded client address is believed, each
+    /// an address or a CIDR block; empty, every request is named by its peer.
+    pub trusted_proxies: Vec<crate::client_address::TrustedProxy>,
+    /// The header a trusted proxy names the client in.
+    pub forwarded_header: crate::client_address::ForwardedHeader,
+    /// The requests one caller may send; unset, a caller is not limited.
+    pub caller_rate: Option<CallerRate>,
+    /// Whether a response is compressed with gzip or Brotli when the client
+    /// accepts one.
+    pub compression: bool,
+    /// The smallest response body, in bytes, that is compressed.
+    pub compression_min_bytes: u64,
+}
+
+/// The `[server.caller_rate]` table: the steady rate and the burst one caller
+/// may send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallerRate {
+    /// The requests per second a caller may send once its burst is spent.
+    pub requests_per_second: std::num::NonZeroU32,
+    /// The requests a caller may send at once.
+    pub burst: std::num::NonZeroU32,
 }
 
 /// The `[server.tls]` table: the certificate chain and the private key the
@@ -136,6 +159,11 @@ impl Default for ServerSection {
             max_concurrent_requests: None,
             retry_after_s: 1,
             tls: None,
+            trusted_proxies: Vec::new(),
+            forwarded_header: crate::client_address::ForwardedHeader::default(),
+            caller_rate: None,
+            compression: true,
+            compression_min_bytes: 1024,
         }
     }
 }
@@ -303,6 +331,46 @@ mod tests {
                 matches!(&error, ConfigError::Invalid { key: Some(found), .. } if found == key),
                 "{text}: {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_proxy_rate_and_compression_keys_load() {
+        let section = load(
+            "[server]\ntrusted_proxies = [\"10.0.0.0/8\", \"::1\"]\nforwarded_header = \"x-forwarded-for\"\ncompression = false\n\n[server.caller_rate]\nrequests_per_second = 5\nburst = 10\n",
+        )
+        .expect("the section loads");
+        assert_eq!(
+            vec!["10.0.0.0/8".to_owned(), "::1/128".to_owned()],
+            section
+                .trusted_proxies
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            crate::client_address::ForwardedHeader::XForwardedFor,
+            section.forwarded_header
+        );
+        assert!(!section.compression);
+        assert_eq!(Some(10), section.caller_rate.map(|rate| rate.burst.get()));
+        for (text, key) in [
+            (
+                "[server]\ntrusted_proxies = [\"a proxy\"]\n",
+                "server.trusted_proxies",
+            ),
+            (
+                "[server.caller_rate]\nrequests_per_second = 0\nburst = 1\n",
+                "server.caller_rate.requests_per_second",
+            ),
+        ] {
+            let error = load(text).expect_err("the value is refused");
+            let names_key = |error: &ConfigError| matches!(error, ConfigError::Invalid { key: Some(found), .. } if found.starts_with(key));
+            let named = match &error {
+                ConfigError::Refusals { refusals } => refusals.iter().any(names_key),
+                other => names_key(other),
+            };
+            assert!(named, "{text}: {error:?}");
         }
     }
 
