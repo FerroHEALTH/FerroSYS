@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - `loader::Loader`, the one configuration loader of the family: the tree's
@@ -28,3 +30,6 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 - `report::check_report`, the `config check` rendering: every key with its
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-config-v0.1.0
