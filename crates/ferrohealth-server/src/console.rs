@@ -21,7 +21,7 @@ use http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
     X_FRAME_OPTIONS,
 };
-use http::{HeaderName, HeaderValue};
+use http::{HeaderName, HeaderValue, StatusCode};
 
 /// The `Cross-Origin-Opener-Policy` header.
 const CROSS_ORIGIN_OPENER_POLICY: HeaderName =
@@ -65,7 +65,8 @@ impl ConsoleHeaders {
     }
 
     /// Serves the paths under `bundle`, such as `/pkg`, as the site bundle:
-    /// `no-cache` there, and `no-store` on every other response.
+    /// `no-cache` on a successful or not-modified answer there, and `no-store`
+    /// on every other response, a refusal under the bundle included.
     #[must_use]
     pub fn with_bundle(mut self, bundle: impl Into<Arc<str>>) -> Self {
         self.bundle = Some(bundle.into());
@@ -109,13 +110,15 @@ impl ConsoleHeaders {
 pub async fn headers(headers: ConsoleHeaders, mut request: Request, next: Next) -> Response {
     let nonce = CspNonce::mint();
     let policy = HeaderValue::from_str(&headers.policy(&nonce));
-    let caching = if headers.is_bundle(request.uri().path()) {
+    let bundle = headers.is_bundle(request.uri().path());
+    request.extensions_mut().insert(nonce);
+    let mut response = next.run(request).await;
+    let status = response.status();
+    let caching = if bundle && (status.is_success() || status == StatusCode::NOT_MODIFIED) {
         HeaderValue::from_static("no-cache")
     } else {
         HeaderValue::from_static("no-store")
     };
-    request.extensions_mut().insert(nonce);
-    let mut response = next.run(request).await;
     let set = response.headers_mut();
     set.entry(CACHE_CONTROL).or_insert(caching);
     match policy {
@@ -256,6 +259,11 @@ mod tests {
             }));
         assert_eq!("no-store", cache_control(&app, "/").await);
         assert_eq!("no-cache", cache_control(&app, "/pkg/console.wasm").await);
+        assert_eq!(
+            "no-store",
+            cache_control(&app, "/pkg/missing.js").await,
+            "a refusal under the bundle is nothing to keep"
+        );
         assert_eq!(
             "no-store",
             cache_control(&app, "/pkgx").await,

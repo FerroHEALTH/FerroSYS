@@ -10,6 +10,13 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `console::headers` sets `no-cache` under the bundle path only on a
+  successful or not-modified answer; a refusal there, such as the 404 for a
+  bundle file that does not exist, is `no-store` like every other response
+  (#120).
+
 ## [0.3.2] - 2026-10-26
 
 ### Changed
