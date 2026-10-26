@@ -86,9 +86,13 @@ prose promise in the README.
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
   version rule, the advisory exceptions, the contribution-licence box).
+- `scripts/release/`: the release plan, the preflight, the milestone check
+  and close, and the crates.io publish and read-back (`docs/release.md`).
 - `.github/`: CI with the single required `conclusion` job (it also runs on
-  `merge_group`), the PR guard re-run, CodeQL, Scorecard, Dependabot, the PR
-  template and the bug, feature and task forms.
+  `merge_group`), the PR guard re-run, CodeQL, Scorecard, Dependabot, the
+  release lane (`release.yml` with the reusable `release-crate.yml`, and the
+  manual `publish-crates.yml`, both under the `crates-io` environment), the
+  PR template and the bug, feature and task forms.
 - `.claude/memory/`: the working memory; `MEMORY.md` is the index.
 
 ## Issue workflow
