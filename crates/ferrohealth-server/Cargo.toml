@@ -31,6 +31,7 @@ ferrohealth-health = { workspace = true, features = ["registry"] }
 ferrohealth-telemetry = { workspace = true, features = ["axum"] }
 http.workspace = true
 hyper-util.workspace = true
+ipnet.workspace = true
 rustls.workspace = true
 secrecy.workspace = true
 serde.workspace = true

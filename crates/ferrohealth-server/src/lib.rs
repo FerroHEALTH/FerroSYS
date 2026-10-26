@@ -13,14 +13,23 @@
 //! - the request timeout (`408`) and the body limit (`413`);
 //! - [`overload`]: past `max_concurrent_requests` a request is answered
 //!   `503` with `Retry-After`, and the health routes are never refused;
+//! - [`client_address`]: the address a request came from, read behind the
+//!   trusted proxies;
+//! - gzip and Brotli response compression, on by default;
 //! - the request log of `ferrohealth-telemetry`;
-//! - [`health`]: `/health`, `/health/liveness` and `/health/readiness`.
+//! - [`health`]: `/health`, `/health/liveness`, `/health/readiness` and,
+//!   when the product supplies it, `/health/info`.
+//!
+//! [`caller_rate`] is the per-caller rate limit a product mounts inside its
+//! authentication.
 //!
 //! [`serve::serve`] runs the app until `SIGTERM` or `SIGINT`, then withdraws
 //! readiness, waits the drain delay and finishes the requests in flight
-//! within a bound, over TLS when `[server.tls]` is set ([`tls`]).
-//! [`healthcheck`] is the container probe, [`cli::Common`] the subcommands
-//! every binary shares, [`build_info`] the build facts and the boot banner,
+//! within a bound, over TLS when `[server.tls]` is set ([`tls`]);
+//! [`serve::run_all`] serves several listeners under one signal.
+//! [`healthcheck`] is the container probe, [`cli::Common`] and
+//! [`cli::ConfigArgs`] the subcommands and arguments every binary shares,
+//! [`build_info`] the build facts and the boot banner,
 //! and `console` (feature `console`) the browser security headers of an
 //! operator console.
 //!
@@ -28,7 +37,9 @@
 //! codes and `Retry-After` of RFC 9110.
 
 pub mod build_info;
+pub mod caller_rate;
 pub mod cli;
+pub mod client_address;
 #[cfg(feature = "console")]
 pub mod console;
 pub mod health;
