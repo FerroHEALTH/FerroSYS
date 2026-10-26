@@ -100,6 +100,8 @@ jobs:
         run: bash scripts/checks/changelog-security.sh --self-test
       - name: The manual crate publish refuses a run off its release tag
         run: bash scripts/release/publish-crates.sh --self-test
+      - name: The label bootstrap creates the taxonomy and retires what it replaced
+        run: bash scripts/gh/labels.sh --self-test
 
   # Every section of each crate's changelog (crates/<crate>/CHANGELOG.md)
   # holds Keep a

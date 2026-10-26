@@ -93,6 +93,8 @@ prose promise in the README.
   release lane (`release.yml` with the reusable `release-crate.yml`, and the
   manual `publish-crates.yml`, both under the `crates-io` environment), the
   PR template and the bug, feature and task forms.
+- `.claude/rules/issue-workflow.md`: the tracker loop, the issue title rule and
+  the label model.
 - `.claude/memory/`: the working memory; `MEMORY.md` is the index.
 
 ## Issue workflow
@@ -100,7 +102,10 @@ prose promise in the README.
 The tracker is GitHub Issues. Type (Bug, Feature, Task), priority and effort
 are GitHub's native issue type and the organisation's `Priority` and
 `Effort` fields, set with `scripts/gh/fields.sh`; file every issue with
-`scripts/gh/fields.sh new`. Read an issue with
+`scripts/gh/fields.sh new`. An issue title carries no conventional-commit
+prefix (a PR title does), and every issue carries its crate label, a
+specification label where one applies and, for a Task, one work-kind label
+(`.claude/rules/issue-workflow.md`). Read an issue with
 `gh issue view <n> --json title,body,comments`, never `--comments`. A PR
 declares `Closes #N`, one keyword per issue. Milestones are releases.
 

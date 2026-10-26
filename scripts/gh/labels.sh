@@ -3,11 +3,15 @@
 # SPDX-License-Identifier: BUSL-1.1
 # scripts/gh/labels.sh: bootstrap the FerroSYS issue-label taxonomy.
 #
-# Creates (idempotently) the labels the tracker workflow assumes:
+# Creates (idempotently) the labels the tracker workflow assumes
+# (.claude/rules/issue-workflow.md):
 #   * the WORK-KIND labels a Task carries to pick its commit type
 #     (documentation/chore/refactor/perf/test/ci); a Bug and a Feature carry
 #     none, because the native issue type already says fix or feat;
-#   * a few workflow labels.
+#   * one CRATE label per ferrohealth-* crate, which every issue carries;
+#   * the SPECIFICATION labels an issue carries where one applies;
+#   * the workflow labels.
+# It also retires `accessibility`, which this repository does not use.
 # The type of an issue (Bug, Feature, Task) and its priority (Urgent, High,
 # Medium, Low) are NOT labels since 2026-10-08: they are GitHub's native issue
 # type and the organisation's Priority issue field, set with
@@ -157,6 +161,9 @@ STUB
   said "$clean_case" "$out" "ok: security"
   said "$clean_case" "$calls" "label create ci --color ededed"
   said "$clean_case" "$calls" "label create documentation --color 0075ca"
+  said "$clean_case" "$calls" "label create usage-report --color bfd4f2"
+  said "$clean_case" "$calls" "label create spec:OpenTelemetry --color fbca04"
+  said "$clean_case" "$calls" "label create no-changelog --color bfdadc"
   said "$clean_case" "$calls" "--force"
   never "$clean_case" "$out" "retired:"
   never "$clean_case" "$calls" "label delete"
@@ -165,13 +172,14 @@ STUB
 
   # The same repository with two of the six the native issue type and the
   # Priority field replaced on 2026-10-08: both go, and no other name does.
-  labels='[{"name":"enhancement"},{"name":"P1"},{"name":"documentation"}]'
+  labels='[{"name":"enhancement"},{"name":"P1"},{"name":"accessibility"},{"name":"documentation"}]'
   local retired_case="a repository that still carries two retired labels"
   run "$retired_case" 0
   said "$retired_case" "$out" "retired: enhancement"
   said "$retired_case" "$out" "retired: P1"
   said "$retired_case" "$calls" "label delete enhancement --yes"
   said "$retired_case" "$calls" "label delete P1 --yes"
+  said "$retired_case" "$calls" "label delete accessibility --yes"
   never "$retired_case" "$out" "retired: P0"
   never "$retired_case" "$calls" "label delete documentation"
 
@@ -233,7 +241,7 @@ retire() {
 }
 
 echo "== retired labels (the native issue type and the Priority field carry these now) =="
-for l in bug enhancement P0 P1 P2 P3; do retire "$l"; done
+for l in bug enhancement P0 P1 P2 P3 accessibility; do retire "$l"; done
 
 echo "== work-kind labels (on a Task only; picks the conventional-commit type) =="
 label documentation 0075ca "Docs-only work. Maps to a docs/ branch and a docs: commit."
@@ -243,8 +251,22 @@ label perf          fbca04 "Performance work. perf/ and perf:."
 label test          c2e0c6 "Test-only work. test/ and test:."
 label ci            ededed "CI, build, and tooling. ci/ and ci:."
 
+echo "== crate labels (every issue carries the crate its work lands in) =="
+label secret       1d76db "The ferrohealth-secret crate: Secret, SecretUrl, RedactedUrl, Redacted and the _file rule."
+label config       0e8a16 "The ferrohealth-config crate: the layered loader, the strict refusals and provenance."
+label telemetry    5319e7 "The ferrohealth-telemetry crate: tracing, OpenTelemetry, the request log and the panic hook."
+label health       006b75 "The ferrohealth-health crate: the indicator registry, readiness and the lifecycle."
+label server       c5def5 "The ferrohealth-server crate: the listener, TLS, the tower-http stack and the bounded drain."
+label usage-report bfd4f2 "The ferrohealth-usage-report crate: the installation report to FerroPULSE."
+
+echo "== specification labels (where one applies) =="
+label spec:OpenTelemetry fbca04 "The OpenTelemetry specification and the W3C Trace Context recommendation."
+label spec:TLS           d93f0b "TLS 1.3 (RFC 8446) and certificate handling for the listener and outbound clients."
+
 echo "== workflow and meta labels =="
-label dependencies 0366d6 "Dependency updates (used by Dependabot)."
-label security     ee0701 "Security fix or hardening."
+label dependencies     0366d6 "Dependency updates (used by Dependabot)."
+label security         ee0701 "Security fix or hardening."
+label blocked-upstream 6f42c1 "Waiting on an upstream specification or tool release."
+label no-changelog     bfdadc "PR escape hatch: the change has no effect a product sees."
 
 echo "done."
