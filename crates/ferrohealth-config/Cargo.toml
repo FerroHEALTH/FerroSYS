@@ -22,6 +22,7 @@ ferrohealth-secret.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

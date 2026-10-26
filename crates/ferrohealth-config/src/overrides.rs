@@ -8,9 +8,10 @@
 //! takes `12345`, `true` or `1.5` verbatim. When the tree then refuses a
 //! string where it wants a number, a boolean or an array, and the text reads
 //! as that TOML value, the override is placed typed and the tree is read
-//! again.
+//! again. Where the tree wants a sequence and the text is no TOML array, it
+//! is placed as the comma-separated list of its parts.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use crate::error::ConfigError;
@@ -26,6 +27,17 @@ pub(crate) struct Override {
     raw: String,
     /// The text read as a TOML value that is not a string, when it reads so.
     typed: Option<toml::Value>,
+}
+
+/// How an override's text is placed in the tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Placement {
+    /// As the string it is.
+    Text,
+    /// As the TOML value it reads as.
+    Typed,
+    /// As the comma-separated list of its parts, each trimmed.
+    List,
 }
 
 impl Override {
@@ -53,7 +65,7 @@ impl Override {
             return Ok(None);
         };
         let path: Vec<String> = rest.split("__").map(str::to_ascii_lowercase).collect();
-        if path.len() < 2 || path.iter().any(String::is_empty) {
+        if path.iter().any(String::is_empty) {
             return Err(ConfigError::OverrideName {
                 name: name.to_owned(),
                 prefix: prefix.to_owned(),
@@ -77,13 +89,17 @@ impl Override {
         &self.name
     }
 
-    /// Places the override onto `table`, typed or as its text.
+    /// Places the override onto `table` as `placement` says.
     ///
     /// # Errors
     ///
     /// Returns [`ConfigError::OverrideShape`] when a parent segment holds a
     /// value that is not a section.
-    pub(crate) fn apply(&self, table: &mut toml::Table, typed: bool) -> Result<(), ConfigError> {
+    pub(crate) fn apply(
+        &self,
+        table: &mut toml::Table,
+        placement: Placement,
+    ) -> Result<(), ConfigError> {
         let Some((key, parents)) = self.path.split_last() else {
             return Err(ConfigError::OverrideName {
                 name: self.name.clone(),
@@ -105,8 +121,16 @@ impl Override {
             };
             cursor = next;
         }
-        let value = match (&self.typed, typed) {
-            (Some(value), true) => value.clone(),
+        let value = match (placement, &self.typed) {
+            (Placement::Typed, Some(value)) => value.clone(),
+            (Placement::List, _) => toml::Value::Array(
+                self.raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(|part| toml::Value::String(part.to_owned()))
+                    .collect(),
+            ),
             _ => toml::Value::String(self.raw.clone()),
         };
         cursor.insert(key.clone(), value);
@@ -114,26 +138,38 @@ impl Override {
     }
 }
 
-/// Returns the index of the override the tree refused as a string and that
-/// reads as another TOML value, so it is placed typed on the next read.
+/// Returns the override the tree refused as a string, and how to place it
+/// on the next read: typed when its text reads as another TOML value, or as
+/// a comma-separated list when the tree wants a sequence.
 ///
 /// `merged` is the text the tree was read from, `refused` the span its
-/// refusal names, and `typed` the overrides already placed typed.
+/// refusal names, `wants_sequence` whether the refusal asked for one, and
+/// `placements` how each override is placed so far.
 pub(crate) fn retype(
     overrides: &[Override],
-    typed: &BTreeSet<usize>,
+    placements: &BTreeMap<usize, Placement>,
     merged: &str,
     refused: &Range<usize>,
-) -> Option<usize> {
+    wants_sequence: bool,
+) -> Option<(usize, Placement)> {
     // NOTE: no specification governs this: our own design. A merged text that
     // does not parse leaves the refusal standing as the reader reported it.
     let document = toml::de::DeTable::parse(merged).ok()?.into_inner();
     overrides.iter().enumerate().find_map(|(index, item)| {
-        if typed.contains(&index) || item.typed.is_none() {
+        let span = value_span(&document, &item.path)?;
+        if !(span.start <= refused.start && refused.end <= span.end) {
             return None;
         }
-        let span = value_span(&document, &item.path)?;
-        (span.start <= refused.start && refused.end <= span.end).then_some(index)
+        if placements.get(&index).copied().unwrap_or(Placement::Text) != Placement::Text {
+            return None;
+        }
+        match (&item.typed, wants_sequence) {
+            (Some(toml::Value::Array(_)), true) | (Some(_), false) => {
+                Some((index, Placement::Typed))
+            }
+            (_, true) => Some((index, Placement::List)),
+            (None, false) => None,
+        }
     })
 }
 
@@ -160,7 +196,7 @@ fn typed_value(raw: &str) -> Option<toml::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Override, typed_value};
+    use super::{Override, Placement, typed_value};
     use crate::error::ConfigError;
 
     #[test]
@@ -189,14 +225,17 @@ mod tests {
     }
 
     #[test]
-    fn an_override_name_without_a_section_and_a_key_is_refused() {
-        for name in [
-            "FERROSYS__LISTEN",
-            "FERROSYS__SERVER__",
-            "FERROSYS____LISTEN",
-        ] {
-            let error = Override::parse("FERROSYS", name, "x")
-                .expect_err("a section and a key are both required");
+    fn an_override_name_with_an_empty_segment_is_refused() {
+        assert_eq!(
+            "spec_profile",
+            Override::parse("FERROSYS", "FERROSYS__SPEC_PROFILE", "x")
+                .expect("a top-level key parses")
+                .expect("the name is under the prefix")
+                .key()
+        );
+        for name in ["FERROSYS__", "FERROSYS__SERVER__", "FERROSYS____LISTEN"] {
+            let error =
+                Override::parse("FERROSYS", name, "x").expect_err("every segment names something");
             assert!(
                 matches!(error, ConfigError::OverrideName { .. }),
                 "{error:?}"
@@ -210,11 +249,27 @@ mod tests {
             toml::from_str("[server]\nlisten = \"127.0.0.1:1\"\n").expect("toml");
         let item = Override::new("FERROSYS__SERVER__LISTEN__PORT", "server.listen.port", "1");
         let error = item
-            .apply(&mut table, false)
+            .apply(&mut table, Placement::Text)
             .expect_err("listen is a value");
         assert!(
             matches!(&error, ConfigError::OverrideShape { key, .. } if key == "server.listen"),
             "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_list_placement_splits_on_commas_and_trims() {
+        let mut table = toml::Table::new();
+        Override::new("FERROSYS__AUTH__AUDIENCE", "auth.audience", " a, b ,,c ")
+            .apply(&mut table, Placement::List)
+            .expect("the list is placed");
+        let audience = table
+            .get("auth")
+            .and_then(|auth| auth.get("audience"))
+            .cloned();
+        assert_eq!(
+            Some(toml::Value::Array(vec!["a".into(), "b".into(), "c".into()])),
+            audience
         );
     }
 }

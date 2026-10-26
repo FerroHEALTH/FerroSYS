@@ -10,6 +10,25 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- A top-level key through the environment: `<PREFIX>__KEY` (#58).
+- `Loader::load_with` and `Loader::load_sources_with`, the `--set key=value`
+  layer above the environment, reported as the `set` source (#59).
+- Comma-separated environment values for a key that wants a sequence (#60).
+- `Loader::fallback`, a variable such as `DATABASE_URL` or `PORT` that sits
+  below the canonical override and may transform its value (#61).
+- `Loader::rename`, a renamed key read under its old name until a release,
+  reported in `Loaded::deprecations`, in the log and in `check_report`; both
+  names set at once is refused as `ConfigError::Renamed` (#62).
+- Up to `MAX_REFUSALS` invalid keys reported at once as
+  `ConfigError::Refusals` (#63).
+
+### Changed
+
+- `Loader` no longer implements `PartialEq` and `Eq`, since an alias may
+  carry a transform function; `provenance::Source` gains `Set` (#59, #61).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

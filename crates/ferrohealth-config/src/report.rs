@@ -59,6 +59,12 @@ pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> Result<String, ConfigEr
         Some(path) => format!("# file: {}", path.display()),
         None => "# file: none".to_owned(),
     }];
+    for deprecation in loaded.deprecations() {
+        lines.push(format!(
+            "# deprecated: {} is read as {}, and is refused from {}",
+            deprecation.old, deprecation.new, deprecation.refused_in
+        ));
+    }
     let mut keys = BTreeSet::new();
     leaves("", &table, &mut keys);
     for key in keys {
@@ -67,8 +73,8 @@ pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> Result<String, ConfigEr
         };
         let source = provenance.source(&key);
         lines.push(match (source, provenance.variable(&key)) {
-            (Source::Environment, Some(variable)) => {
-                format!("{key} = {value}  # environment: {variable}")
+            (Source::Environment | Source::Set, Some(variable)) => {
+                format!("{key} = {value}  # {source}: {variable}")
             }
             _ => format!("{key} = {value}  # {source}"),
         });
