@@ -10,6 +10,12 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `secret::WriteOnly`, a secret on its one trip from a console to its
+  server: redacted in `Debug` and `Display`, its value in `Serialize`; and
+  `Default` for `Secret`, the empty secret (#64).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

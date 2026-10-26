@@ -29,6 +29,12 @@ use crate::REDACTED;
 #[derive(Clone)]
 pub struct Secret(SecretString);
 
+impl Default for Secret {
+    fn default() -> Self {
+        Self::new(String::new())
+    }
+}
+
 impl Secret {
     /// Creates a secret holding `value`.
     #[must_use]
@@ -100,6 +106,92 @@ impl Serialize for Secret {
         S: Serializer,
     {
         serializer.serialize_str(REDACTED)
+    }
+}
+
+/// A secret on its one trip to the server that stores it.
+///
+/// A console sends a secret an operator typed to its server in the body of
+/// one request. `Debug` and `Display` show [`REDACTED`]; `Serialize` writes
+/// the value itself, because that request is the one place it travels.
+/// Nothing else serializes one, and the server never answers, stores in
+/// memory beyond the write, or logs it.
+///
+/// # Examples
+///
+/// ```
+/// use ferrohealth_secret::secret::WriteOnly;
+///
+/// let value = WriteOnly::new("Qz7-client-secret");
+/// assert_eq!(format!("{value:?}"), "\"***\"");
+/// assert_eq!(serde_json::to_string(&value)?, "\"Qz7-client-secret\"");
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct WriteOnly(Secret);
+
+impl WriteOnly {
+    /// Creates the value `value`.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(Secret::new(value))
+    }
+
+    /// Returns the value, for the one place it is written.
+    ///
+    /// Never log or format the result.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        self.0.expose()
+    }
+
+    /// Whether the value is the empty string, as a form field left empty
+    /// gives it.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns the value as the [`Secret`] the server keeps.
+    #[must_use]
+    pub fn into_secret(self) -> Secret {
+        self.0
+    }
+}
+
+impl From<SecretString> for WriteOnly {
+    fn from(value: SecretString) -> Self {
+        Self(Secret::from(value))
+    }
+}
+
+impl fmt::Debug for WriteOnly {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for WriteOnly {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl<'de> Deserialize<'de> for WriteOnly {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Secret::deserialize(deserializer).map(Self)
+    }
+}
+
+impl Serialize for WriteOnly {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.0.expose())
     }
 }
 
@@ -203,6 +295,32 @@ mod tests {
         let secret = Secret::from(SecretString::from(SENTINEL));
         assert_eq!(SENTINEL, secret.expose());
         assert_eq!(SENTINEL, secret.to_secret_string().expose_secret());
+    }
+
+    #[test]
+    fn a_write_only_value_hides_in_renderings_and_travels_in_its_body() {
+        let value = super::WriteOnly::new(SENTINEL);
+        for shown in [format!("{value:?}"), format!("{value}")] {
+            assert!(
+                !shown.contains(SENTINEL),
+                "a rendering shows what it must hide"
+            );
+        }
+        assert_eq!(
+            format!("\"{SENTINEL}\""),
+            serde_json::to_string(&value).expect("the value serializes")
+        );
+        let read: super::WriteOnly = serde_json::from_str("\"Qz7sentinel\"").expect("JSON");
+        assert_eq!(value, read);
+        assert!(
+            super::WriteOnly::default().is_empty(),
+            "an empty field is empty"
+        );
+        assert_eq!(SENTINEL, value.clone().into_secret().expose());
+        assert_eq!(
+            SENTINEL,
+            super::WriteOnly::from(SecretString::from(SENTINEL)).expose()
+        );
     }
 
     #[test]
