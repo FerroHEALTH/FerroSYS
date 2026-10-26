@@ -23,6 +23,27 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `build_info::BuildInfo` and `build_info::banner`: the commit, build
   instant and compiler a product's build script records, and the boot banner
   printed only for the `pretty` console (#32).
+- `[server.tls] client_auth` (`none`, `optional`, `required`) with
+  `client_ca_file`: mutual TLS, where a presented client chain is verified
+  against the named CA and reaches the handler as the
+  `tls::PeerCertificates` request extension; a `client_auth` without a CA is
+  refused at load (#39).
+- `tls::ReloadableTls`: the certificate and key are read again on `SIGHUP`
+  and every `reload_interval_s`, a reload that does not read keeps the
+  running configuration, and the next handshake takes the new files (#40).
+- `[server.tls] healthcheck_identity_file` and `healthcheck::check_url`: the
+  probe presents a client identity to a listener that requires one, and
+  checks a full `http://` or `https://` URL (#42).
+
+### Changed
+
+- TLS 1.2 offers only the four ECDHE AES-GCM suites RFC 9325 §4.2
+  recommends; TLS 1.3 keeps every suite (#41).
+
+### Fixed
+
+- The request log is mounted outside the routes, so a request no route
+  matched (a `404`) also writes its one line, named `<unmatched>` (#70).
 
 ## [0.1.0] - 2026-10-26
 

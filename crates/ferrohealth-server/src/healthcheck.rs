@@ -72,7 +72,7 @@ pub fn target(listen: SocketAddr) -> SocketAddr {
 pub async fn check(address: SocketAddr, base_path: &str, timeout: Duration) -> Outcome {
     tokio::time::timeout(timeout, async {
         match tokio::net::TcpStream::connect(address).await {
-            Ok(stream) => ask(stream, base_path).await,
+            Ok(stream) => ask(stream, &format!("{base_path}{READINESS}")).await,
             Err(error) => Outcome::Failed(format!("cannot connect to {address}: {error}")),
         }
     })
@@ -96,7 +96,7 @@ pub async fn check_tls(
         };
         let name = rustls::pki_types::ServerName::IpAddress(address.ip().into());
         match connector.connect(name, stream).await {
-            Ok(stream) => ask(stream, base_path).await,
+            Ok(stream) => ask(stream, &format!("{base_path}{READINESS}")).await,
             Err(error) => Outcome::Failed(format!("the TLS handshake failed: {error}")),
         }
     })
@@ -104,13 +104,64 @@ pub async fn check_tls(
     .unwrap_or(Outcome::Timeout)
 }
 
-async fn ask<S>(mut stream: S, base_path: &str) -> Outcome
+/// Asks the readiness URL `url`, `http://` or `https://`; an `https://`
+/// URL needs `tls`, the certificate the listener's file holds.
+pub async fn check_url(url: &str, timeout: Duration, tls: Option<&HealthcheckTls>) -> Outcome {
+    let Ok(uri) = url.parse::<http::Uri>() else {
+        return Outcome::Failed(format!("{url} is no URL"));
+    };
+    let secure = match uri.scheme_str() {
+        Some("http") => false,
+        Some("https") => true,
+        _ => return Outcome::Failed(format!("{url} is no http or https URL")),
+    };
+    let Some(host) = uri.host().map(|host| {
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_owned()
+    }) else {
+        return Outcome::Failed(format!("{url} names no host"));
+    };
+    let port = uri.port_u16().unwrap_or(if secure { 443 } else { 80 });
+    let target = uri
+        .path_and_query()
+        .map_or("/", http::uri::PathAndQuery::as_str)
+        .to_owned();
+    tokio::time::timeout(timeout, async {
+        let stream = match tokio::net::TcpStream::connect((host.as_str(), port)).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                return Outcome::Failed(format!("cannot connect to {host}:{port}: {error}"));
+            }
+        };
+        if !secure {
+            return ask(stream, &target).await;
+        }
+        let Some(tls) = tls else {
+            return Outcome::Failed(
+                "an https URL needs the listener's certificate to pin".to_owned(),
+            );
+        };
+        let Ok(name) = rustls::pki_types::ServerName::try_from(host.clone()) else {
+            return Outcome::Failed(format!("{host} is no TLS server name"));
+        };
+        match tokio_rustls::TlsConnector::from(tls.config())
+            .connect(name, stream)
+            .await
+        {
+            Ok(stream) => ask(stream, &target).await,
+            Err(error) => Outcome::Failed(format!("the TLS handshake failed: {error}")),
+        }
+    })
+    .await
+    .unwrap_or(Outcome::Timeout)
+}
+
+async fn ask<S>(mut stream: S, target: &str) -> Outcome
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let request = format!(
-        "GET {base_path}{READINESS} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"
-    );
+    let request = format!("GET {target} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n");
     if let Err(error) = stream.write_all(request.as_bytes()).await {
         return Outcome::Failed(format!("cannot send the request: {error}"));
     }
