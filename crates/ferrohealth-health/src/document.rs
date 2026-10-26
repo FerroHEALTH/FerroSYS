@@ -126,11 +126,9 @@ impl Readiness {
     /// ```
     /// use ferrohealth_health::document::{IndicatorState, Phase, Readiness, State};
     ///
-    /// let readiness = Readiness::with_optional(
-    ///     Phase::Serving,
-    ///     vec![IndicatorState::up("database")],
-    ///     vec![IndicatorState::down("broker", "the connection was refused")],
-    /// );
+    /// let required = vec![IndicatorState::up("database")];
+    /// let optional = vec![IndicatorState::down("broker", "the connection was refused")];
+    /// let readiness = Readiness::with_optional(Phase::Serving, required, optional);
     /// assert_eq!(State::Degraded, readiness.state);
     /// assert!(readiness.is_ready());
     /// assert_eq!(State::Down, readiness.indicators[0].state);
