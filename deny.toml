@@ -35,6 +35,11 @@ allow = [
   "ISC",
   "MIT-0",
   "BSD-3-Clause",
+  # hashbrown, under the HTTP stack's index maps.
+  "Zlib",
+  # The Mozilla root store the platform verifier of reqwest's rustls engine
+  # carries, for the usage report's collector.
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 # The project's own crates are BUSL-1.1 (LICENSE); each joins the list with
@@ -45,6 +50,7 @@ exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-telemetry" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-health" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-server" },
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-usage-report" },
 ]
 
 [bans]

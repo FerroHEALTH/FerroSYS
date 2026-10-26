@@ -116,8 +116,9 @@ pub async fn healthcheck::check(address: SocketAddr, base_path: &str, timeout: D
 #[derive(clap::Subcommand)] pub enum Common { Serve, Config { cmd: ConfigCmd }, Healthcheck }
 
 // ferrohealth-usage-report
-pub trait ProductSection: Serialize + Send + Sync { const PRODUCT: &'static str; }
-pub struct Reporter<P: ProductSection>;
+pub trait ProductSection: Send + Sync { type Status: Serialize; const PRODUCT: Product; fn status(&self) -> impl Future<Output = Self::Status> + Send; }
+pub struct Reporter<P: ProductSection>;   // start(), send_start(), send_daily(), spawn()
+pub struct Window;   // Window::new(grouping), record(method, route, status, latency), count(key)
 ```
 
 ## 4. Policies

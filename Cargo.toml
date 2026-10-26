@@ -51,6 +51,13 @@ ferrohealth-health = { path = "crates/ferrohealth-health", version = "=0.1.0" }
 tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit"] }
 clap = { version = "4.6.7", features = ["derive"] }
 uuid = { version = "1.29.0", default-features = false, features = ["v4", "std"] }
+# ferrohealth-usage-report: the client to the collector, the clock of the
+# start record, and the schema validator and stub collector of its tests.
+# Verified against crates.io on 2026-10-26.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
+jsonschema = { version = "0.60.1", default-features = false }
+wiremock = "0.6.5"
 # The runtime, and the one-shot service call of the request-log cases.
 tokio = { version = "1.53.3", default-features = false }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
