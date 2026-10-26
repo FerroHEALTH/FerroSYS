@@ -10,6 +10,10 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- Requires `ferrohealth-secret` as `0.2.0`, a caret requirement in place of the exact pin, so a product takes a patch of that crate without waiting for a release of this one.
+
 ## [0.2.3] - 2026-10-26
 
 ### Fixed

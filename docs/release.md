@@ -29,8 +29,10 @@ On the branch `release/<tag>`:
    titled as the tag is closed or moved; the release refuses the tag
    otherwise (`scripts/release/milestone.sh check <tag>`).
 2. **Bump the version.** Set the crate's version and run `cargo update -w`.
-   A release that another workspace crate must follow also moves that
-   crate's requirement in `[workspace.dependencies]`. Move the install line
+   One workspace crate requires another by a caret on the newest release it
+   needs (`.claude/rules/crates-publishing.md`), so a release moves a
+   requirement in `[workspace.dependencies]` only when a dependant needs
+   what the release added. Move the install line
    of the crate's `README.md`, its crates.io page, to the new version.
 3. **Cut the changelog.** Rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD` and open a fresh, empty `## [Unreleased]` above
@@ -85,12 +87,14 @@ after the merge, at the commit you are about to tag. It exits 0 when the
 `plan` job would pass, names every check that refuses, and prints the path
 of the release notes it composed, so you read them before they are
 published. You need `gh` logged in, because the milestone check reads the
-tracker.
+tracker, and the pinned `cargo-semver-checks` installed
+(`cargo binstall cargo-semver-checks@<pin>`).
 
 | Check | Script |
 |---|---|
 | The milestone titled as the tag holds no open item | `scripts/release/milestone.sh check` |
 | The crate's version names the tag's version | `plan.sh` |
+| The crate's public API breaks nothing its version does not allow, against its newest version on crates.io (`cargo-semver-checks` at the version `docs/VERSIONS.md` pins) | `scripts/checks/semver.sh` |
 | Every section of the changelog holds Keep a Changelog types, each once | `scripts/checks/changelog-structure.sh` |
 | `[Unreleased]` compares from the tag, and the cut version has its link | `plan.sh` |
 | The crate's `README.md` install line pins the version being released (a pre-release is exempt) | `plan.sh` |

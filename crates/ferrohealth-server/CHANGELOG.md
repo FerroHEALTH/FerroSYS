@@ -10,6 +10,10 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- Requires `ferrohealth-secret` as `0.2.0`, `ferrohealth-telemetry` as `0.2.0` and `ferrohealth-health` as `0.1.1`, caret requirements in place of exact pins, so a product takes a patch of those crates without waiting for a release of this one.
+
 ## [0.3.1] - 2026-10-26
 
 ### Added
