@@ -204,6 +204,11 @@ check_version() {
 
 check_changelog_structure() { bash scripts/checks/changelog-structure.sh "$CHANGELOG"; }
 
+# The crate's public API against its newest version on crates.io: a break
+# needs a minor bump (https://doc.rust-lang.org/cargo/reference/semver.html),
+# which keeps the caret requirements between FerroSYS crates safe.
+check_semver() { bash scripts/checks/semver.sh "$CRATE"; }
+
 # The cut refreshes the link references: [Unreleased] compares from the tag
 # being cut and the cut version has a link of its own (Keep a Changelog 1.1.0
 # writes each version heading as a link). A pre-release cuts no section.
@@ -286,6 +291,7 @@ list() {
   cat <<'EOF'
 check_milestone The milestone titled as the tag holds no open item
 check_version The tag matches the version of the crate it releases
+check_semver The public API breaks nothing its version does not allow (cargo-semver-checks)
 check_changelog_structure Changelog structure (no duplicate subsections, Keep a Changelog types only)
 check_changelog_links The changelog links compare from the tag being cut
 check_changelog_security The Security section of the cut names its advisories and its reason

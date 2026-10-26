@@ -86,7 +86,8 @@ milestone set and its crates.io name reserved, which needs the owner.
   dependency edges).
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
-  version rule, the advisory exceptions, the contribution-licence box).
+  version rule, the advisory exceptions, the contribution-licence box, and
+  `semver.sh`, cargo-semver-checks against crates.io).
 - `scripts/release/`: the release plan, the preflight, the milestone check
   and close, and the crates.io publish and read-back (`docs/release.md`).
 - `.github/`: CI with the single required `conclusion` job (it also runs on
@@ -96,6 +97,8 @@ milestone set and its crates.io name reserved, which needs the owner.
   PR template and the bug, feature and task forms.
 - `.claude/rules/issue-workflow.md`: the tracker loop, the issue title rule and
   the label model.
+- `.claude/rules/crates-publishing.md`: the caret requirements between the
+  crates and the semver check that keeps every patch compatible.
 - `.claude/memory/`: the working memory; `MEMORY.md` is the index.
 
 ## Issue workflow

@@ -346,6 +346,32 @@ jobs:
       - name: No exception for an advisory that no longer fires
         run: bash scripts/checks/advisory-exceptions.sh
 
+  # Every crate's public API against its newest version on crates.io: a break
+  # the manifest version does not answer with a minor bump fails, so the caret
+  # requirements between the crates stay safe (scripts/checks/semver.sh).
+  semver:
+    name: cargo-semver-checks
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-save-if: "false"
+      - id: pin
+        name: Read the cargo-semver-checks pin
+        run: echo "version=$(bash scripts/checks/semver.sh --pin)" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-semver-checks@${{ steps.pin.outputs.version }}
+      - run: bash scripts/checks/semver.sh
+
   # No cache: the dry run checks the bytes a publish would upload.
   publish-dry-run:
     name: publish-dry-run
@@ -424,6 +450,7 @@ jobs:
       - doc
       - cargo-deny
       - publish-dry-run
+      - semver
       - crate-version-guard
       - dependency-review
     if: always()

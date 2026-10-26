@@ -31,8 +31,12 @@ url = "2.5.8"
 # environment. Verified against crates.io on 2026-10-26.
 percent-encoding = "2.3.2"
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "display", "serde"] }
-ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "=0.2.0" }
-ferrohealth-config = { path = "crates/ferrohealth-config", version = "=0.2.3" }
+# One FerroSYS crate requires another by a caret requirement on the newest
+# release it needs, so a patch of one reaches the products without a release
+# of the crates built on it; cargo-semver-checks keeps every patch compatible
+# (https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements).
+ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "0.2.0" }
+ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.2.3" }
 # ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
 # provider read by Prometheus and pushed over OTLP, on the lines FerroFED
 # resolves. Verified against crates.io on 2026-10-26.
@@ -47,8 +51,8 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
 http = "1.5.0"
-ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "=0.2.0" }
-ferrohealth-health = { path = "crates/ferrohealth-health", version = "=0.1.1" }
+ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.2.0" }
+ferrohealth-health = { path = "crates/ferrohealth-health", version = "0.1.1" }
 # ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.
 # Verified against crates.io on 2026-10-26.
 tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit", "compression-gzip", "compression-br"] }
