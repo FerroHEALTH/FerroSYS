@@ -27,6 +27,9 @@ thiserror = "2.0.21"
 url = "2.5.8"
 # ferrohealth-config: the TOML reader and writer, and the base crate it
 # builds on, at the version it publishes.
+# The userinfo of the database URL ferrohealth-config composes from the libpq
+# environment. Verified against crates.io on 2026-10-26.
+percent-encoding = "2.3.2"
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "display", "serde"] }
 ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "=0.2.0" }
 ferrohealth-config = { path = "crates/ferrohealth-config", version = "=0.2.1" }

@@ -75,14 +75,53 @@ pub struct Loader {
 /// A transform of an alias's value, such as a port into a listen address.
 pub type Transform = fn(&str) -> String;
 
-/// A variable outside the uniform form that sets one key.
+/// A key's value composed from several variables of the environment, such
+/// as a database URL from the libpq set; `None` when they do not give one.
+pub type Compose = fn(&BTreeMap<String, String>) -> Option<String>;
+
+/// A variable outside the uniform form, or a set of them, that sets one key.
 #[derive(Debug, Clone)]
 struct Alias {
+    /// The name the provenance and the refusals give the source.
     variable: String,
+    /// Every variable the alias reads.
+    reads: Vec<String>,
     key: String,
     /// Whether the canonical override of the key wins over it.
     below: bool,
-    transform: Option<Transform>,
+    value: AliasValue,
+}
+
+/// How an alias turns the environment into the key's value.
+#[derive(Debug, Clone, Copy)]
+enum AliasValue {
+    /// The one variable's value, transformed when a transform is given.
+    Variable(Option<Transform>),
+    /// The value composed from every variable the alias reads.
+    Composed(Compose),
+}
+
+impl Alias {
+    /// The alias of the one variable `variable`.
+    fn variable(variable: String, key: String, below: bool, transform: Option<Transform>) -> Self {
+        Self {
+            reads: vec![variable.clone()],
+            variable,
+            key,
+            below,
+            value: AliasValue::Variable(transform),
+        }
+    }
+
+    /// The value this alias sets from `environment`, when it sets one.
+    fn value(&self, environment: &BTreeMap<String, String>) -> Option<String> {
+        match self.value {
+            AliasValue::Variable(transform) => environment
+                .get(&self.variable)
+                .map(|raw| transform.map_or_else(|| raw.clone(), |transform| transform(raw))),
+            AliasValue::Composed(compose) => compose(environment),
+        }
+    }
 }
 
 /// A key renamed from one release to the next, still read under its old
@@ -173,12 +212,8 @@ impl Loader {
     /// operator sets for one run, such as `RUST_LOG` for `telemetry.filter`.
     #[must_use]
     pub fn alias(mut self, variable: impl Into<String>, key: impl Into<String>) -> Self {
-        self.aliases.push(Alias {
-            variable: variable.into(),
-            key: key.into(),
-            below: false,
-            transform: None,
-        });
+        self.aliases
+            .push(Alias::variable(variable.into(), key.into(), false, None));
         self
     }
 
@@ -194,11 +229,36 @@ impl Loader {
         key: impl Into<String>,
         transform: Option<Transform>,
     ) -> Self {
+        self.aliases.push(Alias::variable(
+            variable.into(),
+            key.into(),
+            true,
+            transform,
+        ));
+        self
+    }
+
+    /// Adds a fallback for the dotted key `key` composed from the variables
+    /// `variables` by `compose`, such as [`crate::libpq::url`] for a
+    /// database URL from the libpq set.
+    ///
+    /// It sits among the fallbacks in the order they were added, so a later
+    /// fallback of the same key wins over it, and the canonical `<PREFIX>__`
+    /// override wins over every fallback. The provenance names the variables
+    /// joined by `+`, and no refusal quotes the composed value, as for any other override.
+    #[must_use]
+    pub fn fallback_composed(
+        mut self,
+        variables: &[&str],
+        key: impl Into<String>,
+        compose: Compose,
+    ) -> Self {
         self.aliases.push(Alias {
-            variable: variable.into(),
+            variable: variables.join("+"),
+            reads: variables.iter().map(|&name| name.to_owned()).collect(),
             key: key.into(),
             below: true,
-            transform,
+            value: AliasValue::Composed(compose),
         });
         self
     }
@@ -339,7 +399,11 @@ impl Loader {
         let config_variable = self.config_variable();
         let mut known: Vec<&str> = vec![config_variable.as_str()];
         known.extend(self.reserved.iter().map(String::as_str));
-        known.extend(self.aliases.iter().map(|alias| alias.variable.as_str()));
+        known.extend(
+            self.aliases
+                .iter()
+                .flat_map(|alias| alias.reads.iter().map(String::as_str)),
+        );
         let mut refusals = sweep(&self.prefix, environment, &known);
         if refusals.len() > 1 {
             return Err(ConfigError::Refusals { refusals });
@@ -433,12 +497,9 @@ impl Loader {
         sets: &[(String, String)],
     ) -> Result<Vec<Override>, ConfigError> {
         let alias = |alias: &Alias| {
-            environment.get(&alias.variable).map(|raw| {
-                let value = alias
-                    .transform
-                    .map_or_else(|| raw.clone(), |transform| transform(raw));
-                Override::new(&alias.variable, &alias.key, &value)
-            })
+            alias
+                .value(environment)
+                .map(|value| Override::new(&alias.variable, &alias.key, &value))
         };
         let mut overrides: Vec<Override> = self
             .aliases
@@ -503,7 +564,10 @@ impl Loader {
                 continue;
             };
             let read = name.starts_with(&reserved)
-                || self.aliases.iter().any(|alias| alias.variable == name);
+                || self
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.reads.iter().any(|read| read == name));
             if !read {
                 continue;
             }
@@ -1313,6 +1377,53 @@ mod tests {
             "10.0.0.1:1",
             loaded.settings().server.listen,
             "the canonical override wins over the fallback"
+        );
+    }
+
+    #[test]
+    fn a_composed_fallback_reads_several_variables_in_the_fallback_order() {
+        let composed = || {
+            loader()
+                .fallback_composed(crate::libpq::VARIABLES, "cdr.url", crate::libpq::url)
+                .fallback("DATABASE_URL", "cdr.url", None)
+        };
+        let libpq = [
+            ("PGHOST", "db.internal"),
+            ("PGUSER", "app"),
+            ("PGPASSWORD", SENTINEL),
+        ];
+        let loaded = composed()
+            .load_sources::<Config>(
+                Some("[cdr]\nurl = \"postgres://file\"\n"),
+                None,
+                &environment(&libpq),
+            )
+            .expect("the tree loads");
+        let cdr = loaded.settings().cdr.as_ref().expect("the section");
+        assert_eq!(format!("postgres://app:{SENTINEL}@db.internal"), cdr.url);
+        assert_eq!(
+            Some(crate::libpq::VARIABLES.join("+").as_str()),
+            loaded.provenance().variable("cdr.url"),
+            "the provenance names the variables"
+        );
+        let mut both = libpq.to_vec();
+        both.push(("DATABASE_URL", "postgres://url"));
+        let loaded = composed()
+            .load_sources::<Config>(None, None, &environment(&both))
+            .expect("the tree loads");
+        assert_eq!(
+            "postgres://url",
+            loaded.settings().cdr.as_ref().expect("the section").url,
+            "the later fallback wins"
+        );
+        both.push(("FERROSYS__CDR__URL", "postgres://canonical"));
+        let loaded = composed()
+            .load_sources::<Config>(None, None, &environment(&both))
+            .expect("the tree loads");
+        assert_eq!(
+            "postgres://canonical",
+            loaded.settings().cdr.as_ref().expect("the section").url,
+            "the canonical override wins over every fallback"
         );
     }
 

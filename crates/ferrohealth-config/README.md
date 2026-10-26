@@ -15,6 +15,10 @@ console reads its configuration the same way, so an operator learns it once.
   sets `[section] key` and a product's aliases (such as `RUST_LOG`) set the
   keys they name. An override is placed as text, and typed only where the
   tree wants a number, a boolean or an array.
+- `Loader::fallback_composed` sets a key from several variables at once,
+  and `libpq::url` is the composer of a database URL from PostgreSQL's
+  client environment (`PGHOST`, `PGUSER`, `PGPASSWORD` and the rest), the set
+  managed PostgreSQL services inject in place of a URL.
 - The load is strict. With `#[serde(deny_unknown_fields)]` on every struct,
   an unknown key and a value of the wrong type are refused with the dotted
   key, the variable that set it and, for an unknown key, the closest known
