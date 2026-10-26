@@ -87,15 +87,6 @@ pub trait HealthIndicator: fmt::Debug + Send + Sync + 'static {
 
     /// Checks the subsystem.
     fn check(&self) -> Check<'_>;
-
-    /// Whether the process is ready only while this indicator is not down.
-    ///
-    /// An indicator of a subsystem the process serves without returns
-    /// `false`: its state is reported as found and counts at most as
-    /// `degraded` toward readiness.
-    fn required(&self) -> bool {
-        true
-    }
 }
 
 /// The indicators readiness runs.
@@ -203,39 +194,26 @@ impl Registry {
                         timeout.as_millis()
                     )),
                 };
-                (outcome.named(indicator.name()), indicator.required())
+                outcome.named(indicator.name())
             });
         }
-        let mut required = Vec::with_capacity(self.indicators.len());
-        let mut optional = Vec::new();
-        let mut lost: Vec<(&'static str, bool)> = self
-            .indicators
-            .iter()
-            .map(|indicator| (indicator.name(), indicator.required()))
-            .collect();
+        let mut states = Vec::with_capacity(self.indicators.len());
+        let mut lost = self.names();
         while let Some(joined) = checks.join_next().await {
             // NOTE: no specification governs this: our own design; a check that
             // panicked or was cancelled is reported down under its name below.
-            if let Ok((state, is_required)) = joined {
-                if let Some(at) = lost.iter().position(|(name, _)| *name == state.name) {
+            if let Ok(state) = joined {
+                if let Some(at) = lost.iter().position(|name| *name == state.name) {
                     lost.remove(at);
                 }
-                if is_required {
-                    required.push(state);
-                } else {
-                    optional.push(state);
-                }
+                states.push(state);
             }
         }
-        for (name, is_required) in lost {
-            let state = IndicatorState::down(name, "the check failed to complete");
-            if is_required {
-                required.push(state);
-            } else {
-                optional.push(state);
-            }
-        }
-        Readiness::with_optional(lifecycle.phase(), required, optional)
+        states.extend(
+            lost.into_iter()
+                .map(|name| IndicatorState::down(name, "the check failed to complete")),
+        );
+        Readiness::new(lifecycle.phase(), states)
     }
 }
 
@@ -287,40 +265,6 @@ mod tests {
 
         fn check(&self) -> Check<'_> {
             Box::pin(async { panic!("the check fails loudly") })
-        }
-    }
-
-    #[derive(Debug)]
-    struct Optional(Outcome);
-
-    impl HealthIndicator for Optional {
-        fn name(&self) -> &'static str {
-            "broker"
-        }
-
-        fn check(&self) -> Check<'_> {
-            Box::pin(std::future::ready(self.0.clone()))
-        }
-
-        fn required(&self) -> bool {
-            false
-        }
-    }
-
-    #[derive(Debug)]
-    struct OptionalPanics;
-
-    impl HealthIndicator for OptionalPanics {
-        fn name(&self) -> &'static str {
-            "audit"
-        }
-
-        fn check(&self) -> Check<'_> {
-            Box::pin(async { panic!("the optional check fails loudly") })
-        }
-
-        fn required(&self) -> bool {
-            false
         }
     }
 
@@ -418,26 +362,6 @@ mod tests {
         assert_eq!(
             State::Up,
             Registry::default().readiness(&serving()).await.state
-        );
-    }
-
-    #[tokio::test]
-    async fn an_optional_indicator_down_leaves_the_process_ready() {
-        let registry = Registry::new(vec![
-            Arc::new(Fixed("database", Outcome::up())),
-            Arc::new(Optional(Outcome::down("the connection was refused"))),
-            Arc::new(OptionalPanics),
-        ]);
-        let readiness = registry.readiness(&serving()).await;
-        assert_eq!(State::Degraded, readiness.state);
-        assert!(readiness.is_ready());
-        assert_eq!(
-            vec![
-                IndicatorState::down("audit", "the check failed to complete"),
-                IndicatorState::down("broker", "the connection was refused"),
-                IndicatorState::up("database"),
-            ],
-            readiness.indicators
         );
     }
 

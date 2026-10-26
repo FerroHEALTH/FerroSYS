@@ -111,47 +111,13 @@ impl Readiness {
     /// The document of a process in `phase` whose indicators report
     /// `indicators`.
     #[must_use]
-    pub fn new(phase: Phase, indicators: Vec<IndicatorState>) -> Self {
-        Self::with_optional(phase, indicators, Vec::new())
-    }
-
-    /// The document of a process in `phase` whose required indicators report
-    /// `required` and whose optional ones report `optional`.
-    ///
-    /// An optional indicator keeps its own state in the document and counts
-    /// at most as `degraded` toward the overall state, so a subsystem the
-    /// process serves without (a fail-open audit sender, an event broker)
-    /// never takes the process out of rotation.
-    ///
-    /// ```
-    /// use ferrohealth_health::document::{IndicatorState, Phase, Readiness, State};
-    ///
-    /// let required = vec![IndicatorState::up("database")];
-    /// let optional = vec![IndicatorState::down("broker", "the connection was refused")];
-    /// let readiness = Readiness::with_optional(Phase::Serving, required, optional);
-    /// assert_eq!(State::Degraded, readiness.state);
-    /// assert!(readiness.is_ready());
-    /// assert_eq!(State::Down, readiness.indicators[0].state);
-    /// ```
-    #[must_use]
-    pub fn with_optional(
-        phase: Phase,
-        required: Vec<IndicatorState>,
-        optional: Vec<IndicatorState>,
-    ) -> Self {
-        let worst = required
+    pub fn new(phase: Phase, mut indicators: Vec<IndicatorState>) -> Self {
+        indicators.sort_by(|a, b| a.name.cmp(&b.name));
+        let worst = indicators
             .iter()
             .map(|indicator| indicator.state)
-            .chain(
-                optional
-                    .iter()
-                    .map(|indicator| indicator.state.min(State::Degraded)),
-            )
             .max()
             .unwrap_or(State::Up);
-        let mut indicators = required;
-        indicators.extend(optional);
-        indicators.sort_by(|a, b| a.name.cmp(&b.name));
         let state = if phase == Phase::Serving {
             worst
         } else {
@@ -238,40 +204,6 @@ mod tests {
         );
         assert_eq!(State::Down, down.state);
         assert!(!down.is_ready(), "one indicator down is not ready");
-    }
-
-    #[test]
-    fn an_optional_indicator_down_degrades_and_stays_ready() {
-        let readiness = Readiness::with_optional(
-            Phase::Serving,
-            vec![IndicatorState::up("database")],
-            vec![IndicatorState::down("audit", "the sender refused")],
-        );
-        assert_eq!(State::Degraded, readiness.state);
-        assert!(
-            readiness.is_ready(),
-            "an optional indicator never flips readiness"
-        );
-        assert_eq!(
-            vec![
-                IndicatorState::down("audit", "the sender refused"),
-                IndicatorState::up("database"),
-            ],
-            readiness.indicators,
-            "the optional row keeps its own state, sorted with the others"
-        );
-        let required_down = Readiness::with_optional(
-            Phase::Serving,
-            vec![IndicatorState::down("database", "refused")],
-            vec![IndicatorState::up("audit")],
-        );
-        assert_eq!(State::Down, required_down.state);
-        let draining = Readiness::with_optional(
-            Phase::Draining,
-            Vec::new(),
-            vec![IndicatorState::up("audit")],
-        );
-        assert_eq!(State::Down, draining.state, "the phase still decides first");
     }
 
     #[test]

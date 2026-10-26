@@ -20,10 +20,7 @@ reads the same readiness document.
   nothing else, and compiles for `wasm32-unknown-unknown`.
 - With the `registry` feature, `registry::Registry` runs every
   `HealthIndicator` at once, each bounded by a timeout (2 s by default). A
-  check that times out or panics counts as down. An indicator whose
-  `required` answers `false` covers a subsystem the process serves without:
-  its row keeps the state it found, and it counts at most as degraded, so it
-  never takes the process out of rotation. `Outcome::state` and
+  check that times out or panics counts as down. `Outcome::state` and
   `Outcome::detail` read what a check found.
 - With the `registry` feature, `lifecycle::Lifecycle` moves from booting to
   serving to draining, and withdraws readiness the moment a stop is
