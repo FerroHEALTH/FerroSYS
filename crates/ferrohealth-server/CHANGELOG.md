@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
 ### Added
 
 - `[server.tls]` and `serve::serve_tls`: the listener serves its own
@@ -91,5 +93,6 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.1.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.2.0...HEAD
+[0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.1.0...ferrohealth-server-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-server-v0.1.0
