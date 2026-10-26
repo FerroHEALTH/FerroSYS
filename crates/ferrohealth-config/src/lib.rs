@@ -29,6 +29,7 @@
 //! specification governs any of this: our own design.
 
 pub mod error;
+pub mod libpq;
 pub mod loader;
 mod overrides;
 pub mod provenance;

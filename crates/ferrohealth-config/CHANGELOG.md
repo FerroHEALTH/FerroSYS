@@ -10,6 +10,15 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `loader::Loader::fallback_composed`, a fallback whose value is composed
+  from several environment variables, ordered with the other fallbacks and
+  below the canonical override (#88).
+- `libpq::url`, the `postgres://` URL composed from PostgreSQL's client
+  environment (`PGHOST_UNPOOLED` or `PGHOST`, `PGPORT`, `PGDATABASE`,
+  `PGUSER`, `PGPASSWORD`, `PGSSLMODE`), its userinfo percent-encoded (#88).
+
 ## [0.2.1] - 2026-10-26
 
 ### Fixed
