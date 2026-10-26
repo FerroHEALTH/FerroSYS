@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-26
+
 ### Changed
 
 - Requires `ferrohealth-secret` as `0.2.0`, `ferrohealth-telemetry` as `0.2.0` and `ferrohealth-health` as `0.1.1`, caret requirements in place of exact pins, so a product takes a patch of those crates without waiting for a release of this one.
@@ -141,7 +143,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.2...HEAD
+[0.3.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.1...ferrohealth-server-v0.3.2
 [0.3.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.0...ferrohealth-server-v0.3.1
 [0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.2.0...ferrohealth-server-v0.3.0
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.1.0...ferrohealth-server-v0.2.0
