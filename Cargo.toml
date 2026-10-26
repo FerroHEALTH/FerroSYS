@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Each crate keeps its own `version` in its manifest, released by the tag
+# `<crate>-v<version>`; the rest of the package metadata is shared.
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "BUSL-1.1"
+repository = "https://github.com/FerroHEALTH/FerroSYS"
+homepage = "https://github.com/FerroHEALTH/FerroSYS"
+authors = ["Ruben Talstra"]
+
+# The authoritative third-party set. A crate takes a dependency with
+# dep.workspace = true, and every version is checked against crates.io on the
+# day it is added, on the lines the FerroHEALTH products resolve, so a crate
+# adds no second copy to any of them.
+[workspace.dependencies]
+
+# The reliability bar (no specification governs it: our own design), the
+# FerroHEALTH family's lint set as FerroBRIDGE, FerroFED and FerroUI carry it.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+non_ascii_idents = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+dead_code = "deny"
+let_underscore_drop = "deny"
+non_local_definitions = "deny"
+unexpected_cfgs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+ffi_unwind_calls = "deny"
+deprecated_safe_2024 = "deny"
+ambiguous_negative_literals = "deny"
+unused_must_use = "deny"
+macro_use_extern_crate = "warn"
+absolute_paths_not_starting_with_crate = "warn"
+unit_bindings = "warn"
+meta_variable_misuse = "warn"
+explicit_outlives_requirements = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_macro_rules = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+redundant_lifetimes = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+missing_crate_level_docs = "warn"
+invalid_codeblock_attributes = "deny"
+invalid_rust_codeblocks = "deny"
+invalid_html_tags = "deny"
+bare_urls = "deny"
+redundant_explicit_links = "deny"
+unescaped_backticks = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+# Panics are for states that cannot happen; everything else is a Result.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+todo = "deny"
+panic_in_result_fn = "deny"
+missing_assert_message = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+# Numeric honesty: no silent narrowing, wrapping, or lossy literals.
+as_conversions = "deny"
+float_cmp_const = "deny"
+lossy_float_literal = "deny"
+as_underscore = "deny"
+fn_to_numeric_cast_any = "deny"
+precedence_bits = "deny"
+suspicious_xor_used_as_pow = "deny"
+integer_division = "warn"
+unchecked_time_subtraction = "deny"
+# Guards, results, and causes are never dropped on the floor.
+let_underscore_must_use = "deny"
+let_underscore_untyped = "deny"
+unused_result_ok = "deny"
+map_err_ignore = "warn"
+await_holding_lock = "deny"
+# Determinism: hash iteration order feeds nothing that must be stable.
+iter_over_hash_type = "deny"
+# Libraries speak tracing; only binaries write to stdio, and nothing exits.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+exit = "deny"
+# Suppressions are scoped, justified, and self-reporting.
+allow_attributes_without_reason = "deny"
+allow_attributes = "warn"
+# Documentation and comment shape (RFC 505 and RFC 1574).
+too_long_first_doc_paragraph = "warn"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+# The RFC 3107 shape: derive Default when the default is a variant.
+derivable_impls = "deny"
+# API hygiene: no re-exports, no pointer leakage, the right std call.
+pub_use = "deny"
+incompatible_msrv = "deny"
+verbose_file_reads = "deny"
+filetype_is_file = "deny"
+create_dir = "deny"
+large_include_file = "deny"
+rc_buffer = "deny"
+rc_mutex = "deny"
+mem_forget = "deny"
+pointer_format = "deny"
+empty_drop = "warn"
+deref_by_slicing = "warn"
+
+# A clean 500 relies on catch_unwind, which only catches unwinding panics, and
+# tests ignore the panic setting, so abort would be untestable
+# (https://doc.rust-lang.org/cargo/reference/profiles.html#panic).
+[profile.release]
+panic = "unwind"
+overflow-checks = true
+debug = "line-tables-only"

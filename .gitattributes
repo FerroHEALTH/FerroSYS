@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+# Git stores text with LF and checks it out with LF on every platform.
+* text=auto eol=lf
+
+# The vendored specification corpora keep their upstream bytes: no line-ending
+# normalization, and collapsed in diffs and language statistics.
+docs/specs/** linguist-vendored -text

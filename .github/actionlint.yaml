@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+# actionlint configuration: https://github.com/rhysd/actionlint/blob/main/docs/config.md
+# The SC2016 exclusion is passed at invoke time through SHELLCHECK_OPTS (ci.yml).
+self-hosted-runner:
+  labels: []
+config-variables: null

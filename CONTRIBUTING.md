@@ -28,6 +28,26 @@ sets sub-issue and dependency edges. Read an issue with
 `gh issue view <n> --json title,body,comments`; `--comments` prints nothing
 for an issue without comments.
 
+## Build and test
+
+```
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo nextest run --workspace --all-features --locked
+cargo test --doc --workspace --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps --document-private-items
+cargo deny check
+```
+
+A change to a workflow or a shell script also needs the linters CI runs:
+
+```
+zizmor --min-severity=low .github/
+actionlint
+shellcheck --severity=style <the shell files you touched>
+```
+
 ## Pull requests
 
 - Branch from `main` with a conventional-type name (`feat/`, `fix/`, `chore/`,
