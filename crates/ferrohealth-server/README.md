@@ -26,8 +26,16 @@ runs the same stack, the same health routes and the same shutdown.
 - `healthcheck::check` is the container probe: readiness over loopback,
   exit `0` only on `200`.
 - `cli::Common` holds the `serve`, `config check` and `healthcheck`
-  subcommands every binary flattens into its own.
-- `section::ServerSection` is the `[server]` section.
+  subcommands every binary flattens into its own, and `cli::ConfigArgs`
+  the `--config` and `--set` arguments.
+- `section::ServerSection` is the `[server]` section, with the listener's
+  TLS (mutual TLS, reload on `SIGHUP`), the trusted proxies, the caller
+  rate and the compression.
+- `serve::run_all` serves several listeners under one signal,
+  `client_address` names a request's client, `caller_rate` limits one
+  caller, `health::Health::with_info` serves `/health/info`, and
+  `tls_client` reads the TLS material of outbound calls (feature `reqwest`
+  sets it on a reqwest client).
 - `console` (feature `console`) adds an operator console's nonce
   Content-Security-Policy and the security headers beside it.
 
@@ -35,7 +43,7 @@ runs the same stack, the same health routes and the same shutdown.
 
 ```toml
 [dependencies]
-ferrohealth-server = "=0.1.0"
+ferrohealth-server = "=0.2.0"
 ```
 
 Install `ferrohealth_telemetry::panic::install_hook` at start, so Rust's own
