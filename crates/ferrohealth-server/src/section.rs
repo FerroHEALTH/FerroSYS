@@ -85,23 +85,60 @@ pub struct TlsSection {
     /// The client certificate chain and key, in one PEM, the healthcheck
     /// presents to a listener that asks one.
     pub healthcheck_identity_file: Option<std::path::PathBuf>,
-    /// The oldest TLS version the listener speaks.
+    /// The oldest TLS version the listener speaks: `"1.3"` unless lowered to
+    /// `"1.2"`.
     pub min_version: TlsVersion,
 }
 
-/// A TLS version the listener speaks at least.
+/// The oldest TLS version a listener or an outbound client speaks.
 ///
-/// RFC 9325 §3.1.1 has TLS 1.3 supported and lets a deployment require it;
-/// the default keeps TLS 1.2 beside it for clients that have no 1.3.
+/// TLS 1.3 (RFC 8446) is the default, as RFC 9325 §3.1.1 has it supported; a
+/// deployment may lower the minimum to TLS 1.2, which RFC 9325 §3.1.1 allows,
+/// with the suites of RFC 9325 §4.2. TLS 1.0 and 1.1 are deprecated (RFC
+/// 8996) and refused when the configuration is read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "String")]
 pub enum TlsVersion {
     /// TLS 1.2 and 1.3.
-    #[default]
-    #[serde(rename = "1.2")]
     Tls12,
     /// TLS 1.3 alone.
-    #[serde(rename = "1.3")]
+    #[default]
     Tls13,
+}
+
+/// A `min_version` the server does not speak.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TlsVersionError {
+    /// TLS 1.0 or 1.1, which RFC 8996 deprecates.
+    #[error("TLS {0} is deprecated (RFC 8996); the minimum is \"1.2\" or \"1.3\"")]
+    Deprecated(&'static str),
+    /// A value that names no TLS version.
+    #[error("min_version takes \"1.2\" or \"1.3\"")]
+    Unknown,
+}
+
+impl TryFrom<String> for TlsVersion {
+    type Error = TlsVersionError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "1.3" => Ok(Self::Tls13),
+            "1.2" => Ok(Self::Tls12),
+            "1.1" => Err(TlsVersionError::Deprecated("1.1")),
+            "1.0" => Err(TlsVersionError::Deprecated("1.0")),
+            _ => Err(TlsVersionError::Unknown),
+        }
+    }
+}
+
+impl From<TlsVersion> for String {
+    fn from(version: TlsVersion) -> Self {
+        match version {
+            TlsVersion::Tls12 => "1.2",
+            TlsVersion::Tls13 => "1.3",
+        }
+        .to_owned()
+    }
 }
 
 /// Whether the listener asks a client certificate.
@@ -168,7 +205,7 @@ impl TlsSection {
             client_ca_file: None,
             reload_interval_s: None,
             healthcheck_identity_file: None,
-            min_version: TlsVersion::Tls12,
+            min_version: TlsVersion::Tls13,
         }
     }
 }
@@ -409,28 +446,41 @@ mod tests {
 
     #[test]
     fn the_header_bound_and_the_tls_minimum_load() {
-        let section = load(
-            "[server]\nheader_read_timeout_ms = 5000\n\n[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nmin_version = \"1.3\"\n",
-        )
+        let tls = "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\n";
+        let section = load(&format!(
+            "[server]\nheader_read_timeout_ms = 5000\n\n{tls}min_version = \"1.2\"\n"
+        ))
         .expect("the section loads");
         assert_eq!(
             std::time::Duration::from_secs(5),
             section.header_read_timeout()
         );
         assert_eq!(
-            Some(super::TlsVersion::Tls13),
-            section.tls.map(|tls| tls.min_version)
+            Some(super::TlsVersion::Tls12),
+            section.tls.map(|tls| tls.min_version),
+            "a deployment may lower the minimum to 1.2"
         );
         assert_eq!(
             std::time::Duration::from_secs(30),
             ServerSection::default().header_read_timeout()
         );
-        for text in [
-            "[server]\nheader_read_timeout_ms = 0\n",
-            "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nmin_version = \"1.1\"\n",
-        ] {
-            assert!(load(text).is_err(), "{text} is refused");
-        }
+        let default = load(tls).expect("the section loads");
+        assert_eq!(
+            Some(super::TlsVersion::Tls13),
+            default.tls.map(|tls| tls.min_version),
+            "TLS 1.3 is the default minimum"
+        );
+        assert!(load("[server]\nheader_read_timeout_ms = 0\n").is_err());
+        let refused =
+            load(&format!("{tls}min_version = \"1.1\"\n")).expect_err("TLS 1.1 is refused");
+        assert!(
+            refused.to_string().contains("RFC 8996"),
+            "the refusal names the deprecation: {refused}"
+        );
+        assert_eq!(
+            Err(super::TlsVersionError::Deprecated("1.0")),
+            super::TlsVersion::try_from("1.0".to_owned())
+        );
     }
 
     #[test]

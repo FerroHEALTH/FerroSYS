@@ -34,6 +34,9 @@ pub struct TlsClientSection {
     pub client_identity_file: Option<PathBuf>,
     /// A PEM bundle of trust roots beside the platform's.
     pub trust_roots_file: Option<PathBuf>,
+    /// The oldest TLS version the client speaks: `"1.3"` unless lowered to
+    /// `"1.2"`, as for the listener.
+    pub min_version: crate::section::TlsVersion,
 }
 
 /// The outbound TLS material could not be read.
@@ -98,6 +101,7 @@ pub struct TlsClient {
     key: String,
     identity: Option<Identity>,
     roots: Vec<CertificateDer<'static>>,
+    min_version: crate::section::TlsVersion,
 }
 
 impl std::fmt::Debug for TlsClient {
@@ -106,6 +110,7 @@ impl std::fmt::Debug for TlsClient {
             .field("key", &self.key)
             .field("identity", &self.identity.as_ref().map(|_identity| "***"))
             .field("roots", &self.roots.len())
+            .field("min_version", &self.min_version)
             .finish()
     }
 }
@@ -163,6 +168,7 @@ impl TlsClient {
             key: key.to_owned(),
             identity,
             roots,
+            min_version: section.min_version,
         })
     }
 
@@ -176,7 +182,8 @@ impl TlsClient {
     /// roots, and presents the client identity when one is set.
     ///
     /// The protocol versions and cipher suites are the listener's: TLS 1.3,
-    /// and TLS 1.2 with the four suites RFC 9325 §4.2 recommends.
+    /// and TLS 1.2 with the four suites RFC 9325 §4.2 recommends only where
+    /// `min_version` lowers the minimum.
     ///
     /// # Errors
     ///
@@ -192,7 +199,7 @@ impl TlsClient {
                 .map_err(|source| self.refused("trust_roots_file", source))?;
         }
         let builder = ClientConfig::builder_with_provider(crate::tls::provider())
-            .with_safe_default_protocol_versions()
+            .with_protocol_versions(crate::tls::protocol_versions(self.min_version))
             .map_err(|source| self.refused("client_identity", source))?
             .with_root_certificates(platform_roots);
         match &self.identity {
@@ -220,6 +227,10 @@ impl TlsClient {
                 .map_err(|source| self.client("trust_roots_file", source))?;
             builder = builder.add_root_certificate(root);
         }
+        builder = builder.tls_version_min(match self.min_version {
+            crate::section::TlsVersion::Tls12 => reqwest::tls::Version::TLS_1_2,
+            crate::section::TlsVersion::Tls13 => reqwest::tls::Version::TLS_1_3,
+        });
         if let Some(identity) = &self.identity {
             let identity = reqwest::Identity::from_pem(identity.pem.expose().as_bytes())
                 .map_err(|source| self.client("client_identity", source))?;
@@ -479,5 +490,19 @@ mod tests {
             toml::from_str::<TlsClientSection>("roots = \"x\"\n").is_err(),
             "an unknown key is refused"
         );
+    }
+
+    #[test]
+    fn the_outbound_minimum_is_tls_1_3_unless_lowered_and_never_below_1_2() {
+        assert_eq!(
+            crate::section::TlsVersion::Tls13,
+            TlsClientSection::default().min_version
+        );
+        let lowered: TlsClientSection =
+            toml::from_str("min_version = \"1.2\"\n").expect("1.2 is taken");
+        assert_eq!(crate::section::TlsVersion::Tls12, lowered.min_version);
+        let refused = toml::from_str::<TlsClientSection>("min_version = \"1.1\"\n")
+            .expect_err("1.1 is refused");
+        assert!(refused.to_string().contains("RFC 8996"), "{refused}");
     }
 }

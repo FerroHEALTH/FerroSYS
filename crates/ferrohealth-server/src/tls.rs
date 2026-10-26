@@ -121,7 +121,7 @@ fn chain(key: &'static str, path: &Path) -> Result<Vec<CertificateDer<'static>>,
 }
 
 /// The versions the listener speaks from `min_version` on.
-fn protocol_versions(
+pub(crate) fn protocol_versions(
     min_version: crate::section::TlsVersion,
 ) -> &'static [&'static rustls::SupportedProtocolVersion] {
     static TLS13_ONLY: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS13];

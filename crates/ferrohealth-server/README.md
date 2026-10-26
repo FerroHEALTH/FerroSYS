@@ -34,8 +34,8 @@ runs the same stack, the same health routes and the same shutdown.
   subcommands every binary flattens into its own, and `cli::ConfigArgs`
   the `--config` and `--set` arguments.
 - `section::ServerSection` is the `[server]` section, with the listener's
-  TLS (mutual TLS, reload on `SIGHUP`, a 1.3-only `min_version`), the
-  trusted proxies, the caller
+  TLS (mutual TLS, reload on `SIGHUP`, TLS 1.3 unless `min_version`
+  lowers it to 1.2), the trusted proxies, the caller
   rate and the compression.
 - `serve::run_all` serves several listeners under one signal,
   `client_address` names a request's client, `caller_rate` limits one
