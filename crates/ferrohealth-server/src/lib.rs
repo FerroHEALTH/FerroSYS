@@ -27,6 +27,7 @@
 //! readiness, waits the drain delay and finishes the requests in flight
 //! within a bound, over TLS when `[server.tls]` is set ([`tls`]);
 //! [`serve::run_all`] serves several listeners under one signal.
+//! [`tls_client`] reads the TLS material of a product's outbound calls.
 //! [`healthcheck`] is the container probe, [`cli::Common`] and
 //! [`cli::ConfigArgs`] the subcommands and arguments every binary shares,
 //! [`build_info`] the build facts and the boot banner,
@@ -51,3 +52,4 @@ pub mod section;
 pub mod serve;
 pub mod stack;
 pub mod tls;
+pub mod tls_client;

@@ -697,6 +697,7 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "rcgen",
+ "reqwest",
  "rustls",
  "secrecy",
  "serde",

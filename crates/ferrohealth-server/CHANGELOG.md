@@ -52,6 +52,11 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   binary shares (#49).
 - `ConsoleHeaders::with_bundle`: console documents are `Cache-Control:
   no-store` and the site bundle `no-cache` (#50).
+- `tls_client::TlsClientSection` and `tls_client::TlsClient`: the outbound
+  TLS keys `client_identity`, `client_identity_file` (through
+  `ferrohealth-secret`) and `trust_roots_file`, read once into a rustls
+  `ClientConfig` over the caller's platform roots, or set on a
+  `reqwest::ClientBuilder` behind the `reqwest` feature (#48).
 
 ### Changed
 
