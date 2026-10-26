@@ -1,0 +1,261 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+# The release lane, dormant until a release tag is pushed: `<crate>-vX.Y.Z`
+# releases that crate of crates/, each crate on its own version line
+# (scripts/release/plan.sh crate):
+#
+#   plan ── github-release (draft) ── crate (reusable) ── finalize-release ── crates ── milestone
+#
+# The release is created as a draft, the attested .crate is attached, and it
+# is published only once the asset set is complete; then the crates leg
+# uploads the crate through Trusted Publishing behind the `crates-io`
+# environment's required reviewer. plan runs every release fact of
+# scripts/release/plan.sh at the tagged commit: it refuses a tag whose
+# milestone (titled exactly as the tag) is missing or still holds an open
+# item, and a section whose Security entries name no advisory; milestone
+# closes the milestone once every leg succeeded (scripts/release/milestone.sh).
+name: Release
+
+on:
+  push:
+    tags:
+      - "ferrohealth-secret-v*"
+      - "ferrohealth-config-v*"
+      - "ferrohealth-telemetry-v*"
+      - "ferrohealth-health-v*"
+      - "ferrohealth-server-v*"
+      - "ferrohealth-usage-report-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing ferrohealth-<crate>-vX.Y.Z tag to (re)publish. Dispatch this workflow AT that tag."
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read # the milestone titled as the tag
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      crate: ${{ steps.tag.outputs.crate }}
+      is-prerelease: ${{ steps.tag.outputs.is_prerelease }}
+    steps:
+      - id: tag
+        name: Resolve and validate the release tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+            if [ "${GITHUB_REF}" != "refs/tags/${tag}" ]; then
+              echo "::error::dispatched at '${GITHUB_REF}', not at refs/tags/${tag}. Run: gh workflow run Release --ref ${tag} -f tag=${tag}" >&2
+              exit 1
+            fi
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          if ! printf '%s\n' "$tag" | grep -qE '^ferrohealth-(secret|config|telemetry|health|server|usage-report)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$tag' is not a ferrohealth-<crate>-vX.Y.Z tag of a FerroSYS crate" >&2
+            exit 1
+          fi
+          crate="${tag%-v*}"
+          version="${tag#"$crate"-v}"
+          case "$version" in
+            *-*) is_prerelease=true ;;
+            *) is_prerelease=false ;;
+          esac
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "crate=$crate"
+            echo "is_prerelease=$is_prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      # Every release fact, as ONE list: the milestone titled as the tag, the
+      # crate's version, the changelog's structure and Security rules for
+      # this section, and the release notes with the support period. The list
+      # is scripts/release/plan.sh; scripts/release/preflight.sh runs the same
+      # list before the tag is pushed, so the two cannot drift (no
+      # specification governs the list: our own design). It names every
+      # refused check, and writes release-notes.md for github-release. A
+      # missing or empty changelog section fails the release rather than
+      # falling back to notes generated from the commit range.
+      - name: Every release fact holds at the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: bash scripts/release/plan.sh checks "$TAG" --notes release-notes.md
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  github-release:
+    name: github release (draft)
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+      - name: Create the release as a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          CRATE: ${{ needs.plan.outputs.crate }}
+          IS_PRERELEASE: ${{ needs.plan.outputs.is-prerelease }}
+        run: |
+          set -euo pipefail
+          title="$CRATE $VERSION"
+          args=(--repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "$title" --notes-file release-notes.md)
+          if [ "$IS_PRERELEASE" = "true" ]; then args+=(--prerelease); fi
+          state="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || echo missing)"
+          case "$state" in
+            missing) gh release create "$TAG" "${args[@]}" ;;
+            true) gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title" --notes-file release-notes.md ;;
+            *)
+              echo "::error::$TAG is already published. A bad cut ships forward as a new patch version; it is never retagged." >&2
+              exit 1
+              ;;
+          esac
+
+  # A call and nothing else: the isolation is what makes the provenance
+  # unforgeable.
+  crate:
+    name: crate (package and attest)
+    needs: [plan, github-release]
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-crate.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+      version: ${{ needs.plan.outputs.version }}
+      crate: ${{ needs.plan.outputs.crate }}
+
+  finalize-release:
+    name: github release (publish)
+    needs: [plan, crate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # publish the release
+    steps:
+      - name: The draft carries every asset this version promises
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          CRATE: ${{ needs.plan.outputs.crate }}
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          printf '%s\n' "$assets"
+          missing=""
+          for suffix in ".crate" ".crate.sha256sum" ".crate.sigstore.json"; do
+            printf '%s\n' "$assets" | grep -Fxq "${CRATE}-${VERSION}${suffix}" \
+              || missing="$missing ${CRATE}-${VERSION}${suffix}"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::the draft is missing assets, so it will not be published:$missing" >&2
+            exit 1
+          fi
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          IS_PRERELEASE: ${{ needs.plan.outputs.is-prerelease }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          fi
+
+  # The crate goes to crates.io once the release is public, through Trusted
+  # Publishing; the `crates-io` environment's required reviewer pauses the
+  # leg until the owner approves. scripts/release/publish-crates.sh is shared
+  # with publish-crates.yml.
+  crates:
+    name: crates.io
+    needs: [plan, finalize-release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: crates-io
+    concurrency:
+      group: publish-crates
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # OIDC token exchange (rust-lang/crates-io-auth-action)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - id: auth
+        name: Exchange the OIDC identity for a temporary crates.io token
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: Publish the crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CRATE: ${{ needs.plan.outputs.crate }}
+        run: bash scripts/release/publish-crates.sh publish "$CRATE"
+      - name: Verify the crate resolves at its manifest version
+        if: always()
+        env:
+          CRATE: ${{ needs.plan.outputs.crate }}
+        run: bash scripts/release/publish-crates.sh verify "$CRATE"
+
+  # Closes the release's milestone after every leg, the approval-gated crates
+  # leg included. `always()` keeps the job in the graph when a leg fails, so
+  # its log names that leg and the milestone stays open; a re-run of the
+  # failed jobs closes it. An already-closed milestone counts as done.
+  milestone:
+    name: close the milestone
+    needs: [plan, github-release, crate, finalize-release, crates]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # check out the script
+      issues: write # close the milestone
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Close the milestone titled as the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: bash scripts/release/milestone.sh close "$TAG"

@@ -92,8 +92,14 @@ jobs:
           tool: shellcheck@0.11.0
       - name: Every tracked shell program is clean at severity=style
         run: git ls-files -z '*.sh' | xargs -0 -r shellcheck --severity=style
+      - name: The release milestone script refuses open items and closes only after every leg
+        run: bash scripts/release/milestone.sh --self-test
+      - name: The release plan orders tags by version and counts the support period
+        run: bash scripts/release/plan.sh --self-test
       - name: The changelog Security check passes and refuses what it claims to
         run: bash scripts/checks/changelog-security.sh --self-test
+      - name: The manual crate publish refuses a run off its release tag
+        run: bash scripts/release/publish-crates.sh --self-test
 
   # Every section of each crate's changelog (crates/<crate>/CHANGELOG.md)
   # holds Keep a
