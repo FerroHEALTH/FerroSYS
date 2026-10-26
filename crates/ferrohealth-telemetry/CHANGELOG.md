@@ -10,6 +10,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - `section::TelemetrySection`, the `[telemetry]` section: the console
@@ -29,3 +31,6 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   the route template and the server's request id, and never a body, the raw
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-telemetry-v0.1.0

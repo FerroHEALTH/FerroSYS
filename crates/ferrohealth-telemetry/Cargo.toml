@@ -4,7 +4,7 @@
 name = "ferrohealth-telemetry"
 description = "The telemetry of the FerroHEALTH products: the console, the request log that never carries a body, the panic hook, and one OpenTelemetry provider for traces and metrics"
 # Its own version line, released by the tag ferrohealth-telemetry-v<version>.
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
