@@ -102,10 +102,11 @@ pub fn panic::install_hook();
 pub async fn request_log::middleware(State(log): State<RequestLog>, request: Request, next: Next) -> Response;  // axum feature
 
 // ferrohealth-health
-pub struct Readiness { pub status: Status, pub phase: Phase, pub indicators: Vec<IndicatorState> }
-pub enum Status { Up, Degraded, Down }
+pub struct Readiness { pub state: State, pub phase: Phase, pub indicators: Vec<IndicatorState> }
+pub enum State { Up, Degraded, Down }   // degraded still takes requests; down does not
 pub enum Phase { Booting, Serving, Draining }
-pub trait HealthIndicator: Debug + Send + Sync { fn name(&self) -> &'static str; fn check(&self) -> BoxFuture<'_, IndicatorState>; }
+pub trait HealthIndicator: Debug + Send + Sync { fn name(&self) -> &'static str; fn check(&self) -> Check<'_>; }   // registry feature
+impl Registry { pub async fn readiness(&self, lifecycle: &Lifecycle) -> Readiness; }
 
 // ferrohealth-server
 pub fn stack(section: &ServerSection, policy: &StackPolicy) -> impl Layer<..>;

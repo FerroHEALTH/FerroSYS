@@ -279,6 +279,27 @@ jobs:
       - run: cargo nextest run --workspace --all-features --locked --no-tests=warn
       - run: cargo test --doc --workspace --all-features --locked
 
+  # The documents a console's browser half reads compile for wasm32 with no
+  # feature: today the readiness document of ferrohealth-health.
+  wasm32:
+    name: wasm32 documents
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: clippy
+          target: wasm32-unknown-unknown
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy -p ferrohealth-health --target wasm32-unknown-unknown --locked -- -D warnings
+
   doc:
     name: rustdoc
     needs: detect
@@ -397,6 +418,7 @@ jobs:
       - fmt
       - clippy
       - test
+      - wasm32
       - doc
       - cargo-deny
       - publish-dry-run

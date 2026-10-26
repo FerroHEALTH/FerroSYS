@@ -224,6 +224,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrohealth-health"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ferrohealth-secret"
 version = "0.1.0"
 dependencies = [

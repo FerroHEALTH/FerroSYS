@@ -1,0 +1,217 @@
+// SPDX-FileCopyrightText: Cadasto B.V.
+// SPDX-License-Identifier: BUSL-1.1
+
+//! The readiness document a server writes and a console reads.
+//!
+//! An indicator's detail is written for an operator: it names what is wrong
+//! (a refused connection, a timeout, a full spool) and never carries a
+//! credential, a URL with its userinfo, or a value from a request.
+
+use serde::{Deserialize, Serialize};
+
+/// The state of one indicator, or of the whole process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum State {
+    /// Working.
+    Up,
+    /// Working with a fault an operator should see, such as a backlog
+    /// growing; still ready.
+    Degraded,
+    /// Not working; the process is not ready while one indicator is down.
+    Down,
+}
+
+/// Where the process is in its life.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    /// Starting: not ready yet.
+    Booting,
+    /// Serving: ready when no indicator is down.
+    Serving,
+    /// Asked to stop: never ready again, while the requests in flight
+    /// finish.
+    Draining,
+}
+
+/// The outcome of one indicator's check.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct IndicatorState {
+    /// The indicator's name, such as `database` or `cdr`.
+    pub name: String,
+    /// What the check found.
+    pub state: State,
+    /// Why the indicator is degraded or down, for an operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl IndicatorState {
+    /// The indicator `name` is up.
+    #[must_use]
+    pub fn up(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            state: State::Up,
+            detail: None,
+        }
+    }
+
+    /// The indicator `name` is degraded, for `detail`.
+    #[must_use]
+    pub fn degraded(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            state: State::Degraded,
+            detail: Some(detail.into()),
+        }
+    }
+
+    /// The indicator `name` is down, for `detail`.
+    #[must_use]
+    pub fn down(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            state: State::Down,
+            detail: Some(detail.into()),
+        }
+    }
+}
+
+/// The readiness document: the overall state, the phase, and every
+/// indicator's state in a fixed order.
+///
+/// # Examples
+///
+/// ```
+/// use ferrohealth_health::document::{IndicatorState, Phase, Readiness, State};
+///
+/// let ready = Readiness::new(Phase::Serving, vec![IndicatorState::up("database")]);
+/// assert_eq!(State::Up, ready.state);
+/// assert!(ready.is_ready());
+///
+/// let draining = Readiness::new(Phase::Draining, vec![IndicatorState::up("database")]);
+/// assert_eq!(State::Down, draining.state);
+/// assert!(!draining.is_ready());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Readiness {
+    /// `up` while the process serves and every indicator is up, `degraded`
+    /// while it serves and one is degraded and none is down, `down`
+    /// otherwise.
+    pub state: State,
+    /// Where the process is in its life.
+    pub phase: Phase,
+    /// Every indicator's state, sorted by name.
+    pub indicators: Vec<IndicatorState>,
+}
+
+impl Readiness {
+    /// The document of a process in `phase` whose indicators report
+    /// `indicators`.
+    #[must_use]
+    pub fn new(phase: Phase, mut indicators: Vec<IndicatorState>) -> Self {
+        indicators.sort_by(|a, b| a.name.cmp(&b.name));
+        let worst = indicators
+            .iter()
+            .map(|indicator| indicator.state)
+            .max()
+            .unwrap_or(State::Up);
+        let state = if phase == Phase::Serving {
+            worst
+        } else {
+            State::Down
+        };
+        Self {
+            state,
+            phase,
+            indicators,
+        }
+    }
+
+    /// Whether the process takes requests: serving, and no indicator down.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.state != State::Down
+    }
+
+    /// The status alone, as `/health` answers it.
+    #[must_use]
+    pub const fn summary(&self) -> Summary {
+        Summary { state: self.state }
+    }
+}
+
+/// The document of `/health`: the readiness state and nothing else, for a
+/// caller that may not see the detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Summary {
+    /// The readiness state.
+    pub state: State,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IndicatorState, Phase, Readiness, State, Summary};
+
+    #[test]
+    fn readiness_is_up_only_while_serving_and_every_indicator_is_up() {
+        let up = vec![IndicatorState::up("database"), IndicatorState::up("cdr")];
+        assert_eq!(State::Up, Readiness::new(Phase::Serving, up.clone()).state);
+        assert_eq!(
+            State::Down,
+            Readiness::new(Phase::Booting, up.clone()).state
+        );
+        assert_eq!(State::Down, Readiness::new(Phase::Draining, up).state);
+        assert_eq!(State::Up, Readiness::new(Phase::Serving, Vec::new()).state);
+    }
+
+    #[test]
+    fn the_worst_indicator_decides_and_degraded_stays_ready() {
+        let degraded = Readiness::new(
+            Phase::Serving,
+            vec![
+                IndicatorState::up("database"),
+                IndicatorState::degraded("spool", "the backlog grows"),
+            ],
+        );
+        assert_eq!(State::Degraded, degraded.state);
+        assert!(
+            degraded.is_ready(),
+            "a degraded process still takes requests"
+        );
+        let down = Readiness::new(
+            Phase::Serving,
+            vec![
+                IndicatorState::degraded("spool", "the backlog grows"),
+                IndicatorState::down("database", "refused"),
+            ],
+        );
+        assert_eq!(State::Down, down.state);
+        assert!(!down.is_ready(), "one indicator down is not ready");
+    }
+
+    #[test]
+    fn the_document_sorts_its_indicators_and_round_trips_as_json() {
+        let document = Readiness::new(
+            Phase::Serving,
+            vec![
+                IndicatorState::up("terminology"),
+                IndicatorState::down("cdr", "the connection was refused"),
+            ],
+        );
+        let json = serde_json::to_string(&document).expect("the document serializes");
+        assert_eq!(
+            r#"{"state":"down","phase":"serving","indicators":[{"name":"cdr","state":"down","detail":"the connection was refused"},{"name":"terminology","state":"up"}]}"#,
+            json
+        );
+        let read: Readiness = serde_json::from_str(&json).expect("the document reads");
+        assert_eq!(document, read);
+        assert_eq!(
+            r#"{"state":"down"}"#,
+            serde_json::to_string(&document.summary()).expect("the summary serializes")
+        );
+        assert_eq!(Summary { state: State::Down }, document.summary());
+    }
+}
