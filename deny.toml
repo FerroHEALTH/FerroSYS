@@ -31,6 +31,7 @@ confidence-threshold = 0.9
 # its first code.
 exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-secret" },
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-config" },
 ]
 
 [bans]
