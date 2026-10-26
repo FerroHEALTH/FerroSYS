@@ -63,20 +63,20 @@ pub fn app(
         )),
         None => product,
     };
-    let routes =
-        health::routes(health)
-            .merge(product)
-            .route_layer(axum::middleware::from_fn_with_state(
-                policy.request_log,
-                request_log::middleware,
-            ));
+    let routes = health::routes(health).merge(product);
     let routes = if section.base_path.as_str().is_empty() {
         routes
     } else {
         Router::new().nest(section.base_path.as_str(), routes)
     };
     let body = policy.panic_body;
+    // NOTE: axum `Router::layer` wraps every route and the fallback, so the matched
+    // route is still known and a request no route matched is logged too.
     routes
+        .layer(axum::middleware::from_fn_with_state(
+            policy.request_log,
+            request_log::middleware,
+        ))
         .layer(DefaultBodyLimit::max(section.body_limit_bytes))
         .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
         .layer(TimeoutLayer::with_status_code(
@@ -238,6 +238,48 @@ mod tests {
         );
         let (status, _, _) = get_status(app, "/ferrosys/health/liveness").await;
         assert_eq!(StatusCode::OK, status);
+    }
+
+    #[tokio::test]
+    async fn every_request_gets_one_line_and_a_404_names_no_route() {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+        let app = app(product(), serving(), &section(), StackPolicy::default());
+        for uri in [
+            "/ferrosys/fhir/Patient/7",
+            "/ferrosys/nothing",
+            "/elsewhere",
+        ] {
+            let _answered = get_status(app.clone(), uri).await;
+        }
+        let log = String::from_utf8(capture.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        let lines: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .filter(|line: &serde_json::Value| line["message"] == "request")
+            .collect();
+        let seen: Vec<(String, u64)> = lines
+            .iter()
+            .map(|line| {
+                (
+                    line["route"].as_str().unwrap_or_default().to_owned(),
+                    line["status"].as_u64().unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            vec![
+                ("/ferrosys/fhir/Patient/{id}".to_owned(), 200),
+                ("<unmatched>".to_owned(), 404),
+                ("<unmatched>".to_owned(), 404),
+            ],
+            seen
+        );
     }
 
     #[tokio::test]

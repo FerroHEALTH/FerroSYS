@@ -38,14 +38,90 @@ pub struct ServerSection {
 }
 
 /// The `[server.tls]` table: the certificate chain and the private key the
-/// listener serves, each in PEM.
+/// listener serves, each in PEM, and the client certificates it asks for.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawTls")]
 pub struct TlsSection {
     /// The certificate chain, the leaf first.
     pub certificate_file: std::path::PathBuf,
     /// The private key of the leaf.
     pub key_file: std::path::PathBuf,
+    /// Whether the listener asks a client certificate.
+    pub client_auth: ClientAuth,
+    /// The CA bundle a client certificate must chain to; required unless
+    /// `client_auth` is `none`.
+    pub client_ca_file: Option<std::path::PathBuf>,
+    /// How often, in seconds, the files are read again; unset, only `SIGHUP`
+    /// reads them again.
+    pub reload_interval_s: Option<std::num::NonZeroU64>,
+    /// The client certificate chain and key, in one PEM, the healthcheck
+    /// presents to a listener that asks one.
+    pub healthcheck_identity_file: Option<std::path::PathBuf>,
+}
+
+/// Whether the listener asks a client certificate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientAuth {
+    /// No client certificate is asked.
+    #[default]
+    None,
+    /// A client certificate is verified when presented.
+    Optional,
+    /// A verified client certificate is required.
+    Required,
+}
+
+/// The table as written, checked into a [`TlsSection`].
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTls {
+    certificate_file: std::path::PathBuf,
+    key_file: std::path::PathBuf,
+    #[serde(default)]
+    client_auth: ClientAuth,
+    client_ca_file: Option<std::path::PathBuf>,
+    reload_interval_s: Option<std::num::NonZeroU64>,
+    healthcheck_identity_file: Option<std::path::PathBuf>,
+}
+
+/// A `[server.tls]` table whose `client_auth` names no CA.
+#[derive(Debug, thiserror::Error)]
+#[error("client_auth asks a client certificate, and client_ca_file names no CA it must chain to")]
+pub struct NoClientCa;
+
+impl TryFrom<RawTls> for TlsSection {
+    type Error = NoClientCa;
+
+    fn try_from(raw: RawTls) -> Result<Self, Self::Error> {
+        if raw.client_auth != ClientAuth::None && raw.client_ca_file.is_none() {
+            return Err(NoClientCa);
+        }
+        Ok(Self {
+            certificate_file: raw.certificate_file,
+            key_file: raw.key_file,
+            client_auth: raw.client_auth,
+            client_ca_file: raw.client_ca_file,
+            reload_interval_s: raw.reload_interval_s,
+            healthcheck_identity_file: raw.healthcheck_identity_file,
+        })
+    }
+}
+
+impl TlsSection {
+    /// The table of `certificate_file` and `key_file` alone: no client
+    /// certificate, no reload interval.
+    #[must_use]
+    pub const fn new(certificate_file: std::path::PathBuf, key_file: std::path::PathBuf) -> Self {
+        Self {
+            certificate_file,
+            key_file,
+            client_auth: ClientAuth::None,
+            client_ca_file: None,
+            reload_interval_s: None,
+            healthcheck_identity_file: None,
+        }
+    }
 }
 
 impl Default for ServerSection {

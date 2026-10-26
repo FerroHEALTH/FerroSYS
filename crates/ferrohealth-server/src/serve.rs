@@ -97,7 +97,7 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub async fn serve_tls<F>(
     listener: TcpListener,
     app: Router,
-    tls: Arc<rustls::ServerConfig>,
+    tls: Arc<crate::tls::ReloadableTls>,
     lifecycle: Lifecycle,
     signal: F,
     delay: Duration,
@@ -106,7 +106,6 @@ pub async fn serve_tls<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let acceptor = tokio_rustls::TlsAcceptor::from(tls);
     let graceful = hyper_util::server::graceful::GracefulShutdown::new();
     let builder =
         hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
@@ -114,7 +113,7 @@ where
     tokio::pin!(signal);
     loop {
         tokio::select! {
-            accepted = listener.accept() => accept(accepted, &acceptor, &app, &builder, &graceful),
+            accepted = listener.accept() => accept(accepted, &tls, &app, &builder, &graceful),
             () = &mut signal => break,
         }
     }
@@ -127,7 +126,7 @@ where
     tokio::pin!(delayed);
     loop {
         tokio::select! {
-            accepted = listener.accept() => accept(accepted, &acceptor, &app, &builder, &graceful),
+            accepted = listener.accept() => accept(accepted, &tls, &app, &builder, &graceful),
             () = &mut delayed => break,
         }
     }
@@ -150,7 +149,7 @@ where
 /// Serves one accepted connection over TLS on its own task.
 fn accept(
     accepted: std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>,
-    acceptor: &tokio_rustls::TlsAcceptor,
+    tls: &crate::tls::ReloadableTls,
     app: &Router,
     builder: &hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
     graceful: &hyper_util::server::graceful::GracefulShutdown,
@@ -162,8 +161,8 @@ fn accept(
             return;
         }
     };
-    let acceptor = acceptor.clone();
-    let service = hyper_util::service::TowerToHyperService::new(app.clone());
+    let acceptor = tokio_rustls::TlsAcceptor::from(tls.current());
+    let app = app.clone();
     let builder = builder.clone();
     let watcher = graceful.watcher();
     tokio::spawn(async move {
@@ -178,6 +177,19 @@ fn accept(
                 return;
             }
         };
+        let peers = stream.get_ref().1.peer_certificates().map(|chain| {
+            crate::tls::PeerCertificates(
+                chain
+                    .iter()
+                    .map(|certificate| certificate.clone().into_owned())
+                    .collect(),
+            )
+        });
+        let app = match peers {
+            Some(peers) => app.layer(axum::Extension(peers)),
+            None => app,
+        };
+        let service = hyper_util::service::TowerToHyperService::new(app);
         let connection = builder
             .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
             .into_owned();
@@ -206,11 +218,67 @@ where
 {
     let (delay, bound) = (section.drain_delay(), section.shutdown_timeout());
     match &section.tls {
-        Some(tls) => {
-            let config = crate::tls::server_config(tls)?;
-            Ok(serve_tls(listener, app, config, lifecycle, signal, delay, bound).await?)
+        Some(section) => {
+            let tls = Arc::new(crate::tls::ReloadableTls::new(section)?);
+            let reloads = tokio::spawn(reload_on_signal(Arc::clone(&tls)));
+            let interval = section.reload_interval_s.map(|seconds| {
+                tokio::spawn(reload_every(
+                    Arc::clone(&tls),
+                    Duration::from_secs(seconds.get()),
+                ))
+            });
+            let served = serve_tls(listener, app, tls, lifecycle, signal, delay, bound).await;
+            reloads.abort();
+            if let Some(interval) = interval {
+                interval.abort();
+            }
+            Ok(served?)
         }
         None => Ok(serve(listener, app, lifecycle, signal, delay, bound).await?),
+    }
+}
+
+/// Reads the listener's TLS files again on every `SIGHUP`.
+async fn reload_on_signal(tls: Arc<crate::tls::ReloadableTls>) {
+    #[cfg(unix)]
+    {
+        let mut hangups = match tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::hangup(),
+        ) {
+            Ok(hangups) => hangups,
+            Err(error) => {
+                tracing::error!(%error, "cannot listen for SIGHUP; the TLS files are not read again on it");
+                return;
+            }
+        };
+        while hangups.recv().await.is_some() {
+            reload(&tls, "SIGHUP");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _unused: &Arc<crate::tls::ReloadableTls> = &tls;
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Reads the listener's TLS files again every `period`.
+async fn reload_every(tls: Arc<crate::tls::ReloadableTls>, period: Duration) {
+    let mut ticks = tokio::time::interval(period);
+    ticks.tick().await;
+    loop {
+        ticks.tick().await;
+        reload(&tls, "interval");
+    }
+}
+
+/// Reads the TLS files again, and logs the outcome.
+fn reload(tls: &crate::tls::ReloadableTls, cause: &'static str) {
+    match tls.reload() {
+        Ok(()) => tracing::info!(cause, "the TLS files were read again"),
+        Err(error) => {
+            tracing::error!(cause, %error, "the TLS files do not read; the running configuration stays");
+        }
     }
 }
 
@@ -356,17 +424,16 @@ mod tests {
             .expect("the key is written");
         Certificate {
             _dir: dir,
-            section: crate::section::TlsSection {
-                certificate_file,
-                key_file,
-            },
+            section: crate::section::TlsSection::new(certificate_file, key_file),
         }
     }
 
     #[tokio::test]
     async fn a_tls_listener_serves_the_pinned_healthcheck_and_drains() {
         let certificate = certificate();
-        let config = crate::tls::server_config(&certificate.section).expect("the TLS files read");
+        let config = std::sync::Arc::new(
+            crate::tls::ReloadableTls::new(&certificate.section).expect("the TLS files read"),
+        );
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
         let address = listener.local_addr().expect("the address");
         let lifecycle = Lifecycle::default();
@@ -422,10 +489,7 @@ mod tests {
         let certificate_file = dir.join("other.pem");
         std::fs::copy(&other.section.certificate_file, &certificate_file)
             .expect("the certificate is copied");
-        crate::section::TlsSection {
-            certificate_file,
-            key_file: dir.join("unused.key"),
-        }
+        crate::section::TlsSection::new(certificate_file, dir.join("unused.key"))
     }
 
     #[test]
@@ -439,10 +503,10 @@ mod tests {
             crate::tls::server_config(&missing),
             Err(crate::tls::TlsError::Read { .. })
         ));
-        let swapped = crate::section::TlsSection {
-            certificate_file: certificate.section.key_file.clone(),
-            key_file: certificate.section.certificate_file.clone(),
-        };
+        let swapped = crate::section::TlsSection::new(
+            certificate.section.key_file.clone(),
+            certificate.section.certificate_file.clone(),
+        );
         assert!(matches!(
             crate::tls::server_config(&swapped),
             Err(crate::tls::TlsError::Pem { .. })
