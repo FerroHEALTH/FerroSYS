@@ -25,11 +25,6 @@ use crate::envelope::{
 /// The counter of client refusals every window keeps.
 pub const RESPONSES_4XX: &str = "responses_4xx";
 
-/// A product's grouping: the request group of a method and a matched route
-/// template (`None` when no route matched), or `None` to leave the request
-/// out.
-pub type Grouping = fn(&Method, Option<&str>) -> Option<Key>;
-
 /// The latency histogram and server errors of one group.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GroupCounts {
@@ -160,19 +155,38 @@ impl Counts {
     }
 }
 
+/// The grouping a window holds, as [`Window::new`] takes it.
+type GroupingFn = dyn Fn(&Method, Option<&str>) -> Option<Key> + Send + Sync;
+
 /// The window: the counts since the last daily report.
-#[derive(Debug)]
 pub struct Window {
-    grouping: Grouping,
+    grouping: Box<GroupingFn>,
     counts: Mutex<Counts>,
+}
+
+impl std::fmt::Debug for Window {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Window")
+            .field("counts", &self.counts)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Window {
     /// A window that groups requests with `grouping`.
+    ///
+    /// `grouping` gives the request group of a method and a matched route
+    /// template (`None` when no route matched), or `None` to leave the
+    /// request out. It may capture state, such as the configurable mount
+    /// the product's routes sit under.
     #[must_use]
-    pub fn new(grouping: Grouping) -> Self {
+    pub fn new<G>(grouping: G) -> Self
+    where
+        G: Fn(&Method, Option<&str>) -> Option<Key> + Send + Sync + 'static,
+    {
         Self {
-            grouping,
+            grouping: Box::new(grouping),
             counts: Mutex::new(Counts::default()),
         }
     }
@@ -401,6 +415,34 @@ mod tests {
         let metrics = window.take().to_metrics();
         assert_eq!(MAX_GROUPS, metrics.window_24h.groups.len());
         assert_eq!(RequestsBucket::Below100, metrics.window_24h.requests_bucket);
+    }
+
+    #[test]
+    fn a_grouping_groups_below_a_base_path_it_captured() {
+        let base = String::from("/api/fhir");
+        let window = Window::new(move |_method: &Method, route: Option<&str>| {
+            match route?.strip_prefix(base.as_str())? {
+                "/metadata" => Key::new("capabilities"),
+                below if below.starts_with("/{type}") => Key::new("rest"),
+                _ => None,
+            }
+        });
+        for route in ["/api/fhir/metadata", "/api/fhir/{type}/{id}", "/metadata"] {
+            window.record(
+                &Method::GET,
+                Some(route),
+                StatusCode::OK,
+                Duration::from_millis(2),
+            );
+        }
+        let counts = window.take();
+        let groups: Vec<&str> = counts.groups.keys().map(Key::as_str).collect();
+        assert_eq!(vec!["capabilities", "rest"], groups);
+        assert_eq!(
+            2,
+            counts.requests(),
+            "a route outside the base is not counted"
+        );
     }
 
     #[cfg(feature = "telemetry")]

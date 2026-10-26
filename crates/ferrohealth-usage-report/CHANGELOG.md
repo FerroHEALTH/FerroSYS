@@ -10,6 +10,23 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
+### Changed
+
+- Breaking: `window::Window::new` takes any
+  `Fn(&Method, Option<&str>) -> Option<Key> + Send + Sync + 'static`, so a
+  grouping may capture state, such as the configurable mount a product's
+  routes sit under, and group by the part of the template below it. A
+  product that passed a `fn` item or a non-capturing closure compiles
+  unchanged; one that named `window::Grouping` names the closure bound
+  instead. `Window` is no longer `UnwindSafe` or `RefUnwindSafe` (#124).
+
+### Removed
+
+- Breaking: `window::Grouping`, the function-pointer type of a grouping
+  (#124).
+
 ## [0.1.2] - 2026-10-26
 
 ### Added
