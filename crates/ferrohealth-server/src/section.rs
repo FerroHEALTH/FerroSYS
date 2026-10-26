@@ -32,6 +32,20 @@ pub struct ServerSection {
     pub max_concurrent_requests: Option<NonZeroUsize>,
     /// The seconds a refused request is told to wait (`Retry-After`).
     pub retry_after_s: u64,
+    /// The listener's TLS; unset, the listener speaks plain HTTP behind a
+    /// proxy that terminates TLS.
+    pub tls: Option<TlsSection>,
+}
+
+/// The `[server.tls]` table: the certificate chain and the private key the
+/// listener serves, each in PEM.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsSection {
+    /// The certificate chain, the leaf first.
+    pub certificate_file: std::path::PathBuf,
+    /// The private key of the leaf.
+    pub key_file: std::path::PathBuf,
 }
 
 impl Default for ServerSection {
@@ -45,6 +59,7 @@ impl Default for ServerSection {
             shutdown_timeout_ms: 10_000,
             max_concurrent_requests: None,
             retry_after_s: 1,
+            tls: None,
         }
     }
 }

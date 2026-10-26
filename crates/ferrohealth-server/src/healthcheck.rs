@@ -12,9 +12,10 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 use crate::health::READINESS;
+use crate::tls::HealthcheckTls;
 
 /// The longest status line the check reads.
 const STATUS_LINE_LIMIT: u64 = 1024;
@@ -66,18 +67,47 @@ pub fn target(listen: SocketAddr) -> SocketAddr {
     SocketAddr::new(ip, listen.port())
 }
 
-/// Asks the server at `address` for `{base_path}/health/readiness`.
+/// Asks the server at `address` for `{base_path}/health/readiness` over
+/// plain HTTP.
 pub async fn check(address: SocketAddr, base_path: &str, timeout: Duration) -> Outcome {
-    tokio::time::timeout(timeout, ask(address, base_path))
-        .await
-        .unwrap_or(Outcome::Timeout)
+    tokio::time::timeout(timeout, async {
+        match tokio::net::TcpStream::connect(address).await {
+            Ok(stream) => ask(stream, base_path).await,
+            Err(error) => Outcome::Failed(format!("cannot connect to {address}: {error}")),
+        }
+    })
+    .await
+    .unwrap_or(Outcome::Timeout)
 }
 
-async fn ask(address: SocketAddr, base_path: &str) -> Outcome {
-    let mut stream = match tokio::net::TcpStream::connect(address).await {
-        Ok(stream) => stream,
-        Err(error) => return Outcome::Failed(format!("cannot connect to {address}: {error}")),
-    };
+/// Asks the server at `address` for `{base_path}/health/readiness` over
+/// TLS, accepting only the certificate `tls` pins.
+pub async fn check_tls(
+    address: SocketAddr,
+    base_path: &str,
+    timeout: Duration,
+    tls: &HealthcheckTls,
+) -> Outcome {
+    let connector = tokio_rustls::TlsConnector::from(tls.config());
+    tokio::time::timeout(timeout, async {
+        let stream = match tokio::net::TcpStream::connect(address).await {
+            Ok(stream) => stream,
+            Err(error) => return Outcome::Failed(format!("cannot connect to {address}: {error}")),
+        };
+        let name = rustls::pki_types::ServerName::IpAddress(address.ip().into());
+        match connector.connect(name, stream).await {
+            Ok(stream) => ask(stream, base_path).await,
+            Err(error) => Outcome::Failed(format!("the TLS handshake failed: {error}")),
+        }
+    })
+    .await
+    .unwrap_or(Outcome::Timeout)
+}
+
+async fn ask<S>(mut stream: S, base_path: &str) -> Outcome
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let request = format!(
         "GET {base_path}{READINESS} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n"
     );
@@ -85,17 +115,17 @@ async fn ask(address: SocketAddr, base_path: &str) -> Outcome {
         return Outcome::Failed(format!("cannot send the request: {error}"));
     }
     let mut head = Vec::new();
-    if let Err(error) = (&mut stream)
+    // NOTE: no specification governs this: our own design; a TLS peer that closes
+    // without close_notify still sent its status line, which is all that is read.
+    let read = (&mut stream)
         .take(STATUS_LINE_LIMIT)
         .read_to_end(&mut head)
-        .await
-    {
-        return Outcome::Failed(format!("cannot read the answer: {error}"));
-    }
-    match status(&head) {
-        Some(200) => Outcome::Healthy,
-        Some(code) => Outcome::Unhealthy(code),
-        None => Outcome::Failed("the answer is no HTTP status line".to_owned()),
+        .await;
+    match (status(&head), read) {
+        (Some(200), _) => Outcome::Healthy,
+        (Some(code), _) => Outcome::Unhealthy(code),
+        (None, Err(error)) => Outcome::Failed(format!("cannot read the answer: {error}")),
+        (None, Ok(_)) => Outcome::Failed("the answer is no HTTP status line".to_owned()),
     }
 }
 
