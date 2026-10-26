@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-26
+
 ### Added
 
 - `same_origin` (feature `console`): the layer that refuses a request whose
@@ -135,7 +137,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.1...HEAD
+[0.3.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.0...ferrohealth-server-v0.3.1
 [0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.2.0...ferrohealth-server-v0.3.0
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.1.0...ferrohealth-server-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-server-v0.1.0
