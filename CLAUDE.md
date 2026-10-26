@@ -74,14 +74,21 @@ prose promise in the README.
 
 ## Repo map
 
+- `Cargo.toml`: the workspace, with the family lint set and the shared
+  dependency table; each crate keeps its own `version`.
+- `crates/<crate>/`: one directory per crate, each with its own
+  `CHANGELOG.md` and released by the tag `<crate>-vX.Y.Z`.
 - `docs/architecture.md`: the design of record, the plan for the six crates.
 - `assets/brand/`: the gauge mark, the steel lockup and the "Olive & Iron" tokens.
 - `scripts/gh/`: the tracker helpers (`fields.sh` for the issue type and the
   `Priority` and `Effort` fields, `labels.sh`, `rel.sh` for sub-issue and
   dependency edges).
-- `scripts/checks/contribution-licence.sh` and
-  `.github/workflows/contribution-licence.yml`: the licence-box guard.
-- `.github/`: the PR template and the bug, feature and task forms.
+- `scripts/checks/`: the committed guards (comment style, licence headers,
+  `TODO(#N)` issues, the changelog structure and Security rules, the crate
+  version rule, the advisory exceptions, the contribution-licence box).
+- `.github/`: CI with the single required `conclusion` job (it also runs on
+  `merge_group`), the PR guard re-run, CodeQL, Scorecard, Dependabot, the PR
+  template and the bug, feature and task forms.
 - `.claude/memory/`: the working memory; `MEMORY.md` is the index.
 
 ## Issue workflow

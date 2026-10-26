@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+# cargo-deny configuration. Run: cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+#
+# The only advisory gate: it reads the RustSec database cargo audit does and
+# adds yanked, licences, bans and sources.
+
+[advisories]
+version = 2
+yanked = "deny"
+# An exception is dated and names the event that deletes it.
+ignore = []
+
+[licenses]
+version = 2
+# Dev-dependencies are compiled here and in CI, so their licences are read too.
+include-dev = true
+# Permissive licences a BUSL-1.1 project can depend on and its Apache 2.0
+# Change License admits. A licence joins the day a dependency needs it.
+allow = [
+  "Apache-2.0",
+  "MIT",
+]
+confidence-threshold = 0.9
+# The project's own crates are BUSL-1.1 (LICENSE); each joins the list with
+# its first code.
+exceptions = [
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-secret" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

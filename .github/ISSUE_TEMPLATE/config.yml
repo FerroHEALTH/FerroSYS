@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/FerroHEALTH/FerroSYS/security/advisories/new
+    about: >-
+      Report a vulnerability privately through GitHub Security Advisories. Do not
+      open a public issue for a security problem. See SECURITY.md.

@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+[package]
+name = "ferrohealth-secret"
+description = "The secret and redaction types of the FerroHEALTH products: secrets that never render, URLs with their credentials masked, and the key-or-file rule"
+# Its own version line, released by the tag ferrohealth-secret-v<version>.
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = true
+readme = "README.md"
+keywords = ["secret", "redaction", "configuration", "healthcare"]
+categories = ["config"]
+include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
+
+[dependencies]
+
+[lints]
+workspace = true

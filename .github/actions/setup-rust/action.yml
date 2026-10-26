@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+name: Install the Rust toolchain
+description: >-
+  Install the toolchain rust-toolchain.toml pins, with the components a job
+  asks for. The calling job checks out the repository first: a local action
+  path resolves only after checkout, so this action does not check out.
+inputs:
+  components:
+    description: Comma-separated toolchain components (rustfmt, clippy), none by default.
+    required: false
+    default: ""
+  target:
+    description: Comma-separated target triples to install beside the host's, none by default.
+    required: false
+    default: ""
+  cache:
+    description: >-
+      Restore and save the Rust build cache, on by default. A publishing lane
+      passes "false": a cache an untrusted run could poison must never feed a
+      release (.claude/rules/ci-cd.md).
+    required: false
+    default: "true"
+  cache-save-if:
+    description: An expression deciding whether the cache is saved after the job; "true" by default.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      with:
+        components: ${{ inputs.components }}
+        target: ${{ inputs.target }}
+        cache: ${{ inputs.cache }}
+        cache-save-if: ${{ inputs.cache-save-if }}
+        # An empty value keeps the action from exporting RUSTFLAGS=-D warnings
+        # to every later step; clippy carries -D warnings on its own line.
+        rustflags: ""

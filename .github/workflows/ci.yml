@@ -1,0 +1,416 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+# CI in two tiers (no specification governs this: our own design).
+#
+#   1. The workflow, shell and guard tier needs no Rust and runs on every
+#      change.
+#   2. The Rust tier runs when the workspace exists (the `detect` job looks
+#      for the root Cargo.toml after checkout, which hashFiles() at `if:` time
+#      cannot): fmt, clippy with and without every feature, nextest and the
+#      doctests, rustdoc, cargo-deny, the publish dry run.
+#
+# The `conclusion` job is the single required status check on main, and the
+# workflow runs on `merge_group`, so it serves a merge queue as it is.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    # Only the activity types that change the code under test, so a commit
+    # gets one run: an `edited` run on the same commit would cancel this one
+    # through the concurrency group and fail its `conclusion`.
+    # contribution-licence reads the description from the API when it runs,
+    # and pr-guards.yml re-runs it once this run completes.
+    types: [opened, synchronize, reopened]
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  # ---- Tier 1 ---------------------------------------------------------------
+  workflow-audit:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: zizmor@1.31.1
+      - name: Audit .github
+        # GH_TOKEN enables the online audits (impostor-commit verifies every
+        # pinned commit belongs to the repository it names).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --min-severity=low .github/
+
+  workflow-lint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Lint .github/workflows
+        # The official image, digest-pinned; it bundles the shellcheck that
+        # reads every run: block. SC2016 is excluded alone: every occurrence
+        # here is a jq filter or a printf format.
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" --workdir /repo \
+            -e SHELLCHECK_OPTS='-e SC2016' \
+            rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: shellcheck@0.11.0
+      - name: Every tracked shell program is clean at severity=style
+        run: git ls-files -z '*.sh' | xargs -0 -r shellcheck --severity=style
+      - name: The changelog Security check passes and refuses what it claims to
+        run: bash scripts/checks/changelog-security.sh --self-test
+
+  # Every section of each crate's changelog (crates/<crate>/CHANGELOG.md)
+  # holds Keep a
+  # Changelog types each once, and [Unreleased] keeps the Security rules the
+  # release plan checks on the section it cuts (no specification governs the
+  # wiring: our own design).
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Regulation (EU) 2024/2847 Annex I Part II(2), (4) and (8): every
+      # Security entry names its GHSA advisory or VEX statement, and a
+      # Security section beside other changes opens with its reason.
+      - name: Every crate's changelog keeps the structure and the Security rules
+        run: |
+          set -euo pipefail
+          for changelog in crates/*/CHANGELOG.md; do
+            bash scripts/checks/changelog-structure.sh "$changelog"
+            VEX_ROOT=. bash scripts/checks/changelog-security.sh --section Unreleased "$changelog"
+          done
+
+  comment-style:
+    name: comment-style
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash scripts/checks/comment-style.sh --all
+
+  # No first-party file claims a licence other than BUSL-1.1.
+  licence-headers:
+    name: licence-headers
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: bash scripts/checks/licence-headers.sh
+
+  # Every TODO(#N) names an open issue.
+  todo-issues:
+    name: todo-issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every pending-work pointer names an open issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/checks/todo-issues.sh
+
+  # A person's pull request records acceptance of the contribution licensing
+  # terms (CONTRIBUTING.md § Licensing of contributions) through the
+  # template's checkbox. Bots are skipped: a bot cannot accept terms. The
+  # body is read when the step runs, and pr-guards.yml re-runs this job when
+  # the description changes, so ticking the box takes effect.
+  contribution-licence:
+    name: contribution-licence
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # the description when the step runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The pull request body accepts the contribution licensing terms
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          PR_BODY=$(gh api "repos/${GH_REPO}/pulls/${PR}" --jq '.body // ""')
+          export PR_BODY
+          bash scripts/checks/contribution-licence.sh
+
+  detect:
+    name: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      cargo: ${{ steps.find.outputs.cargo }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: find
+        run: |
+          set -euo pipefail
+          if [ -f Cargo.toml ]; then echo "cargo=true"; else echo "cargo=false"; fi >> "$GITHUB_OUTPUT"
+
+  # ---- Tier 2 ---------------------------------------------------------------
+  fmt:
+    name: rustfmt
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt
+          cache: "false"
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: clippy
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Each crate is linted with its default features and with every
+      # feature, the two builds a product links.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: nextest
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest
+      # A crate that holds its name at 0.0.0 has no test yet, which is no
+      # failure of the workspace.
+      - run: cargo nextest run --workspace --locked --no-tests=warn
+      - run: cargo nextest run --workspace --all-features --locked --no-tests=warn
+      - run: cargo test --doc --workspace --all-features --locked
+
+  doc:
+    name: rustdoc
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo doc --locked --workspace --all-features --no-deps --document-private-items
+
+  cargo-deny:
+    name: cargo-deny
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+      # An `ignore` entry that outlived its finding: cargo-deny reports it as a
+      # warning, so the step above stays green on one; this promotes it to an
+      # error. Here because cargo-deny and the toolchain are installed.
+      - name: No exception for an advisory that no longer fires
+        run: bash scripts/checks/advisory-exceptions.sh
+
+  # No cache: the dry run checks the bytes a publish would upload.
+  publish-dry-run:
+    name: publish-dry-run
+    needs: detect
+    if: needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      # NOTE: Cargo packages the workspace members together, so a crate verifies
+      # against the workspace crates it depends on before those are on crates.io.
+      - run: cargo publish --workspace --dry-run --locked
+
+  crate-version-guard:
+    name: crate-version-guard
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The version, the lock and the changelog agree
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/checks/crate-version-guard.sh "$BASE" "$HEAD"
+
+  dependency-review:
+    name: dependency-review
+    needs: detect
+    if: github.event_name == 'pull_request' && needs.detect.outputs.cargo == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  # ---- The single required check --------------------------------------------
+  # It needs every other job and runs on always(), so it reports even when a
+  # gated tier is skipped; it fails when a needed job failed or was cancelled.
+  conclusion:
+    name: conclusion
+    needs:
+      - workflow-audit
+      - workflow-lint
+      - shellcheck
+      - changelog
+      - comment-style
+      - licence-headers
+      - todo-issues
+      - contribution-licence
+      - detect
+      - fmt
+      - clippy
+      - test
+      - doc
+      - cargo-deny
+      - publish-dry-run
+      - crate-version-guard
+      - dependency-review
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every required job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "needed job results: ${RESULTS}"
+          case " ${RESULTS} " in
+            *" failure "* | *" cancelled "*)
+              echo "a required job failed or was cancelled"
+              exit 1
+              ;;
+          esac
+          echo "all required jobs passed or were skipped"
