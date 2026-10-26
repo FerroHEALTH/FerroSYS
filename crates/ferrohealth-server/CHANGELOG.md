@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - `stack::app`, the stack every server runs under its base path: the
@@ -30,3 +32,6 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   the base path and the bounds refused at load when invalid (#17).
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-server-v0.1.0
