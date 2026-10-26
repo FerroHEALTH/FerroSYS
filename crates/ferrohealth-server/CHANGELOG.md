@@ -10,6 +10,14 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `same_origin` (feature `console`): the layer that refuses a request whose
+  method is not safe unless `Sec-Fetch-Site` is `same-origin`, or without
+  it `Origin`, or without that the origin of `Referer`, shows the console's
+  own origin; the refusal is a `403` in the product's `RefusalBody`,
+  marked `no-store` and carrying the typed `CrossOrigin` reason (#100).
+
 ## [0.3.0] - 2026-10-26
 
 ### Added
