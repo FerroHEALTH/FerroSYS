@@ -10,6 +10,20 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `[server.tls]` and `serve::serve_tls`: the listener serves its own
+  certificate chain and key over TLS 1.3 and 1.2 with HTTP/2 and HTTP/1.1 by
+  ALPN, the key read through `ferrohealth-secret`, each handshake bounded,
+  and the same bounded drain as plain HTTP; `serve::run` picks the one the
+  section configures (#32).
+- `healthcheck::check_tls` and `tls::HealthcheckTls`: the container probe
+  speaks TLS to a TLS listener over loopback and accepts exactly the leaf
+  certificate the listener's file holds (#32).
+- `build_info::BuildInfo` and `build_info::banner`: the commit, build
+  instant and compiler a product's build script records, and the boot banner
+  printed only for the `pretty` console (#32).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

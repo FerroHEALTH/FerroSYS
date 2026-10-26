@@ -51,6 +51,12 @@ ferrohealth-health = { path = "crates/ferrohealth-health", version = "=0.1.0" }
 tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit"] }
 clap = { version = "4.6.7", features = ["derive"] }
 uuid = { version = "1.29.0", default-features = false, features = ["v4", "std"] }
+# The listener's TLS: rustls behind tokio-rustls on the lines the products
+# resolve, the hyper connection the TLS listener serves, and the test
+# certificates. Verified against crates.io on 2026-10-26.
+hyper-util = { version = "0.1.21", default-features = false, features = ["server-auto", "server-graceful", "service", "tokio", "http1", "http2"] }
+tokio-rustls = { version = "0.26.6", default-features = false }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 # ferrohealth-usage-report: the client to the collector, the clock of the
 # start record, and the schema validator and stub collector of its tests.
 # Verified against crates.io on 2026-10-26.

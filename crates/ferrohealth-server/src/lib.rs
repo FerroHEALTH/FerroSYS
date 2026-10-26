@@ -18,13 +18,16 @@
 //!
 //! [`serve::serve`] runs the app until `SIGTERM` or `SIGINT`, then withdraws
 //! readiness, waits the drain delay and finishes the requests in flight
-//! within a bound. [`healthcheck`] is the container probe, [`cli::Common`]
-//! the subcommands every binary shares, and `console` (feature `console`)
-//! the browser security headers of an operator console.
+//! within a bound, over TLS when `[server.tls]` is set ([`tls`]).
+//! [`healthcheck`] is the container probe, [`cli::Common`] the subcommands
+//! every binary shares, [`build_info`] the build facts and the boot banner,
+//! and `console` (feature `console`) the browser security headers of an
+//! operator console.
 //!
 //! No specification governs the stack: our own design, with the status
 //! codes and `Retry-After` of RFC 9110.
 
+pub mod build_info;
 pub mod cli;
 #[cfg(feature = "console")]
 pub mod console;
@@ -36,3 +39,4 @@ pub mod request_id;
 pub mod section;
 pub mod serve;
 pub mod stack;
+pub mod tls;
