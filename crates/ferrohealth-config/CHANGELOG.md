@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-26
+
 ### Added
 
 - A top-level key through the environment: `<PREFIX>__KEY` (#58).
@@ -26,6 +28,7 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ### Changed
 
+- It builds on `ferrohealth-secret` 0.2.0.
 - `Loader` no longer implements `PartialEq` and `Eq`, since an alias may
   carry a transform function; `provenance::Source` gains `Set` (#59, #61).
 
@@ -50,5 +53,6 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.1.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.0...HEAD
+[0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.1.0...ferrohealth-config-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-config-v0.1.0
