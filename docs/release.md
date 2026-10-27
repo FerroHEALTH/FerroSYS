@@ -44,6 +44,21 @@ On the branch `release/<tag>`:
 4. **The gates pass.** The crate-version guard checks that the version, the
    lock and the changelog section agree.
 
+### A breaking change moves the version in its own pull request
+
+`cargo-semver-checks` runs on every pull request (§ Preflight), so a change
+that breaks the public API cannot merge at the crate's current version. The
+pull request that breaks it moves the version itself: the minor version
+while the line is `0.x`, with `cargo update -w`, and because the
+crate-version guard then asks for a section of the new version, it also
+opens `## [X.Y.0]` with the breaking entries and leaves `## [Unreleased]`
+empty above it (ferrohealth-usage-report 0.2.0, #126, is the worked
+example). The release pull request that follows only sets the section's
+date to the day of the cut, refreshes the link references and moves the
+`README.md` install line; steps 2 and 3 above have nothing else left to do.
+A patch or an additive minor change leaves the version to the release pull
+request as described.
+
 ## Security entries
 
 Two rules of Regulation (EU) 2024/2847 hold every Security section, and
