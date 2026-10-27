@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::{ConfigError, mask_values, position};
@@ -71,6 +72,7 @@ pub struct Loader {
     aliases: Vec<Alias>,
     reserved: Vec<String>,
     renames: Vec<Deprecation>,
+    defaults: toml::Table,
 }
 
 /// A transform of an alias's value, such as a port into a listen address.
@@ -203,7 +205,91 @@ impl Loader {
             aliases: Vec::new(),
             reserved: Vec::new(),
             renames: Vec::new(),
+            defaults: toml::Table::new(),
         })
+    }
+
+    /// Layers `value` as the product's defaults for the dotted key `key`,
+    /// the whole tree when `key` is empty, under the file, the environment
+    /// and the `--set` pairs.
+    ///
+    /// A key no source sets takes the product's value in place of the
+    /// tree's `Default`, key by key, so a partial table keeps every product
+    /// default it does not name, and the provenance reports the key as
+    /// [`Source::Default`](crate::provenance::Source::Default). A key both
+    /// this call and an earlier one set takes this call's value. A key
+    /// `value` does not serialize, such as an `Option` that is `None`, falls
+    /// back to the tree's `Default`. A secret serializes as its redaction
+    /// marker, so a secret takes no product default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    ///
+    /// use ferrohealth_config::loader::Loader;
+    /// use ferrohealth_config::provenance::Source;
+    ///
+    /// #[derive(Debug, Default, serde::Deserialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Config {
+    ///     server: Server,
+    /// }
+    ///
+    /// // The section of a shared crate, with the shared crate's defaults.
+    /// #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Server {
+    ///     listen: String,
+    ///     body_limit_bytes: usize,
+    /// }
+    ///
+    /// impl Default for Server {
+    ///     fn default() -> Self {
+    ///         Self { listen: "127.0.0.1:8080".to_owned(), body_limit_bytes: 1_048_576 }
+    ///     }
+    /// }
+    ///
+    /// let product = Server { listen: "0.0.0.0:8080".to_owned(), body_limit_bytes: 64 << 20 };
+    /// let loader = Loader::new("FERROSYS")?.defaults("server", &product)?;
+    /// let loaded = loader.load_sources::<Config>(
+    ///     Some("[server]\nlisten = \"10.0.0.5:8080\"\n"),
+    ///     None,
+    ///     &BTreeMap::new(),
+    /// )?;
+    /// assert_eq!("10.0.0.5:8080", loaded.settings().server.listen);
+    /// assert_eq!(64 << 20, loaded.settings().server.body_limit_bytes);
+    /// assert_eq!(Source::Default, loaded.provenance().source("server.body_limit_bytes"));
+    /// # Ok::<(), ferrohealth_config::error::ConfigError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Assemble`] when `value` does not serialize to
+    /// a TOML table.
+    pub fn defaults<D: Serialize + ?Sized>(
+        mut self,
+        key: &str,
+        value: &D,
+    ) -> Result<Self, ConfigError> {
+        let mut table = match toml::Value::try_from(value) {
+            Ok(toml::Value::Table(table)) => table,
+            Ok(_) => {
+                return Err(ConfigError::Assemble {
+                    source: <toml::ser::Error as serde::ser::Error>::custom(
+                        "the defaults of a key are a table",
+                    ),
+                });
+            }
+            Err(source) => return Err(ConfigError::Assemble { source }),
+        };
+        if !key.is_empty() {
+            for segment in key.rsplit('.') {
+                table = toml::Table::from_iter([(segment.to_owned(), toml::Value::Table(table))]);
+            }
+        }
+        overlay(&mut self.defaults, table);
+        Ok(self)
     }
 
     /// Adds `variable` as an alias that sets the dotted key `key`.
@@ -435,6 +521,7 @@ impl Loader {
             for path in &dropped {
                 remove(&mut table, path);
             }
+            fill(&mut table, &self.defaults);
             // The merged tree is written and read again so every refusal
             // carries the position of its key, which a `Table` cannot report.
             let merged =
@@ -697,6 +784,36 @@ fn remove(table: &mut toml::Table, path: &[String]) {
     let _removed: Option<toml::Value> = take(table, path);
 }
 
+/// Puts every key of `above` into `below`, merging the tables both hold.
+fn overlay(below: &mut toml::Table, above: toml::Table) {
+    for (key, value) in above {
+        match (below.get_mut(&key), value) {
+            (Some(toml::Value::Table(inner)), toml::Value::Table(value)) => overlay(inner, value),
+            (_, value) => {
+                below.insert(key, value);
+            }
+        }
+    }
+}
+
+/// Puts every key of `defaults` that `table` does not hold into it, into
+/// the tables both hold too.
+fn fill(table: &mut toml::Table, defaults: &toml::Table) {
+    for (key, default) in defaults {
+        match table.get_mut(key) {
+            Some(toml::Value::Table(set)) => {
+                if let toml::Value::Table(default) = default {
+                    fill(set, default);
+                }
+            }
+            Some(_) => {}
+            None => {
+                table.insert(key.clone(), default.clone());
+            }
+        }
+    }
+}
+
 /// Puts `value` at `path` in `table`, creating the tables above it.
 fn insert(table: &mut toml::Table, path: &[String], value: toml::Value) {
     let Some((last, parents)) = path.split_last() else {
@@ -814,6 +931,72 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    fn product_defaults() -> Loader {
+        let product = Server {
+            listen: "0.0.0.0:8080".to_owned(),
+            body_limit_bytes: 64 << 20,
+            tls: true,
+            origins: vec!["https://product.example".to_owned()],
+        };
+        loader()
+            .defaults("server", &product)
+            .expect("the defaults serialize")
+    }
+
+    #[test]
+    fn a_partial_table_keeps_the_product_defaults_and_every_source_wins_over_them() {
+        let loaded = product_defaults()
+            .load_sources::<Config>(Some("[server]\ntls = false\n"), None, &BTreeMap::new())
+            .expect("the file loads");
+        let server = &loaded.settings().server;
+        assert_eq!("0.0.0.0:8080", server.listen, "a product default stands");
+        assert_eq!(64 << 20, server.body_limit_bytes);
+        assert!(!server.tls, "an explicit file value wins");
+        assert_eq!(vec!["https://product.example".to_owned()], server.origins);
+        assert_eq!(Source::Default, loaded.provenance().source("server.listen"));
+        assert_eq!(Source::File, loaded.provenance().source("server.tls"));
+
+        let loaded = product_defaults()
+            .load_sources_with::<Config>(
+                Some("[server]\nlisten = \"10.0.0.5:8080\"\n"),
+                None,
+                &environment(&[("FERROSYS__SERVER__BODY_LIMIT_BYTES", "2048")]),
+                &[(
+                    "server.origins".to_owned(),
+                    "[\"https://set.example\"]".to_owned(),
+                )],
+            )
+            .expect("the sources load");
+        let server = &loaded.settings().server;
+        assert_eq!("10.0.0.5:8080", server.listen);
+        assert_eq!(2048, server.body_limit_bytes);
+        assert_eq!(vec!["https://set.example".to_owned()], server.origins);
+        assert!(server.tls, "the product default stands beside them");
+    }
+
+    #[test]
+    fn without_a_server_table_the_product_defaults_stand_and_a_later_call_wins() {
+        let loaded = product_defaults()
+            .defaults(
+                "server",
+                &toml::Table::from_iter([("tls".to_owned(), false.into())]),
+            )
+            .expect("a table serializes")
+            .load_sources::<Config>(None, None, &BTreeMap::new())
+            .expect("the defaults load");
+        assert_eq!("0.0.0.0:8080", loaded.settings().server.listen);
+        assert!(!loaded.settings().server.tls, "the later call wins");
+        assert_eq!(
+            Format::Auto,
+            loaded.settings().telemetry.format,
+            "a section without product defaults keeps the tree's"
+        );
+        assert!(matches!(
+            loader().defaults("server.listen", "0.0.0.0:8080"),
+            Err(ConfigError::Assemble { .. })
+        ));
     }
 
     #[test]
