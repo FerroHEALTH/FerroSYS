@@ -10,6 +10,13 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `Health::registry` returns the `Registry` the health routes read, beside
+  `Health::lifecycle`, so a product builds its registry and lifecycle once
+  and reads the readiness with its detail from the same indicators the
+  routes serve (#135).
+
 ### Fixed
 
 - `serve::run`, `serve::run_all`, `serve::serve` and `serve::serve_tls` set
