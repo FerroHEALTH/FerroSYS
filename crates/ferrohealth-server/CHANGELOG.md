@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-27
+
 ### Added
 
 - `refusal::keep_status` lets a product's `RefusalBody` answer a status of
@@ -221,7 +223,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.5...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.6...HEAD
+[0.3.6]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.5...ferrohealth-server-v0.3.6
 [0.3.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.4...ferrohealth-server-v0.3.5
 [0.3.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.3...ferrohealth-server-v0.3.4
 [0.3.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.2...ferrohealth-server-v0.3.3
