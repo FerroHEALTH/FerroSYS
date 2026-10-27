@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-27
+
 ### Added
 
 - A product states its own `ServerSection` defaults, such as listening on
@@ -199,7 +201,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.4...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.5...HEAD
+[0.3.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.4...ferrohealth-server-v0.3.5
 [0.3.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.3...ferrohealth-server-v0.3.4
 [0.3.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.2...ferrohealth-server-v0.3.3
 [0.3.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.1...ferrohealth-server-v0.3.2
