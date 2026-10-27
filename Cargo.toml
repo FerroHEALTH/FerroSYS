@@ -51,7 +51,7 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
 http = "1.5.0"
-ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.2.0" }
+ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.2.2" }
 ferrohealth-health = { path = "crates/ferrohealth-health", version = "0.1.1" }
 # ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.
 # Verified against crates.io on 2026-10-26.
