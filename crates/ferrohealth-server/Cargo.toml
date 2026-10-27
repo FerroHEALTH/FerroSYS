@@ -34,6 +34,7 @@ ferrohealth-secret.workspace = true
 ferrohealth-health = { workspace = true, features = ["registry"] }
 ferrohealth-telemetry = { workspace = true, features = ["axum"] }
 http.workspace = true
+hyper.workspace = true
 hyper-util.workspace = true
 ipnet.workspace = true
 pin-project-lite.workspace = true
@@ -54,6 +55,7 @@ uuid.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 ferrohealth-config.workspace = true
+hyper = { workspace = true, features = ["client", "http2"] }
 rcgen.workspace = true
 tempfile.workspace = true
 toml.workspace = true
