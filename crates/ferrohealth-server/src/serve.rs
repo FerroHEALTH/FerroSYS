@@ -91,14 +91,64 @@ where
 }
 
 /// What every accepted connection of one listener shares: the one router,
-/// the TLS, the connection builder, the drain and the task of every
-/// connection, which the drain aborts once its bound passes.
+/// the TLS, the connection builder, the drain, the task of every connection
+/// and the task of every HTTP/2 stream, which the drain aborts once its
+/// bound passes.
 struct Connections {
     app: Router,
     tls: Option<Arc<crate::tls::ReloadableTls>>,
-    builder: hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>,
+    builder: hyper_util::server::conn::auto::Builder<Streams>,
     graceful: hyper_util::server::graceful::GracefulShutdown,
     tasks: tokio::task::JoinSet<()>,
+    streams: Streams,
+}
+
+/// The executor of the HTTP/2 streams of one listener.
+///
+/// hyper serves each HTTP/2 request on a task its executor spawns, apart
+/// from the connection's task
+/// (<https://docs.rs/hyper/1/hyper/server/conn/http2/struct.Builder.html#method.new>),
+/// so aborting the connection would leave the handler running; these tasks
+/// live in one set the drain aborts with the connections.
+#[derive(Clone, Default)]
+struct Streams(Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>);
+
+impl<F> hyper::rt::Executor<F> for Streams
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    fn execute(&self, future: F) {
+        let mut tasks = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while tasks.try_join_next().is_some() {}
+        tasks.spawn(future);
+    }
+}
+
+impl Streams {
+    /// Aborts every stream still running and waits for each to end.
+    async fn shutdown(&self) {
+        let mut tasks = {
+            let mut guard = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *guard)
+        };
+        tasks.shutdown().await;
+    }
+}
+
+/// Sets `TCP_NODELAY` on an accepted connection, so a small response is
+/// sent at once.
+fn no_delay(stream: &tokio::net::TcpStream) {
+    // NOTE: RFC 9293 §3.7.4 lets a sender hold a small segment back while data
+    // is unacknowledged, which the peer's delayed ACK stretches per response.
+    if let Err(error) = stream.set_nodelay(true) {
+        tracing::warn!(%error, "TCP_NODELAY could not be set on a connection");
+    }
 }
 
 impl Connections {
@@ -107,8 +157,8 @@ impl Connections {
         tls: Option<Arc<crate::tls::ReloadableTls>>,
         header_read_timeout: Duration,
     ) -> Self {
-        let mut builder =
-            hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+        let streams = Streams::default();
+        let mut builder = hyper_util::server::conn::auto::Builder::new(streams.clone());
         // NOTE: hyper bounds the request head only with a timer set
         // (<https://docs.rs/hyper/1/hyper/server/conn/http1/struct.Builder.html#method.timer>).
         builder
@@ -122,6 +172,7 @@ impl Connections {
             builder,
             graceful: hyper_util::server::graceful::GracefulShutdown::new(),
             tasks: tokio::task::JoinSet::new(),
+            streams,
         }
     }
 
@@ -135,6 +186,7 @@ impl Connections {
                 return;
             }
         };
+        no_delay(&stream);
         let app = self.app.clone();
         let builder = self.builder.clone();
         let watcher = self.graceful.watcher();
@@ -267,6 +319,7 @@ where
     let Connections {
         graceful,
         mut tasks,
+        streams,
         ..
     } = connections;
     let drained = if tokio::time::timeout(bound, graceful.shutdown())
@@ -283,8 +336,9 @@ where
     };
     // NOTE: `JoinSet::shutdown` aborts every task and waits for each to end
     // (<https://docs.rs/tokio/1/tokio/task/struct.JoinSet.html#method.shutdown>),
-    // so no connection outlives the drain.
+    // so no connection, and then no HTTP/2 stream, outlives the drain.
     tasks.shutdown().await;
+    streams.shutdown().await;
     drained
 }
 
@@ -913,5 +967,135 @@ mod tests {
         );
         stop.send(()).expect("the server listens for the signal");
         let _drained = served.await.expect("the task ends");
+    }
+
+    #[tokio::test]
+    async fn an_accepted_connection_sends_without_delay() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let _client = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("a connection");
+        let (accepted, _peer) = listener.accept().await.expect("accepted");
+        assert!(!accepted.nodelay().expect("the option reads"));
+        super::no_delay(&accepted);
+        assert!(
+            accepted.nodelay().expect("the option reads"),
+            "every accepted connection, plain or TLS, has TCP_NODELAY set"
+        );
+    }
+
+    /// A handler that never answers and, once woken, holds its worker for
+    /// half a second in each poll, so only an abort the drain waits for
+    /// ends it before `run` returns.
+    struct Stubborn {
+        polls: usize,
+        started: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        _running: Running,
+    }
+
+    impl Future for Stubborn {
+        type Output = &'static str;
+
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Self::Output> {
+            self.polls += 1;
+            if self.polls == 1 {
+                self.started
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            } else {
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            std::task::Poll::Pending
+        }
+    }
+
+    /// Counts its own drop, so a test sees a handler cancelled.
+    struct Running(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for Running {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_http2_handler_still_running_at_the_bound_is_cancelled_when_run_returns() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let started = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let product = Router::new().route(
+            "/hold",
+            get({
+                let (started, dropped) = (started.clone(), dropped.clone());
+                move || Stubborn {
+                    polls: 0,
+                    started,
+                    _running: Running(dropped),
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let lifecycle = Lifecycle::default();
+        let section = ServerSection {
+            drain_delay_ms: 0,
+            shutdown_timeout_ms: 300,
+            ..ServerSection::default()
+        };
+        let app = app(
+            product,
+            Health::new(Registry::default(), lifecycle.clone()),
+            &section,
+            StackPolicy::default(),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let served = tokio::spawn(async move {
+            super::run(listener, app, &section, lifecycle, async move {
+                let _received = stopped.await;
+            })
+            .await
+        });
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("a connection");
+        let (mut sender, connection) = hyper::client::conn::http2::handshake(
+            hyper_util::rt::TokioExecutor::new(),
+            hyper_util::rt::TokioIo::new(stream),
+        )
+        .await
+        .expect("the HTTP/2 handshake");
+        let client = tokio::spawn(connection);
+        let request = tokio::spawn(
+            sender.send_request(
+                http::Request::get("http://localhost/hold")
+                    .body(axum::body::Body::empty())
+                    .expect("the request builds"),
+            ),
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while started.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the handler starts");
+        stop.send(()).expect("the server listens for the signal");
+        let drained = tokio::time::timeout(Duration::from_secs(5), served)
+            .await
+            .expect("the drain is bounded")
+            .expect("the task ends")
+            .expect("the server serves");
+        assert_eq!(Drained::Cut, drained);
+        assert_eq!(
+            1,
+            dropped.load(Ordering::SeqCst),
+            "the handler is cancelled before run returns"
+        );
+        request.abort();
+        client.abort();
     }
 }
