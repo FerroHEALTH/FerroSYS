@@ -17,6 +17,17 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   and reads the readiness with its detail from the same indicators the
   routes serve (#135).
 
+### Fixed
+
+- `serve::run`, `serve::run_all`, `serve::serve` and `serve::serve_tls` set
+  `TCP_NODELAY` on every accepted connection, plain and TLS, so a small
+  response no longer waits on Nagle's algorithm and the client's delayed
+  acknowledgment (#137).
+- The handler of an HTTP/2 request still running when the drain bound
+  passes is cancelled before `serve::run` and the other serve calls return,
+  as an HTTP/1.1 handler already was: hyper runs HTTP/2 handlers on tasks of
+  their own, which now live in a set the drain aborts and waits for (#131).
+
 ## [0.3.4] - 2026-10-27
 
 ### Fixed

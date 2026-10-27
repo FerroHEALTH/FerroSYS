@@ -783,6 +783,7 @@ dependencies = [
  "ferrohealth-secret",
  "ferrohealth-telemetry",
  "http",
+ "hyper",
  "hyper-util",
  "ipnet",
  "pin-project-lite",
