@@ -16,10 +16,12 @@ runs the same stack, the same health routes and the same shutdown.
     panic message in the body or the log;
   - the request timeout (`408`) and the body limit (`413`);
   - the refusals the stack writes itself (`408`, `413`, `429`, `503`) in
-    the body the product supplies, such as a FHIR `OperationOutcome`;
+    the body the product supplies, such as a FHIR `OperationOutcome`, which
+    may answer a status of its own with `refusal::keep_status`;
   - the overload bound: past `max_concurrent_requests` a request is answered
     `503` with `Retry-After`, and the health routes are never refused;
-  - the request log of `ferrohealth-telemetry`.
+  - the request log of `ferrohealth-telemetry`, one line for every request,
+    a refusal and a panic included.
 - `health::routes` serves `/health`, `/health/liveness` and
   `/health/readiness` over `ferrohealth-health`. Readiness names each
   indicator and its state and never its detail, since anyone who reaches

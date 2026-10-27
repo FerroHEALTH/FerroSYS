@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: Cadasto B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The outer service of the stack: the request id, the client address, the
-//! panic catch, the request timeout, the declared body limit and the
-//! rendering of every refusal and panic, as one service with one unboxed
-//! future.
+//! The outer services of the stack: [`Identify`] mints the request id, and
+//! [`Edge`], inside the request log, reads the client address, catches a
+//! panic, bounds the request time and the declared body, and renders every
+//! refusal and panic, as one service with one unboxed future.
 //!
 //! Each of these was its own layer, and a stack of `axum::middleware`
 //! layers boxes a future and clones the services inside it for every
-//! request. No specification governs this: our own design.
+//! request. The request id is minted outside the request log, so its line
+//! names it, and everything else is inside, so every answer the edge writes
+//! leaves its line. No specification governs this: our own design.
 
 use std::any::Any;
 use std::future::Future;
@@ -16,6 +18,7 @@ use std::net::SocketAddr;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -25,6 +28,7 @@ use axum::extract::ConnectInfo;
 use axum::response::Response;
 use ferrohealth_telemetry::request_log::RequestId;
 use http::{HeaderValue, Request, StatusCode, Uri};
+use hyper::body::{Frame, SizeHint};
 use tokio::time::{Instant, Sleep};
 
 use crate::client_address::{ClientAddress, Forwarding};
@@ -44,6 +48,51 @@ pub(crate) struct Settings {
     pub(crate) timeout: Duration,
     /// The body limit, in bytes.
     pub(crate) body_limit: usize,
+}
+
+/// The layer that mints the request id, outside the request log.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct IdentifyLayer;
+
+impl<S> tower::Layer<S> for IdentifyLayer {
+    type Service = Identify<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Identify { inner }
+    }
+}
+
+/// Mints the server's request id into the request's extensions and drops
+/// an illegal client id; [`Edge`] echoes the one or the other.
+#[derive(Clone)]
+pub(crate) struct Identify<S> {
+    inner: S,
+}
+
+impl<S, B> tower::Service<Request<B>> for Identify<S>
+where
+    S: tower::Service<Request<B>>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut request: Request<B>) -> Self::Future {
+        let client_named = request_id::client_value(request.headers()).is_some();
+        // NOTE: no specification governs this: our own design; an illegal client id
+        // is dropped before any handler sees it, so nothing downstream reads it.
+        if !client_named {
+            request.headers_mut().remove(request_id::HEADER);
+        }
+        request
+            .extensions_mut()
+            .insert(request_id::mint_id(client_named));
+        self.inner.call(request)
+    }
 }
 
 /// The layer of the outer service.
@@ -81,6 +130,8 @@ struct Answer {
     uri: Uri,
     id: RequestId,
     client: Option<HeaderValue>,
+    /// Set once a body with no declared length passed the limit.
+    over_limit: Option<Arc<AtomicBool>>,
 }
 
 impl Answer {
@@ -126,13 +177,16 @@ where
 
     fn call(&mut self, mut request: Request<Body>) -> Self::Future {
         let client = request_id::client_value(request.headers());
-        // NOTE: no specification governs this: our own design; an illegal client id
-        // is dropped before any handler sees it, so nothing downstream reads it.
-        if client.is_none() {
-            request.headers_mut().remove(request_id::HEADER);
-        }
-        let id = request_id::mint_id(client.is_some());
-        request.extensions_mut().insert(id.clone());
+        let id = if let Some(id) = request.extensions().get::<RequestId>() {
+            id.clone()
+        } else {
+            if client.is_none() {
+                request.headers_mut().remove(request_id::HEADER);
+            }
+            let id = request_id::mint_id(client.is_some());
+            request.extensions_mut().insert(id.clone());
+            id
+        };
         let peer = request
             .extensions()
             .get::<ConnectInfo<SocketAddr>>()
@@ -141,19 +195,39 @@ where
             let address = self.settings.forwarding.client(peer, request.headers());
             request.extensions_mut().insert(ClientAddress(address));
         }
-        let answer = Answer {
-            settings: Arc::clone(&self.settings),
-            uri: request.uri().clone(),
-            id,
-            client,
-        };
         // NOTE: RFC 9110 §15.5.14, a declared length past the limit is refused
         // before the body is read; a streamed body is cut by the limit below.
         let declared = request
             .headers()
             .get(http::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok()?.parse::<usize>().ok());
-        if declared.is_some_and(|length| length > self.settings.body_limit) {
+        let limit = self.settings.body_limit;
+        let watched_limit = u64::try_from(limit).unwrap_or(u64::MAX);
+        let over_limit = match declared {
+            Some(_) => None,
+            None if request
+                .body()
+                .size_hint()
+                .upper()
+                .is_some_and(|upper| upper <= watched_limit) =>
+            {
+                None
+            }
+            None => {
+                let over = Arc::new(AtomicBool::new(false));
+                let flag = Arc::clone(&over);
+                request = request.map(|body| Body::new(Watched::new(body, watched_limit, flag)));
+                Some(over)
+            }
+        };
+        let answer = Answer {
+            settings: Arc::clone(&self.settings),
+            uri: request.uri().clone(),
+            id,
+            client,
+            over_limit,
+        };
+        if declared.is_some_and(|length| length > limit) {
             return EdgeFuture {
                 state: State::TooLarge,
                 answer,
@@ -254,10 +328,20 @@ where
     }
 }
 
-/// A response from inside the stack: a refusal [`refusal::refused`] marked
-/// is written in the product's shape, and any other is the handler's own.
+/// A response from inside the stack: a refusal [`refusal::refused`] marked,
+/// and a `413` raised once a streamed body passed the limit, are written in
+/// the product's shape, and any other is the handler's own.
 fn answered(answer: &Answer, response: Response) -> Response {
-    match refusal::reason(&response) {
+    let reason = refusal::reason(&response).or_else(|| {
+        let streamed_over = response.status() == StatusCode::PAYLOAD_TOO_LARGE
+            && !refusal::is_default(&answer.settings.refusal_body)
+            && answer
+                .over_limit
+                .as_ref()
+                .is_some_and(|over| over.load(Ordering::Relaxed));
+        streamed_over.then_some(refusal::TOO_LARGE)
+    });
+    match reason {
         Some(reason) => refusal::rewrite(
             &answer.settings.refusal_body,
             &answer.uri,
@@ -266,6 +350,59 @@ fn answered(answer: &Answer, response: Response) -> Response {
             reason,
         ),
         None => response,
+    }
+}
+
+/// A request body with no declared length, which marks when more than the
+/// limit has been read from it; the body limit inside the edge refuses it.
+struct Watched {
+    inner: Body,
+    seen: u64,
+    limit: u64,
+    over: Arc<AtomicBool>,
+}
+
+impl Watched {
+    /// Watches `inner` against `limit` bytes, marking `over`.
+    fn new(inner: Body, limit: u64, over: Arc<AtomicBool>) -> Self {
+        Self {
+            inner,
+            seen: 0,
+            limit,
+            over,
+        }
+    }
+}
+
+impl HttpBody for Watched {
+    type Data = Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        let polled = std::task::ready!(Pin::new(&mut this.inner).poll_frame(cx));
+        if let Some(Ok(frame)) = &polled
+            && let Some(data) = frame.data_ref()
+        {
+            this.seen = this
+                .seen
+                .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+            if this.seen > this.limit {
+                this.over.store(true, Ordering::Relaxed);
+            }
+        }
+        Poll::Ready(polled)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
     }
 }
 

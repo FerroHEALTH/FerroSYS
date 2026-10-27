@@ -12,7 +12,7 @@ use tower_http::compression::predicate::{NotForContentType, Predicate as _, Size
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::client_address::Forwarding;
-use crate::edge::{self, EdgeLayer};
+use crate::edge::{self, EdgeLayer, IdentifyLayer};
 use crate::health::{self, Health};
 use crate::overload::{self, Admission};
 use crate::panic::{self, PanicBody};
@@ -51,12 +51,12 @@ impl Default for StackPolicy {
 
 /// Wraps `product` and the health routes in the stack, under the base path.
 ///
-/// From the outside in: the request id, the client address, the refusal
-/// rendering, the panic rendering, the panic catch, the request timeout
-/// (`408`), the body limit (`413`, and the same ceiling for every
-/// extractor), the response
-/// compression when it is on, the request log, then the routes, the
-/// product's behind the overload bound when one is configured.
+/// From the outside in: the request id, the request log, the client
+/// address, the refusal rendering, the panic rendering, the panic catch,
+/// the request timeout (`408`), the body limit (`413`, and the same ceiling
+/// for every extractor), the response compression when it is on, then the
+/// routes, the product's behind the overload bound when one is configured.
+/// Every request leaves one request line, a refusal and a panic included.
 pub fn app(
     product: Router,
     health: Health,
@@ -86,24 +86,24 @@ pub fn app(
         body_limit: section.body_limit_bytes,
     });
     let outer = ServiceBuilder::new()
+        .layer(IdentifyLayer)
+        .layer(policy.request_log)
         .layer(edge)
         .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
         .layer(DefaultBodyLimit::max(section.body_limit_bytes));
     if section.compression {
         routes.layer(
-            outer
-                .layer(
-                    CompressionLayer::new().gzip(true).br(true).compress_when(
-                        SizeAbove::new(section.compression_min_bytes)
-                            .and(NotForContentType::GRPC)
-                            .and(NotForContentType::IMAGES)
-                            .and(NotForContentType::SSE),
-                    ),
-                )
-                .layer(policy.request_log),
+            outer.layer(
+                CompressionLayer::new().gzip(true).br(true).compress_when(
+                    SizeAbove::new(section.compression_min_bytes)
+                        .and(NotForContentType::GRPC)
+                        .and(NotForContentType::IMAGES)
+                        .and(NotForContentType::SSE),
+                ),
+            ),
         )
     } else {
-        routes.layer(outer.layer(policy.request_log))
+        routes.layer(outer)
     }
 }
 
@@ -458,12 +458,18 @@ mod tests {
             .await
             .expect("the request is served");
         assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, streamed.status());
+        assert!(
+            streamed.headers().contains_key("x-request-id"),
+            "the streamed refusal echoes the request id"
+        );
         let body = axum::body::to_bytes(streamed.into_body(), 4096)
             .await
             .expect("the body");
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(&body).is_err(),
-            "the extractor's own answer is never rewritten"
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("JSON");
+        assert_eq!(
+            (Some(413), Some(crate::refusal::TOO_LARGE)),
+            (body["refused"].as_u64(), body["reason"].as_str()),
+            "the extractor's 413 is written with the product's body"
         );
         let held = tokio::spawn(get_status(app.clone(), "/ferrosys/hold"));
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -752,5 +758,276 @@ mod tests {
         };
         let off = app(product(), serving(), &off, StackPolicy::default());
         assert_eq!(None, encoding(off, "/large", Some("gzip")).await);
+    }
+
+    fn capturing() -> (Capture, tracing::subscriber::DefaultGuard) {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish();
+        (capture, tracing::subscriber::set_default(subscriber))
+    }
+
+    fn request_lines(capture: &Capture) -> Vec<serde_json::Value> {
+        let log = String::from_utf8(capture.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        log.lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .filter(|line: &serde_json::Value| line["message"] == "request")
+            .collect()
+    }
+
+    /// Sends `request` and asserts it left exactly one request line with
+    /// `route`, `status`, a latency and the id the response echoes.
+    async fn one_line(app: Router, request: http::Request<Body>, route: &str, status: StatusCode) {
+        let (capture, _default) = capturing();
+        let (got, headers, _) = send(app, request).await;
+        assert_eq!(status, got, "{route}");
+        let echoed = headers
+            .get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let lines = request_lines(&capture);
+        assert_eq!(1, lines.len(), "one line for {route}: {lines:?}");
+        let line = lines.first().expect("one line");
+        assert!(
+            line["method"].as_str().is_some_and(|m| !m.is_empty()),
+            "{line}"
+        );
+        assert_eq!(Some(route), line["route"].as_str(), "{line}");
+        assert_eq!(Some(u64::from(status.as_u16())), line["status"].as_u64());
+        assert!(line["latency_ms"].as_f64().is_some(), "{line}");
+        assert_eq!(36, echoed.len(), "{echoed}");
+        assert_eq!(Some(echoed.as_str()), line["request_id"].as_str());
+    }
+
+    fn get_request(uri: &str) -> http::Request<Body> {
+        http::Request::builder()
+            .uri(uri)
+            .body(Body::empty())
+            .expect("the request builds")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_timeout_leaves_its_request_line() {
+        for policy in [StackPolicy::default(), refusing()] {
+            let app = app(product(), serving(), &section(), policy);
+            one_line(
+                app,
+                get_request("/ferrosys/slow"),
+                "/ferrosys/slow",
+                StatusCode::REQUEST_TIMEOUT,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_oversized_body_leaves_its_request_line() {
+        for policy in [StackPolicy::default(), refusing()] {
+            let app = app(product(), serving(), &section(), policy);
+            let declared = http::Request::builder()
+                .method("POST")
+                .uri("/ferrosys/echo")
+                .header(http::header::CONTENT_LENGTH, "33")
+                .body(Body::from("a body of more than sixteen bytes"))
+                .expect("the request builds");
+            one_line(
+                app.clone(),
+                declared,
+                "/ferrosys/echo",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            )
+            .await;
+            let streamed = http::Request::builder()
+                .method("POST")
+                .uri("/ferrosys/echo")
+                .body(Body::from("a body of more than sixteen bytes"))
+                .expect("the request builds");
+            one_line(
+                app,
+                streamed,
+                "/ferrosys/echo",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_caught_panic_leaves_its_request_line() {
+        for policy in [StackPolicy::default(), refusing()] {
+            let app = app(product().merge(waiting()), serving(), &section(), policy);
+            for uri in ["/ferrosys/boom", "/ferrosys/late-boom"] {
+                one_line(
+                    app.clone(),
+                    get_request(uri),
+                    uri,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
+                .await;
+            }
+        }
+    }
+
+    fn gateway() -> StackPolicy {
+        StackPolicy {
+            refusal_body: Arc::new(
+                |_uri: &http::Uri, _request_id: &str, status: StatusCode, reason: &str| {
+                    let chosen = if status == StatusCode::REQUEST_TIMEOUT {
+                        StatusCode::GATEWAY_TIMEOUT
+                    } else {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    };
+                    crate::refusal::keep_status(
+                        (
+                            chosen,
+                            axum::Json(
+                                serde_json::json!({ "refused": status.as_u16(), "reason": reason }),
+                            ),
+                        )
+                            .into_response(),
+                    )
+                },
+            ),
+            ..StackPolicy::default()
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_body_may_answer_its_own_status() {
+        let app = app(product(), serving(), &section(), gateway());
+        let (capture, _default) = capturing();
+        let (status, headers, body) = get_status(app, "/ferrosys/slow").await;
+        assert_eq!(StatusCode::GATEWAY_TIMEOUT, status);
+        assert_eq!(
+            36,
+            headers
+                .get("x-request-id")
+                .map_or(0, http::HeaderValue::len)
+        );
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(408, body["refused"]);
+        let lines = request_lines(&capture);
+        assert_eq!(
+            vec![Some(504)],
+            lines
+                .iter()
+                .map(|line| line["status"].as_u64())
+                .collect::<Vec<_>>(),
+            "the line names the status the client got"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_answers_its_own_status_keeps_its_retry_after() {
+        let section = ServerSection {
+            max_concurrent_requests: NonZeroUsize::new(1),
+            retry_after_s: 2,
+            ..section()
+        };
+        let app = app(product(), serving(), &section, gateway());
+        let held = tokio::spawn(get_status(app.clone(), "/ferrosys/hold"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let request = http::Request::builder()
+            .uri("/ferrosys/fhir/Patient/7")
+            .header("x-request-id", "corr-42")
+            .body(Body::empty())
+            .expect("the request builds");
+        let (status, headers, _) = send(app, request).await;
+        assert_eq!(StatusCode::SERVICE_UNAVAILABLE, status);
+        assert_eq!(
+            (Some("2"), Some("corr-42")),
+            (
+                headers.get("retry-after").and_then(|v| v.to_str().ok()),
+                headers.get("x-request-id").and_then(|v| v.to_str().ok()),
+            )
+        );
+        let _held = held.await.expect("the held request ends");
+    }
+
+    #[tokio::test]
+    async fn without_the_mark_the_stack_keeps_its_own_status() {
+        let policy = StackPolicy {
+            refusal_body: Arc::new(
+                |_uri: &http::Uri, _id: &str, _status: StatusCode, _reason: &str| {
+                    (StatusCode::GATEWAY_TIMEOUT, "unmarked").into_response()
+                },
+            ),
+            ..StackPolicy::default()
+        };
+        let app = app(product(), serving(), &section(), policy);
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/ferrosys/echo")
+            .header(http::header::CONTENT_LENGTH, "33")
+            .body(Body::from("a body of more than sixteen bytes"))
+            .expect("the request builds");
+        let (status, _, body) = send(app, request).await;
+        assert_eq!(
+            (StatusCode::PAYLOAD_TOO_LARGE, "unmarked"),
+            (status, body.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_default_body_keeps_the_extractors_own_413() {
+        let app = app(product(), serving(), &section(), StackPolicy::default());
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/ferrosys/echo")
+            .body(Body::from("a body of more than sixteen bytes"))
+            .expect("the request builds");
+        let (status, _, body) = send(app, request).await;
+        assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, status);
+        assert_ne!(crate::refusal::TOO_LARGE, body, "the extractor's own text");
+    }
+
+    #[tokio::test]
+    async fn a_streamed_body_inside_the_limit_is_read_whole() {
+        let app = app(product(), serving(), &section(), refusing());
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/ferrosys/echo")
+            .body(Body::new(Chunks(vec!["bytes!!!", "sixteen "])))
+            .expect("the request builds");
+        let (status, _, body) = send(app, request).await;
+        assert_eq!((StatusCode::OK, "16"), (status, body.as_str()));
+    }
+
+    /// A body of chunks with no length, popped from the end.
+    struct Chunks(Vec<&'static str>);
+
+    impl axum::body::HttpBody for Chunks {
+        type Data = axum::body::Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+            std::task::Poll::Ready(
+                self.get_mut()
+                    .0
+                    .pop()
+                    .map(|chunk| Ok(hyper::body::Frame::data(axum::body::Bytes::from(chunk)))),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn a_streamed_body_past_the_limit_in_chunks_is_written_with_the_product_body() {
+        let app = app(product(), serving(), &section(), refusing());
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/ferrosys/echo")
+            .body(Body::new(Chunks(vec!["bytes!!!!", "sixteen "])))
+            .expect("the request builds");
+        let (status, _, body) = send(app, request).await;
+        assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, status);
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(Some(crate::refusal::TOO_LARGE), body["reason"].as_str());
     }
 }
