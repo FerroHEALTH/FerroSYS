@@ -8,12 +8,13 @@
 //! overload bound (`503`) and one past its caller's rate (`429`). A product
 //! answers every error in one shape, such as a FHIR `OperationOutcome` (FHIR
 //! R4, `http.html`), so [`render`] writes each of these refusals
-//! with the product's [`RefusalBody`], keeping the status and the
-//! `Retry-After` header. A response a handler wrote is never rewritten, a
-//! `413` from a body extractor included. No specification governs the rest:
-//! our own design.
+//! with the product's [`RefusalBody`], keeping the `Retry-After` header and
+//! the status, unless the body chose its own with [`keep_status`]. A `413`
+//! a body extractor raises because the body passed the limit is written with
+//! a product's body too; any other response a handler wrote is never
+//! rewritten. No specification governs the rest: our own design.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -25,11 +26,47 @@ use http::{StatusCode, Uri, header};
 /// server's request id, the status and a reason in plain words.
 pub type RefusalBody = Arc<dyn Fn(&Uri, &str, StatusCode, &str) -> Response + Send + Sync>;
 
+/// The one default body, so the stack can tell it from a product's.
+static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
+    Arc::new(|_uri, _request_id, status, reason| (status, reason.to_owned()).into_response())
+});
+
 /// The body a product that names none answers with: the reason as plain
 /// text.
+///
+/// A `413` a body extractor raises keeps the extractor's own text under
+/// this body, as it did before a product's body could write it.
 #[must_use]
 pub fn default_body() -> RefusalBody {
-    Arc::new(|_uri, _request_id, status, reason| (status, reason.to_owned()).into_response())
+    Arc::clone(&DEFAULT_BODY)
+}
+
+/// Whether `body` is the [`default_body`].
+pub(crate) fn is_default(body: &RefusalBody) -> bool {
+    Arc::ptr_eq(body, &DEFAULT_BODY)
+}
+
+/// Marks a response a [`RefusalBody`] rendered as answering with its own
+/// status, such as a FHIR gateway's `504 Gateway Timeout` for the stack's
+/// `408`; without the mark the stack sets the status it refused with.
+///
+/// The stack still adds the `Retry-After` of the refusal and the request id
+/// header.
+#[must_use]
+pub fn keep_status(mut response: Response) -> Response {
+    response.extensions_mut().insert(KeepStatus);
+    response
+}
+
+/// The mark [`keep_status`] leaves.
+#[derive(Debug, Clone, Copy)]
+struct KeepStatus;
+
+/// Sets `status` on `rendered` unless the body kept its own.
+fn set_status(rendered: &mut Response, status: StatusCode) {
+    if rendered.extensions_mut().remove::<KeepStatus>().is_none() {
+        *rendered.status_mut() = status;
+    }
 }
 
 /// The reason of a request that ran past the request timeout.
@@ -92,7 +129,7 @@ pub(crate) fn reason<B>(response: &http::Response<B>) -> Option<&'static str> {
 }
 
 /// The refusal `response` written with `body` for `reason`, keeping its
-/// status and its `Retry-After`.
+/// `Retry-After` and its status, unless the body kept its own.
 pub(crate) fn rewrite<B>(
     body: &RefusalBody,
     uri: &Uri,
@@ -102,7 +139,7 @@ pub(crate) fn rewrite<B>(
 ) -> Response {
     let status = response.status();
     let mut rendered = body(uri, request_id, status, reason);
-    *rendered.status_mut() = status;
+    set_status(&mut rendered, status);
     if let Some(wait) = response.headers().get(header::RETRY_AFTER) {
         rendered
             .headers_mut()
@@ -112,7 +149,8 @@ pub(crate) fn rewrite<B>(
 }
 
 /// A refusal of `status` for `reason` the stack writes before any handler
-/// runs, such as a timeout, written with `body`.
+/// runs, such as a timeout, written with `body`; the status is `status`,
+/// unless the body kept its own.
 pub(crate) fn write(
     body: &RefusalBody,
     uri: &Uri,
@@ -121,6 +159,6 @@ pub(crate) fn write(
     reason: &str,
 ) -> Response {
     let mut rendered = body(uri, request_id, status, reason);
-    *rendered.status_mut() = status;
+    set_status(&mut rendered, status);
     rendered
 }

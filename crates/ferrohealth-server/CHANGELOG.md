@@ -10,6 +10,26 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `refusal::keep_status` lets a product's `RefusalBody` answer a status of
+  its own, such as a FHIR gateway's `504 Gateway Timeout` with a `timeout`
+  `OperationOutcome` where the stack refuses a timeout `408`; the stack still
+  adds the refusal's `Retry-After` and the request id header. A body that
+  does not call it answers the stack's status, as before (#146).
+
+### Fixed
+
+- Every request leaves one request line, with its method, route, status,
+  latency and the server's request id: `stack::app` now runs the request
+  log outside the edge, so a timeout `408`, a declared-length `413` and the
+  `500` of a panicked handler are logged too (#145).
+- A `413` a body extractor raises because a body with no declared length
+  passed the limit is written with the product's `RefusalBody`, as the
+  declared-length `413` is, so a FHIR product answers it with an
+  `OperationOutcome`. Under the default body it keeps the extractor's own
+  text (#146).
+
 ## [0.3.5] - 2026-10-27
 
 ### Added
