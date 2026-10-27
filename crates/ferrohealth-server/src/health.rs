@@ -80,6 +80,28 @@ impl Health {
     pub const fn lifecycle(&self) -> &Lifecycle {
         &self.lifecycle
     }
+
+    /// The indicators the routes read.
+    ///
+    /// A product reads its readiness with the detail here, behind its own
+    /// authentication, from the registry it built once: a clone shares the
+    /// indicators, so the routes and the product never disagree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ferrohealth_health::lifecycle::Lifecycle;
+    /// use ferrohealth_health::registry::Registry;
+    /// use ferrohealth_server::health::Health;
+    ///
+    /// let health = Health::new(Registry::default(), Lifecycle::default());
+    /// let registry = health.registry().clone();
+    /// assert!(registry.names().is_empty());
+    /// ```
+    #[must_use]
+    pub const fn registry(&self) -> &Registry {
+        &self.registry
+    }
 }
 
 /// The three routes, and `/health/info` when the product supplied it,
@@ -263,6 +285,37 @@ mod tests {
         assert_eq!(
             r#"{"state":"degraded","phase":"serving","indicators":[{"name":"spool","state":"degraded"}]}"#,
             String::from_utf8_lossy(&body)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_indicator_registered_once_reads_from_the_route_and_the_accessor() {
+        let lifecycle = Lifecycle::default();
+        lifecycle.booted();
+        let health = Health::new(Registry::new(vec![std::sync::Arc::new(Spool)]), lifecycle);
+        let response = routes(health.clone())
+            .oneshot(
+                http::Request::builder()
+                    .uri("/health/readiness")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("served");
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .expect("the body");
+        let route: serde_json::Value = serde_json::from_slice(&body).expect("a document");
+        assert_eq!(serde_json::json!("spool"), route["indicators"][0]["name"]);
+        assert_eq!(vec!["spool"], health.registry().names());
+        let detailed = health.registry().readiness(health.lifecycle()).await;
+        assert_eq!(
+            Some("4096 records behind at db-7"),
+            detailed
+                .indicators
+                .first()
+                .and_then(|indicator| indicator.detail.as_deref()),
+            "the product reads the detail the public route leaves out"
         );
     }
 }
