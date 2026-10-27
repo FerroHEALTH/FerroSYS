@@ -10,6 +10,15 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `Loader::defaults` layers a product's defaults for a dotted key, from any
+  `Serialize` value such as a shared crate's section, under the file, the
+  environment and the `--set` pairs. A key no source sets takes the
+  product's value in place of the section type's `Default`, so a partial
+  table keeps every product default it does not name, and the provenance
+  reports the key as `default` (#140).
+
 ## [0.2.5] - 2026-10-26
 
 ### Fixed

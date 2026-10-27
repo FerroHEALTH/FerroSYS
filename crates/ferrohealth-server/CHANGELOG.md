@@ -12,6 +12,11 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ### Added
 
+- A product states its own `ServerSection` defaults, such as listening on
+  `0.0.0.0` or a larger body ceiling, with `Loader::defaults` of
+  `ferrohealth-config` 0.2.6; a partial `[server]` table then keeps the
+  product's value for every key it does not name, and an operator's value
+  wins over it. The section's documentation says how (#136).
 - `Health::registry` returns the `Registry` the health routes read, beside
   `Health::lifecycle`, so a product builds its registry and lifecycle once
   and reads the readiness with its detail from the same indicators the

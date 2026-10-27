@@ -10,6 +10,12 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The `[server]` section.
+///
+/// Its `Default` is the crate's. A product states its own defaults for the
+/// section with `ferrohealth_config::loader::Loader::defaults`, which layers
+/// them under the operator's file, environment and `--set` pairs, so a
+/// partial `[server]` table keeps the product's value for every key it does
+/// not name.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerSection {
@@ -384,6 +390,38 @@ mod tests {
             std::time::Duration::from_secs(10),
             section.shutdown_timeout()
         );
+    }
+
+    #[test]
+    fn a_partial_table_keeps_the_product_defaults_and_the_operator_wins() {
+        let product = ServerSection {
+            listen: "0.0.0.0:8080".parse().expect("an address"),
+            body_limit_bytes: 64 * 1024 * 1024,
+            ..ServerSection::default()
+        };
+        let load = |text: &str| {
+            Loader::new("FERROSYS")?
+                .defaults("server", &product)?
+                .load_sources::<Config>(Some(text), None, &BTreeMap::new())
+                .map(|loaded| loaded.into_parts().0.server)
+        };
+        let section = load("[server]\nrequest_timeout_ms = 5000\n").expect("the section loads");
+        assert_eq!(
+            ServerSection {
+                request_timeout_ms: 5000,
+                ..product.clone()
+            },
+            section,
+            "a partial table keeps every product default it does not name"
+        );
+        let section = load("[server]\nlisten = \"127.0.0.1:9090\"\n").expect("the section loads");
+        assert_eq!(
+            "127.0.0.1:9090",
+            section.listen.to_string(),
+            "the operator wins"
+        );
+        assert_eq!(64 * 1024 * 1024, section.body_limit_bytes);
+        assert_eq!(product, load("").expect("an empty file loads"));
     }
 
     #[test]
