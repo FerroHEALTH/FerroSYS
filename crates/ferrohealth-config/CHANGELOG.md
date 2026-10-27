@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-27
+
 ### Added
 
 - `Loader::defaults` layers a product's defaults for a dotted key, from any
@@ -110,7 +112,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.5...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.6...HEAD
+[0.2.6]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.5...ferrohealth-config-v0.2.6
 [0.2.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.4...ferrohealth-config-v0.2.5
 [0.2.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.3...ferrohealth-config-v0.2.4
 [0.2.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.2...ferrohealth-config-v0.2.3
