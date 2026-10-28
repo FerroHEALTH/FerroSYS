@@ -9,7 +9,9 @@
 //! once and `requests_per_second` after that (the generic cell rate
 //! algorithm); a request over it is answered `429 Too Many Requests` with
 //! `Retry-After` (RFC 6585 §4, RFC 9110 §10.2.3). A request without a key is
-//! not limited. No specification governs the rest: our own design.
+//! not limited. A rate above one request per nanosecond, the resolution of
+//! the clock the limit reads, does not limit at all: its interval would be
+//! zero. No specification governs the rest: our own design.
 //!
 //! ```
 //! use axum::Router;
@@ -53,6 +55,8 @@ const PRUNE_AT: usize = 4096;
 /// The limit shared by every request: each caller's next free instant.
 #[derive(Debug, Clone)]
 pub struct CallerLimit {
+    /// The time one request takes of a caller's allowance; zero when the rate
+    /// is finer than a nanosecond, which limits nothing.
     interval: Duration,
     tolerance: Duration,
     callers: Arc<Mutex<BTreeMap<CallerKey, Instant>>>,
@@ -60,6 +64,9 @@ pub struct CallerLimit {
 
 impl CallerLimit {
     /// The limit of `rate`.
+    ///
+    /// A `requests_per_second` above 1 000 000 000 is a rate the clock cannot
+    /// resolve, and its limit serves every request.
     #[must_use]
     pub fn new(rate: CallerRate) -> Self {
         let interval = Duration::from_secs(1) / rate.requests_per_second.get();
@@ -73,6 +80,12 @@ impl CallerLimit {
     /// Takes one request of `caller` at `now`: `Ok` when it may be served,
     /// and the wait until it may otherwise.
     fn take(&self, caller: &CallerKey, now: Instant) -> Result<(), Duration> {
+        // NOTE: no specification governs this: our own design; a zero interval
+        // would leave no tolerance for a request whose clock read precedes a
+        // concurrent one's.
+        if self.interval.is_zero() {
+            return Ok(());
+        }
         // NOTE: no specification governs this: our own design; a panic while
         // holding the map leaves instants only, which stay valid to read.
         let mut callers = self.callers.lock().unwrap_or_else(PoisonError::into_inner);
@@ -186,6 +199,65 @@ mod tests {
             "one request refilled"
         );
         assert_eq!(StatusCode::TOO_MANY_REQUESTS, call(&app, Some("a")).await.0);
+    }
+
+    fn limit_of(requests_per_second: u32, burst: u32) -> CallerLimit {
+        CallerLimit::new(CallerRate {
+            requests_per_second: requests_per_second.try_into().expect("non-zero"),
+            burst: burst.try_into().expect("non-zero"),
+        })
+    }
+
+    #[test]
+    fn a_rate_finer_than_a_nanosecond_serves_a_request_whose_clock_read_came_first() {
+        let limit = limit_of(u32::MAX, u32::MAX);
+        let caller = CallerKey(Arc::from("a"));
+        let earlier = tokio::time::Instant::now();
+        let later = earlier + Duration::from_micros(5);
+        assert_eq!(Ok(()), limit.take(&caller, later));
+        assert_eq!(
+            Ok(()),
+            limit.take(&caller, earlier),
+            "a concurrent request that read the clock first is served"
+        );
+    }
+
+    #[test]
+    fn one_request_per_nanosecond_still_limits_and_one_more_does_not() {
+        let caller = CallerKey(Arc::from("a"));
+        let now = tokio::time::Instant::now();
+        let finest = limit_of(1_000_000_000, 1);
+        assert_eq!(Ok(()), finest.take(&caller, now));
+        assert_eq!(
+            Err(Duration::from_nanos(1)),
+            finest.take(&caller, now),
+            "a rate of one per nanosecond keeps its interval"
+        );
+        let unlimited = limit_of(1_000_000_001, 1);
+        for _ in 0..3 {
+            assert_eq!(Ok(()), unlimited.take(&caller, now));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn concurrent_requests_at_the_largest_rate_are_never_refused() {
+        let limit = limit_of(u32::MAX, u32::MAX);
+        let caller = CallerKey(Arc::from("a"));
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let (limit, caller) = (limit.clone(), caller.clone());
+            tasks.spawn(async move {
+                let mut refused = 0_usize;
+                for _ in 0..5_000 {
+                    let now = tokio::time::Instant::now();
+                    tokio::task::yield_now().await;
+                    refused += usize::from(limit.take(&caller, now).is_err());
+                }
+                refused
+            });
+        }
+        let refused: usize = tasks.join_all().await.into_iter().sum();
+        assert_eq!(0, refused, "an unlimited rate refuses nothing");
     }
 
     #[tokio::test(start_paused = true)]
