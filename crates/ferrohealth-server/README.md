@@ -39,6 +39,10 @@ runs the same stack, the same health routes and the same shutdown.
   TLS (mutual TLS, reload on `SIGHUP`, TLS 1.3 unless `min_version`
   lowers it to 1.2), the trusted proxies, the caller
   rate and the compression.
+- `serve::run_with_tls` and `serve::Listener::with_reloadable_tls` serve
+  a `tls::ReloadableTls` the product keeps and reloads from its own reload
+  path; `tls::TlsKeys` (`tls_keys!("metrics.tls")`) names the table a
+  listener's TLS faults come from.
 - `serve::run_all` serves several listeners under one signal,
   `client_address` names a request's client, `caller_rate` limits one
   caller, `health::Health::with_info` serves `/health/info`, and

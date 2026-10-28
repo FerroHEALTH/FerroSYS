@@ -68,9 +68,94 @@ pub enum TlsError {
     /// CA to verify it against.
     #[error(transparent)]
     ClientAuth(#[from] crate::section::ClientAuthError),
-    /// The client CA bundle could not serve as trust anchors.
+    /// The client CA bundle of `[server.tls]` could not serve as trust
+    /// anchors; no longer returned, [`TlsError::ClientCaRefused`] names the
+    /// listener's own key.
+    #[deprecated(note = "TlsError::ClientCaRefused names the listener's own key")]
     #[error("server.tls.client_ca_file holds no CA a client certificate can chain to")]
     ClientCa(#[source] rustls::server::VerifierBuilderError),
+    /// The client CA bundle could not serve as trust anchors.
+    #[error("{key} holds no CA a client certificate can chain to")]
+    ClientCaRefused {
+        /// The key that names the bundle.
+        key: &'static str,
+        /// What rustls reported.
+        #[source]
+        source: rustls::server::VerifierBuilderError,
+    },
+}
+
+/// The configuration keys a listener's TLS table is read from, which every
+/// [`TlsError`] names.
+///
+/// [`TlsKeys::SERVER`] is `[server.tls]`; a second listener of
+/// `serve::run_all` configured from another table names its own with
+/// [`crate::tls_keys!`], such as `tls_keys!("metrics.tls")`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TlsKeys {
+    certificate: &'static str,
+    key: &'static str,
+    client_ca: &'static str,
+    healthcheck_identity: &'static str,
+}
+
+impl TlsKeys {
+    /// The keys of `[server.tls]`.
+    pub const SERVER: Self = crate::tls_keys!("server.tls");
+
+    /// The keys `certificate_file`, `key_file`, `client_ca_file` and
+    /// `healthcheck_identity_file` of one table, each spelled in full.
+    #[must_use]
+    pub const fn new(
+        certificate: &'static str,
+        key: &'static str,
+        client_ca: &'static str,
+        healthcheck_identity: &'static str,
+    ) -> Self {
+        Self {
+            certificate,
+            key,
+            client_ca,
+            healthcheck_identity,
+        }
+    }
+
+    /// The key of the certificate chain.
+    #[must_use]
+    pub const fn certificate_file(&self) -> &'static str {
+        self.certificate
+    }
+
+    /// The key of the private key.
+    #[must_use]
+    pub const fn key_file(&self) -> &'static str {
+        self.key
+    }
+
+    /// The key of the client CA bundle.
+    #[must_use]
+    pub const fn client_ca_file(&self) -> &'static str {
+        self.client_ca
+    }
+
+    /// The key of the healthcheck's identity.
+    #[must_use]
+    pub const fn healthcheck_identity_file(&self) -> &'static str {
+        self.healthcheck_identity
+    }
+}
+
+/// The [`TlsKeys`] of the table `$table`, such as `"metrics.tls"`.
+#[macro_export]
+macro_rules! tls_keys {
+    ($table:literal) => {
+        $crate::tls::TlsKeys::new(
+            concat!($table, ".certificate_file"),
+            concat!($table, ".key_file"),
+            concat!($table, ".client_ca_file"),
+            concat!($table, ".healthcheck_identity_file"),
+        )
+    };
 }
 
 /// The crypto provider of the listener and the healthcheck.
@@ -145,8 +230,21 @@ pub(crate) fn protocol_versions(
 /// [`TlsError::Config`] when the key does not match the certificate, and
 /// [`TlsError::ClientAuth`] when `client_auth` and `client_ca_file` disagree.
 pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError> {
-    let served = chain("server.tls.certificate_file", &section.certificate_file)?;
-    let key = private_key("server.tls.key_file", &section.key_file)?;
+    server_config_of(section, TlsKeys::SERVER)
+}
+
+/// The listener's TLS configuration from `section`, every fault naming the
+/// key of `keys`, as [`server_config`] reads `[server.tls]`.
+///
+/// # Errors
+///
+/// Returns every error of [`server_config`].
+pub fn server_config_of(
+    section: &TlsSection,
+    keys: TlsKeys,
+) -> Result<Arc<ServerConfig>, TlsError> {
+    let served = chain(keys.certificate, &section.certificate_file)?;
+    let key = private_key(keys.key, &section.key_file)?;
     let provider = provider();
     let versions = ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(protocol_versions(section.min_version))
@@ -159,7 +257,7 @@ pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError
         (_, None) => return Err(crate::section::ClientAuthError::from(NoClientCa).into()),
         (policy, Some(path)) => {
             let mut roots = RootCertStore::empty();
-            for certificate in chain("server.tls.client_ca_file", path)? {
+            for certificate in chain(keys.client_ca, path)? {
                 roots.add(certificate).map_err(TlsError::Config)?;
             }
             let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider);
@@ -168,7 +266,12 @@ pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError
             } else {
                 verifier
             };
-            versions.with_client_cert_verifier(verifier.build().map_err(TlsError::ClientCa)?)
+            versions.with_client_cert_verifier(verifier.build().map_err(|source| {
+                TlsError::ClientCaRefused {
+                    key: keys.client_ca,
+                    source,
+                }
+            })?)
         }
     };
     let mut config = builder
@@ -184,9 +287,16 @@ pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError
 pub struct PeerCertificates(pub Arc<[CertificateDer<'static>]>);
 
 /// The listener's TLS configuration, read again on demand.
+///
+/// `serve::run` builds one from `[server.tls]` and reads it again on
+/// `SIGHUP` and every `reload_interval_s`. A product that reloads its
+/// configuration on a path of its own builds it itself, hands it to
+/// `serve::run_with_tls` or `serve::Listener::with_reloadable_tls`, and calls
+/// [`ReloadableTls::reload`] from that path.
 #[derive(Debug)]
 pub struct ReloadableTls {
     section: TlsSection,
+    keys: TlsKeys,
     current: RwLock<Arc<ServerConfig>>,
 }
 
@@ -197,10 +307,26 @@ impl ReloadableTls {
     ///
     /// Returns every error of [`server_config`].
     pub fn new(section: &TlsSection) -> Result<Self, TlsError> {
+        Self::of(section, TlsKeys::SERVER)
+    }
+
+    /// Reads `section`'s files, every fault naming the key of `keys`.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`server_config`].
+    pub fn of(section: &TlsSection, keys: TlsKeys) -> Result<Self, TlsError> {
         Ok(Self {
-            current: RwLock::new(server_config(section)?),
+            current: RwLock::new(server_config_of(section, keys)?),
             section: section.clone(),
+            keys,
         })
+    }
+
+    /// The keys every fault names.
+    #[must_use]
+    pub const fn keys(&self) -> TlsKeys {
+        self.keys
     }
 
     /// The table the files come from.
@@ -217,12 +343,15 @@ impl ReloadableTls {
 
     /// Reads the files again and installs them for the next handshake.
     ///
+    /// A product calls it from its own reload path too, and refuses its
+    /// change on an error.
+    ///
     /// # Errors
     ///
     /// Returns every error of [`server_config`]; the running configuration
     /// stays.
     pub fn reload(&self) -> Result<(), TlsError> {
-        let fresh = server_config(&self.section)?;
+        let fresh = server_config_of(&self.section, self.keys)?;
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = fresh;
         Ok(())
     }
@@ -245,11 +374,21 @@ impl HealthcheckTls {
     /// file that cannot be read, and [`TlsError::Config`] when rustls
     /// refuses the configuration.
     pub fn read(section: &TlsSection) -> Result<Self, TlsError> {
-        let leaf = chain("server.tls.certificate_file", &section.certificate_file)?
+        Self::read_of(section, TlsKeys::SERVER)
+    }
+
+    /// Reads as [`HealthcheckTls::read`] does, every fault naming the key of
+    /// `keys`.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`HealthcheckTls::read`].
+    pub fn read_of(section: &TlsSection, keys: TlsKeys) -> Result<Self, TlsError> {
+        let leaf = chain(keys.certificate, &section.certificate_file)?
             .into_iter()
             .next()
             .ok_or(TlsError::Pem {
-                key: "server.tls.certificate_file",
+                key: keys.certificate,
                 kind: "certificate",
             })?;
         let provider = provider();
@@ -265,7 +404,7 @@ impl HealthcheckTls {
         let config = match &section.healthcheck_identity_file {
             None => builder.with_no_client_auth(),
             Some(path) => {
-                let key = "server.tls.healthcheck_identity_file";
+                let key = keys.healthcheck_identity;
                 builder
                     .with_client_auth_cert(chain(key, path)?, private_key(key, path)?)
                     .map_err(TlsError::Config)?
