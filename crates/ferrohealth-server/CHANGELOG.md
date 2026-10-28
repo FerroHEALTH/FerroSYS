@@ -10,6 +10,15 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `caller_rate::CallerLimit` no longer refuses requests under concurrency
+  when `requests_per_second` is above 1 000 000 000. The interval of such a
+  rate truncated to zero, which left no tolerance for a request whose clock
+  read came before a concurrent one's. A rate the nanosecond clock cannot
+  resolve now limits nothing; one request per nanosecond still limits as
+  before (#149).
+
 ## [0.3.6] - 2026-10-27
 
 ### Added
