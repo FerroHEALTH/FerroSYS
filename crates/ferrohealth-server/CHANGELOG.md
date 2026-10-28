@@ -10,6 +10,13 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The refusal of a client CA under `client_auth = "none"` names `none`,
+  `required` and `optional` without quotes, so it reads in full after
+  `ferrohealth-config` renders a configuration error, which masks every
+  quoted value (#174).
+
 ## [0.3.8] - 2026-10-28
 
 ### Added
