@@ -168,10 +168,12 @@ pub struct OtlpSection {
     /// The share of the server's traces that are sampled.
     pub sample_ratio: SampleRatio,
     /// A PEM file of trust roots the collector's certificate may chain to,
-    /// beside the platform's.
+    /// beside the platform's. It holds one certificate or more, and is
+    /// refused beside an endpoint that is not `https://`.
     pub trust_roots_file: Option<PathBuf>,
     /// A PEM file holding the client certificate chain and its key, for
-    /// mutual TLS with the collector.
+    /// mutual TLS with the collector. It holds both, and is refused beside
+    /// an endpoint that is not `https://`.
     pub client_identity_file: Option<PathBuf>,
 }
 

@@ -20,6 +20,17 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   `otel.kind` and `otel.status_code`. The `tracing` span keeps the name
   `request`; a product test that reads the exported span's name `request`
   reads the new name (#166).
+- `Telemetry::new` refuses `telemetry.otlp.trust_roots_file` or
+  `telemetry.otlp.client_identity_file` beside an endpoint that is not
+  `https://` (`InitError::TlsWithoutHttps`, naming the key), where it read
+  the table and exported in plain text with the files ignored. It also
+  refuses a trust roots file that holds no PEM certificate and a client
+  identity file that lacks a PEM certificate or a PEM private key
+  (`InitError::TlsPem`, naming the key and the path and quoting no part of
+  the file), where it handed the file to tonic and failed, or did not, at
+  the first export. Migration: point the endpoint at `https://` when the
+  collector speaks TLS, or drop the two keys when it does not; and fix a
+  file the load now refuses (#168).
 
 ### Fixed
 
