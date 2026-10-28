@@ -169,6 +169,27 @@ pub enum InitError {
         #[source]
         source: io::Error,
     },
+    /// A TLS file of `[telemetry.otlp]` is set beside an endpoint that is
+    /// not `https://`, which would export in plain text and ignore it.
+    #[error(
+        "{key} is set, and telemetry.otlp.endpoint is not https://, so the file would be ignored"
+    )]
+    TlsWithoutHttps {
+        /// The key that names the file.
+        key: &'static str,
+    },
+    /// A TLS file of `[telemetry.otlp]` holds no PEM of its kind: no
+    /// certificate among the trust roots, or a client identity without a
+    /// certificate or a private key. No part of the file is quoted.
+    #[error("{key} names {}, which holds no {wanted}", path.display())]
+    TlsPem {
+        /// The key that names the file.
+        key: &'static str,
+        /// The file.
+        path: std::path::PathBuf,
+        /// What the file lacks, such as `PEM certificate`.
+        wanted: &'static str,
+    },
     /// The client identity of `[telemetry.otlp]` could not be read.
     #[error(transparent)]
     Identity(#[from] ferrohealth_secret::file::SecretError),
@@ -213,6 +234,12 @@ pub enum InitError {
     },
 }
 
+/// The key of the OTLP trust roots file.
+const TRUST_ROOTS_KEY: &str = "telemetry.otlp.trust_roots_file";
+
+/// The key of the OTLP client identity file.
+const CLIENT_IDENTITY_KEY: &str = "telemetry.otlp.client_identity_file";
+
 /// The one OpenTelemetry provider of a process.
 ///
 /// Built from a [`TelemetrySection`] and a [`Service`]. With the
@@ -247,7 +274,8 @@ impl Telemetry {
     /// # Errors
     ///
     /// Returns [`InitError::MissingEndpoint`], [`InitError::NoOtlp`],
-    /// [`InitError::TlsFile`] and [`InitError::Identity`] for an OTLP table
+    /// [`InitError::TlsWithoutHttps`], [`InitError::TlsFile`],
+    /// [`InitError::TlsPem`] and [`InitError::Identity`] for an OTLP table
     /// this build cannot honour, `InitError::Exporter` when an exporter
     /// cannot be built, and [`InitError::Prometheus`] when the Prometheus
     /// reader cannot be built.
@@ -275,6 +303,17 @@ impl Telemetry {
         if let Some(section) = &section.otlp {
             if section.endpoint.is_empty() {
                 return Err(InitError::MissingEndpoint);
+            }
+            // NOTE: no specification governs this: our own design; TLS material beside a
+            // plain-HTTP collector would be ignored, so the table is refused instead.
+            if !section.endpoint.expose().starts_with("https://") {
+                let files = [
+                    (TRUST_ROOTS_KEY, section.trust_roots_file.is_some()),
+                    (CLIENT_IDENTITY_KEY, section.client_identity_file.is_some()),
+                ];
+                if let Some((key, _)) = files.into_iter().find(|(_, set)| *set) {
+                    return Err(InitError::TlsWithoutHttps { key });
+                }
             }
             let (with_push, exported) = otlp::export(section, meters, resource)?;
             meters = with_push;
@@ -611,9 +650,11 @@ mod otlp {
     use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::metrics::{MeterProviderBuilder, PeriodicReader, Temporality};
     use opentelemetry_sdk::trace::SdkTracerProvider;
+    use rustls::pki_types::pem::PemObject as _;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     use secrecy::ExposeSecret as _;
 
-    use super::{InitError, sampler};
+    use super::{CLIENT_IDENTITY_KEY, InitError, TRUST_ROOTS_KEY, sampler};
     use crate::section::OtlpSection;
 
     /// Adds the metrics push to `meters` and builds the span export, each
@@ -675,19 +716,44 @@ mod otlp {
         let mut config = ClientTlsConfig::new().with_native_roots();
         if let Some(path) = &section.trust_roots_file {
             let roots = std::fs::read(path).map_err(|source| InitError::TlsFile {
-                key: "telemetry.otlp.trust_roots_file",
+                key: TRUST_ROOTS_KEY,
                 path: path.clone(),
                 source,
             })?;
+            if !holds_certificates(&roots) {
+                return Err(pem_refusal(TRUST_ROOTS_KEY, path, "PEM certificate"));
+            }
             config = config.ca_certificate(Certificate::from_pem(roots));
         }
         if let Some(path) = &section.client_identity_file {
             let pem =
                 ferrohealth_secret::file::read_secret_file("telemetry.otlp.client_identity", path)?;
             let pem = pem.expose_secret();
+            if !holds_certificates(pem.as_bytes()) {
+                return Err(pem_refusal(CLIENT_IDENTITY_KEY, path, "PEM certificate"));
+            }
+            if PrivateKeyDer::from_pem_slice(pem.as_bytes()).is_err() {
+                return Err(pem_refusal(CLIENT_IDENTITY_KEY, path, "PEM private key"));
+            }
             config = config.identity(Identity::from_pem(pem, pem));
         }
         Ok(Some(config))
+    }
+
+    /// Whether `pem` holds one certificate or more, and every PEM section of
+    /// a certificate in it parses.
+    fn holds_certificates(pem: &[u8]) -> bool {
+        let mut certificates = CertificateDer::pem_slice_iter(pem).peekable();
+        certificates.peek().is_some() && certificates.all(|certificate| certificate.is_ok())
+    }
+
+    /// The refusal of the file `key` names at `path`, which lacks `wanted`.
+    fn pem_refusal(key: &'static str, path: &std::path::Path, wanted: &'static str) -> InitError {
+        InitError::TlsPem {
+            key,
+            path: path.to_path_buf(),
+            wanted,
+        }
     }
 }
 
@@ -978,6 +1044,104 @@ mod tests {
             matches!(&error, InitError::TlsFile { key, .. } if *key == "telemetry.otlp.trust_roots_file"),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn a_tls_file_beside_a_plain_http_collector_is_refused() {
+        for (roots, identity, named) in [
+            (true, false, "telemetry.otlp.trust_roots_file"),
+            (false, true, "telemetry.otlp.client_identity_file"),
+        ] {
+            let mut section = with_otlp("http://127.0.0.1:4317");
+            if let Some(otlp) = section.otlp.as_mut() {
+                otlp.trust_roots_file = roots.then(|| "/run/roots.pem".into());
+                otlp.client_identity_file = identity.then(|| "/run/identity.pem".into());
+            }
+            let error = Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
+                .expect_err("the file would be ignored");
+            assert!(
+                matches!(&error, InitError::TlsWithoutHttps { key } if *key == named),
+                "{error:?}"
+            );
+            assert!(error.to_string().starts_with(named), "{error}");
+        }
+    }
+
+    /// A certificate and its private key, as PEM.
+    #[cfg(feature = "otlp")]
+    fn certificate() -> (String, String) {
+        let key = rcgen::KeyPair::generate().expect("a key");
+        let certificate = rcgen::CertificateParams::new(vec!["collector.example.org".to_owned()])
+            .expect("the parameters")
+            .self_signed(&key)
+            .expect("the certificate");
+        (certificate.pem(), key.serialize_pem())
+    }
+
+    #[cfg(feature = "otlp")]
+    #[tokio::test]
+    async fn a_tls_file_that_is_no_pem_of_its_kind_is_refused_without_quoting_it() {
+        let (certificate, key) = certificate();
+        let directory = tempfile::tempdir().expect("a directory");
+        let write = |name: &str, text: &str| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, text).expect("the file is written");
+            path
+        };
+        let only_key = write("key.pem", &key);
+        let only_certificate = write("certificate.pem", &certificate);
+        let identity = write("identity.pem", &format!("{certificate}{key}"));
+        let text = write("text.pem", "Qz7sentinel");
+        let cases = [
+            (
+                Some(&only_key),
+                None,
+                "telemetry.otlp.trust_roots_file",
+                "PEM certificate",
+            ),
+            (
+                Some(&text),
+                None,
+                "telemetry.otlp.trust_roots_file",
+                "PEM certificate",
+            ),
+            (
+                None,
+                Some(&only_certificate),
+                "telemetry.otlp.client_identity_file",
+                "PEM private key",
+            ),
+            (
+                None,
+                Some(&only_key),
+                "telemetry.otlp.client_identity_file",
+                "PEM certificate",
+            ),
+        ];
+        for (roots, client, named, lacking) in cases {
+            let mut section = with_otlp("https://otel.example.org:4317");
+            if let Some(otlp) = section.otlp.as_mut() {
+                otlp.trust_roots_file = roots.cloned();
+                otlp.client_identity_file = client.cloned();
+            }
+            let error = Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
+                .expect_err("the file holds no PEM of its kind");
+            assert!(
+                matches!(&error, InitError::TlsPem { key, wanted, .. } if *key == named && *wanted == lacking),
+                "{error:?}"
+            );
+            let shown = format!("{error} {error:?}");
+            for quoted in ["Qz7sentinel", "BEGIN", "MII"] {
+                assert!(!shown.contains(quoted), "{shown}");
+            }
+        }
+        let mut section = with_otlp("https://otel.example.org:4317");
+        if let Some(otlp) = section.otlp.as_mut() {
+            otlp.trust_roots_file = Some(only_certificate.clone());
+            otlp.client_identity_file = Some(identity);
+        }
+        Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
+            .expect("trust roots and a whole identity build");
     }
 
     #[cfg(feature = "prometheus")]
