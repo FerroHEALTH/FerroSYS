@@ -19,6 +19,13 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   with its key, so `offset=<an identifier>` never reaches it. With no shape
   set, `[telemetry] logged_query_parameters` logs any text cut to 64
   characters, as before (#167).
+- `RequestLog::with_metrics` also records `http.server.active_requests`
+  (`request_log::ACTIVE_REQUESTS`), the up-down counter of the requests in
+  flight by `http.request.method` and `url.scheme` (OpenTelemetry semantic
+  conventions v1.44.0, `docs/http/http-metrics.md`). A request is counted
+  in when it begins and out when its future completes or is dropped, so a
+  request whose client goes away is counted out too. A product that calls
+  `with_metrics` gains the series `http_server_active_requests` (#169).
 
 ### Changed
 

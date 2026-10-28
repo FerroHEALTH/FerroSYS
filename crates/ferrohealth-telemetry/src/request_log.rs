@@ -19,8 +19,9 @@
 //! would carry text the client wrote.
 //!
 //! With [`RequestLog::with_metrics`] every request is also recorded in the
-//! `http.server.request.duration` histogram (semantic conventions v1.44.0,
-//! `docs/http/http-metrics.md`). A handler adds fields of its own to the line with
+//! `http.server.request.duration` histogram and counted in
+//! `http.server.active_requests` while in flight (semantic conventions
+//! v1.44.0, `docs/http/http-metrics.md`). A handler adds fields of its own to the line with
 //! [`fields::LineFields`] in its response's extensions, and a [`RouteNamer`] names
 //! the route of a request no route matched.
 
@@ -37,7 +38,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use http::{Method, StatusCode, Version};
 use opentelemetry::KeyValue;
-use opentelemetry::metrics::{Histogram, Meter};
+use opentelemetry::metrics::{Histogram, Meter, UpDownCounter};
 use tracing::field::Empty;
 use tracing::instrument::Instrumented;
 use tracing::{Instrument as _, Level};
@@ -128,6 +129,13 @@ impl RequestId {
 /// `http_server_request_duration_seconds`.
 pub const REQUEST_DURATION: &str = "http.server.request.duration";
 
+/// The name of the up-down counter of the requests in flight.
+///
+/// OpenTelemetry semantic conventions v1.44.0, `docs/http/http-metrics.md`,
+/// metric `http.server.active_requests`; Prometheus reads it as
+/// `http_server_active_requests`.
+pub const ACTIVE_REQUESTS: &str = "http.server.active_requests";
+
 /// The bucket boundaries of [`REQUEST_DURATION`], in seconds: the
 /// `ExplicitBucketBoundaries` advice of the metric's definition.
 pub const DURATION_BUCKETS: [f64; 14] = [
@@ -190,6 +198,7 @@ struct Settings {
     default_shape: ValueShape,
     recorders: Vec<Arc<dyn Recorder>>,
     duration: Option<Histogram<f64>>,
+    active: Option<UpDownCounter<i64>>,
     scheme: Scheme,
     namer: Option<Arc<dyn RouteNamer>>,
 }
@@ -274,15 +283,28 @@ impl RequestLog {
 
     /// Records every finished request in the [`REQUEST_DURATION`] histogram
     /// of `meter`, such as `Telemetry::meter`'s, so Prometheus and the OTLP
-    /// push read one series.
+    /// push read one series, and every request in flight in the
+    /// [`ACTIVE_REQUESTS`] up-down counter.
+    ///
+    /// A request is counted in when it begins and out when its future
+    /// completes or is dropped, so a request whose client goes away is
+    /// counted out too.
     #[must_use]
     pub fn with_metrics(mut self, meter: &Meter) -> Self {
-        Arc::make_mut(&mut self.settings).duration = Some(
+        let settings = Arc::make_mut(&mut self.settings);
+        settings.duration = Some(
             meter
                 .f64_histogram(REQUEST_DURATION)
                 .with_description("Duration of HTTP server requests.")
                 .with_unit("s")
                 .with_boundaries(DURATION_BUCKETS.to_vec())
+                .build(),
+        );
+        settings.active = Some(
+            meter
+                .i64_up_down_counter(ACTIVE_REQUESTS)
+                .with_description("Number of active HTTP server requests.")
+                .with_unit("{request}")
                 .build(),
         );
         self
@@ -303,18 +325,36 @@ impl RequestLog {
         self
     }
 
+    /// The `url.scheme` of the requests this log sees.
+    fn scheme(&self) -> &'static str {
+        match self.settings.scheme {
+            Scheme::Http => "http",
+            Scheme::Https => "https",
+        }
+    }
+
+    /// Counts a request of `method` in, until the returned guard drops.
+    fn in_flight(&self, method: &Method) -> Option<InFlight> {
+        let counter = self.settings.active.clone()?;
+        let attributes = [
+            KeyValue::new("http.request.method", method_label(method)),
+            KeyValue::new("url.scheme", self.scheme()),
+        ];
+        counter.add(1, &attributes);
+        Some(InFlight {
+            counter,
+            attributes,
+        })
+    }
+
     /// Records one finished request in the duration histogram.
     fn measure(&self, completed: &Completed<'_>, version: Version) {
         let Some(duration) = &self.settings.duration else {
             return;
         };
-        let scheme = match self.settings.scheme {
-            Scheme::Http => "http",
-            Scheme::Https => "https",
-        };
         let mut attributes = vec![
             KeyValue::new("http.request.method", method_label(completed.method)),
-            KeyValue::new("url.scheme", scheme),
+            KeyValue::new("url.scheme", self.scheme()),
             KeyValue::new(
                 "http.response.status_code",
                 i64::from(completed.status.as_u16()),
@@ -335,6 +375,18 @@ impl RequestLog {
             ));
         }
         duration.record(completed.latency.as_secs_f64(), &attributes);
+    }
+}
+
+/// A request counted in [`ACTIVE_REQUESTS`], counted out when it drops.
+struct InFlight {
+    counter: UpDownCounter<i64>,
+    attributes: [KeyValue; 2],
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.counter.add(-1, &self.attributes);
     }
 }
 
@@ -506,6 +558,9 @@ struct Begun {
     request_id: Option<RequestId>,
     span: tracing::Span,
     started: Instant,
+    /// Counts the request out of [`ACTIVE_REQUESTS`] when this drops, the
+    /// request finished or abandoned.
+    _in_flight: Option<InFlight>,
 }
 
 impl Begun {
@@ -537,6 +592,7 @@ impl Begun {
             http.response.status_code = Empty,
             request_id = request_id.as_ref().map_or("", RequestId::id),
         );
+        let in_flight = log.in_flight(&method);
         Self {
             method,
             version: request.version(),
@@ -545,6 +601,7 @@ impl Begun {
             request_id,
             span,
             started: Instant::now(),
+            _in_flight: in_flight,
         }
     }
 
@@ -1210,6 +1267,58 @@ mod tests {
                 && text.contains("le=\"0.005\""),
             "the advisory buckets: {text}"
         );
+    }
+
+    #[cfg(feature = "prometheus")]
+    #[tokio::test]
+    async fn a_request_is_counted_in_while_in_flight_and_out_when_finished_or_dropped() {
+        let telemetry = Arc::new(
+            Telemetry::new(
+                &TelemetrySection::default(),
+                Service::new("ferrosys", "0.0.0"),
+            )
+            .expect("the telemetry builds"),
+        );
+        let log = RequestLog::default().with_metrics(&telemetry.meter("ferrohealth_telemetry"));
+        let routes = || {
+            Router::new()
+                .route("/slow", get(std::future::pending::<&'static str>))
+                .route("/fast", get(|| async { "ok" }))
+        };
+        let by_layer = routes().layer(log.clone());
+        let by_middleware = routes().layer(axum::middleware::from_fn_with_state(log, middleware));
+        let active = |telemetry: &Telemetry| {
+            let text = telemetry.render_prometheus().expect("the metrics render");
+            text.lines()
+                .find(|line| {
+                    line.starts_with(
+                        "http_server_active_requests{http_request_method=\"GET\",url_scheme=\"http\"",
+                    )
+                })
+                .map(|line| line.rsplit(' ').next().unwrap_or_default().to_owned())
+        };
+        for app in [by_layer, by_middleware] {
+            {
+                let mut slow = std::pin::pin!(app.clone().oneshot(get_request("/slow")));
+                let waited =
+                    tokio::time::timeout(std::time::Duration::from_millis(20), &mut slow).await;
+                assert!(waited.is_err(), "the slow request is still in flight");
+                assert_eq!(Some("1".to_owned()), active(&telemetry), "counted in");
+            }
+            assert_eq!(
+                Some("0".to_owned()),
+                active(&telemetry),
+                "a dropped request is counted out"
+            );
+            app.oneshot(get_request("/fast"))
+                .await
+                .expect("the request is served");
+            assert_eq!(
+                Some("0".to_owned()),
+                active(&telemetry),
+                "a finished request is counted out"
+            );
+        }
     }
 
     fn logged(log: &RequestLog, query: &str) -> String {

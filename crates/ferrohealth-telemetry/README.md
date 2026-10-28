@@ -29,9 +29,9 @@ same way.
   server's request id. It never carries a body, the raw path, a header
   value, an unlisted query value, a listed value of the wrong `ValueShape`
   (such as digits only) or the client's request id. It records
-  `http.server.request.duration` on the one meter provider, writes the
-  fields a handler adds with `LineFields`, and asks a `RouteNamer` for the
-  route of a request no route matched.
+  `http.server.request.duration` and `http.server.active_requests` on the
+  one meter provider, writes the fields a handler adds with `LineFields`,
+  and asks a `RouteNamer` for the route of a request no route matched.
 - `telemetry::prometheus_route` (features `axum` and `prometheus`) serves
   the metrics in the Prometheus text format.
 
