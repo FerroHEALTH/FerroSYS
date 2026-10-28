@@ -7,7 +7,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+/// The suffix of a secret's sibling key that names the file holding it.
+const FILE_SUFFIX: &str = "_file";
+
 /// The layer a key's value came from.
+///
+/// The variants are ordered by strength, `Default` the weakest and `Set` the
+/// strongest, as the load applies the layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Source {
     /// No layer set it: the tree's default stands.
@@ -84,6 +90,58 @@ impl Provenance {
         } else {
             Source::Default
         }
+    }
+
+    /// Returns where the value of the secret at the dotted key `key` came
+    /// from, counting the secret and its `<key>_file` sibling as one setting.
+    ///
+    /// `key` names either form, `oidc.client_secret` or
+    /// `oidc.client_secret_file`, and both give the same answer: the
+    /// stronger of the two keys' [`Provenance::source`], with `--set` over
+    /// the environment, the environment over the file and the file over the
+    /// default. It follows the `<key>_file` rule of
+    /// `ferrohealth_secret::file`, so ask it only for a secret: for any
+    /// other key whose name ends in `_file`, [`Provenance::source`] is the
+    /// answer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use std::path::PathBuf;
+    ///
+    /// use ferrohealth_config::loader::Loader;
+    /// use ferrohealth_config::provenance::Source;
+    ///
+    /// #[derive(Debug, Default, serde::Deserialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Config {
+    ///     oidc: Oidc,
+    /// }
+    ///
+    /// #[derive(Debug, Default, serde::Deserialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Oidc {
+    ///     client_secret: Option<ferrohealth_secret::secret::Secret>,
+    ///     client_secret_file: Option<PathBuf>,
+    /// }
+    ///
+    /// let loaded = Loader::new("FERROSYS")?.load_sources::<Config>(
+    ///     Some("[oidc]\nclient_secret_file = \"/run/secrets/oidc\"\n"),
+    ///     None,
+    ///     &BTreeMap::new(),
+    /// )?;
+    /// let provenance = loaded.provenance();
+    /// assert_eq!(Source::Default, provenance.source("oidc.client_secret"));
+    /// assert_eq!(Source::File, provenance.secret_source("oidc.client_secret"));
+    /// assert_eq!(Source::File, provenance.secret_source("oidc.client_secret_file"));
+    /// # Ok::<(), ferrohealth_config::error::ConfigError>(())
+    /// ```
+    #[must_use]
+    pub fn secret_source(&self, key: &str) -> Source {
+        let secret = key.strip_suffix(FILE_SUFFIX).unwrap_or(key);
+        self.source(secret)
+            .max(self.source(&format!("{secret}{FILE_SUFFIX}")))
     }
 
     /// Returns the environment variable that set the dotted key `key`, or a
