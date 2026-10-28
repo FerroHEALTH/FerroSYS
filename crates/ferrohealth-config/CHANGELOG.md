@@ -10,6 +10,16 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `Loaded::table_with_secrets` returns the table the file, the environment
+  and the `--set` pairs set, with every renamed key under its new name and
+  every override typed as the tree took it. The defaults are left out, so
+  the table read again as the file gives the same tree. It holds secrets as
+  read, and the `Debug` rendering of `Loaded` leaves it out, so a product
+  that keeps configuration revisions takes the table from the loader in
+  place of placing the overrides a second time (#156).
+
 ## [0.2.6] - 2026-10-27
 
 ### Added
