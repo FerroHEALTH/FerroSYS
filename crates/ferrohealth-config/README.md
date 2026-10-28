@@ -26,6 +26,9 @@ console reads its configuration the same way, so an operator learns it once.
   every other variable under the prefix is left alone, because product
   prefixes nest (`FERROTERM` and `FERROTERM_CONSOLE`). No refusal quotes a
   value.
+- `Loaded::table_with_secrets` is the table the sources set, the renames
+  and the typed overrides applied and the defaults left out, for a product
+  that stores its configuration as revisions. It holds secrets as read.
 - `provenance::Provenance` says where each key came from: the default, the
   file or the environment, with the variable.
 - `report::check_report` renders the running tree for `config check`, one

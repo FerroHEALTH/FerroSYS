@@ -5,6 +5,7 @@
 //! typed tree.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -143,11 +144,25 @@ pub struct Deprecation {
 pub const MAX_REFUSALS: usize = 16;
 
 /// A tree the loader read, with where each key came from.
-#[derive(Debug, Clone)]
+///
+/// Its `Debug` rendering shows the tree, the provenance and the
+/// deprecations, and never the table of [`Loaded::table_with_secrets`].
+#[derive(Clone)]
 pub struct Loaded<T> {
     settings: T,
     provenance: Provenance,
     deprecations: Vec<Deprecation>,
+    table: toml::Table,
+}
+
+impl<T: fmt::Debug> fmt::Debug for Loaded<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Loaded")
+            .field("settings", &self.settings)
+            .field("provenance", &self.provenance)
+            .field("deprecations", &self.deprecations)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> Loaded<T> {
@@ -168,6 +183,57 @@ impl<T> Loaded<T> {
     #[must_use]
     pub fn deprecations(&self) -> &[Deprecation] {
         &self.deprecations
+    }
+
+    /// Returns the table the sources set, which holds every secret as read.
+    ///
+    /// It is what the file, the environment and the `--set` pairs set,
+    /// merged as the load applied them: every renamed key under its new
+    /// name, and every override typed as the tree took it, a number, a
+    /// boolean or an array where the tree wants one and text elsewhere.
+    /// The defaults are left out, the tree's and those of
+    /// [`Loader::defaults`] alike, so a key no source set is absent. Reading
+    /// the table again as the file of [`Loader::load_sources`] with no
+    /// environment gives the same tree.
+    ///
+    /// A secret set inline stands here as the text it was set to. Treat the
+    /// table as sensitive: never log it or render it, and keep a secret out
+    /// of anything stored from it, as its `<key>_file` sibling. Nothing in
+    /// this crate logs or renders it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    ///
+    /// use ferrohealth_config::loader::Loader;
+    ///
+    /// #[derive(Debug, Default, serde::Deserialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Config {
+    ///     server: Server,
+    /// }
+    ///
+    /// #[derive(Debug, Default, serde::Deserialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Server {
+    ///     listen: String,
+    ///     body_limit_bytes: usize,
+    /// }
+    ///
+    /// let environment = BTreeMap::from([(
+    ///     "FERROSYS__SERVER__BODY_LIMIT_BYTES".to_owned(),
+    ///     "2048".to_owned(),
+    /// )]);
+    /// let loaded = Loader::new("FERROSYS")?.load_sources::<Config>(None, None, &environment)?;
+    /// let server = loaded.table_with_secrets()["server"].as_table();
+    /// assert_eq!(Some(2048), server.and_then(|s| s["body_limit_bytes"].as_integer()));
+    /// assert!(server.is_some_and(|s| !s.contains_key("listen")), "a default is left out");
+    /// # Ok::<(), ferrohealth_config::error::ConfigError>(())
+    /// ```
+    #[must_use]
+    pub const fn table_with_secrets(&self) -> &toml::Table {
+        &self.table
     }
 
     /// Returns the tree and its provenance.
@@ -521,11 +587,12 @@ impl Loader {
             for path in &dropped {
                 remove(&mut table, path);
             }
-            fill(&mut table, &self.defaults);
+            let mut filled = table.clone();
+            fill(&mut filled, &self.defaults);
             // The merged tree is written and read again so every refusal
             // carries the position of its key, which a `Table` cannot report.
             let merged =
-                toml::to_string(&table).map_err(|source| ConfigError::Assemble { source })?;
+                toml::to_string(&filled).map_err(|source| ConfigError::Assemble { source })?;
             let error = match toml::from_str::<T>(&merged) {
                 Ok(settings) if errors.is_empty() => {
                     warn_deprecated(&deprecations);
@@ -533,6 +600,7 @@ impl Loader {
                         settings,
                         provenance,
                         deprecations,
+                        table,
                     });
                 }
                 Ok(_) => return Err(collected(errors)),
@@ -1061,6 +1129,76 @@ mod tests {
             loaded.settings().server.listen,
             "a string key keeps the text"
         );
+    }
+
+    #[test]
+    fn the_table_holds_what_the_sources_set_typed_as_the_tree_took_it() {
+        let renaming = product_defaults().rename("server.bind", "server.listen", "0.3.0");
+        let file =
+            "[server]\nbind = \"10.0.0.5:8080\"\n[cdr]\nurl = \"https://cdr.example.org/\"\n";
+        let environment = environment(&[
+            ("FERROSYS__SERVER__BODY_LIMIT_BYTES", "2048"),
+            ("FERROSYS__SERVER__TLS", "false"),
+            (
+                "FERROSYS__SERVER__ORIGINS",
+                "https://a.example, https://b.example",
+            ),
+            ("FERROSYS__CDR__PASSWORD", SENTINEL),
+        ]);
+        let loaded = renaming
+            .load_sources::<Config>(Some(file), None, &environment)
+            .expect("the sources load");
+        let table = loaded.table_with_secrets();
+        let server = table
+            .get("server")
+            .and_then(toml::Value::as_table)
+            .expect("the server table is set");
+        assert_eq!(
+            Some(&toml::Value::Integer(2048)),
+            server.get("body_limit_bytes")
+        );
+        assert_eq!(Some(&toml::Value::Boolean(false)), server.get("tls"));
+        assert_eq!(
+            Some(&toml::Value::Array(vec![
+                "https://a.example".into(),
+                "https://b.example".into(),
+            ])),
+            server.get("origins")
+        );
+        assert_eq!(
+            Some(&toml::Value::String("10.0.0.5:8080".to_owned())),
+            server.get("listen"),
+            "a renamed key stands under its new name"
+        );
+        assert!(!server.contains_key("bind"));
+        let cdr = table
+            .get("cdr")
+            .and_then(toml::Value::as_table)
+            .expect("the cdr table is set");
+        assert_eq!(
+            Some(&toml::Value::String(SENTINEL.to_owned())),
+            cdr.get("password"),
+            "a secret stands as read"
+        );
+        assert!(
+            !table.contains_key("telemetry") && !cdr.contains_key("user"),
+            "a key no source set is absent"
+        );
+        assert!(
+            !format!("{loaded:?}").contains(SENTINEL),
+            "the rendering of the load shows no secret"
+        );
+
+        let text = toml::to_string(table).expect("the table writes");
+        let again = product_defaults()
+            .load_sources::<Config>(Some(&text), None, &BTreeMap::new())
+            .expect("the table reads again as a file");
+        assert_eq!(
+            toml::Value::try_from(loaded.settings()).expect("the tree serializes"),
+            toml::Value::try_from(again.settings()).expect("the tree serializes"),
+            "the table read again gives the same tree"
+        );
+        assert_eq!(table, again.table_with_secrets());
     }
 
     #[test]
