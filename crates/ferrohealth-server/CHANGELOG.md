@@ -10,6 +10,22 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `problem` writes RFC 9457 problem details as `application/problem+json`
+  for every error body a product answers outside a FHIR route. A `Problem`
+  carries the `type`, `title`, `status`, `detail` and `instance` members
+  and the extension members of a problem type, and answers its status as
+  an axum response; `ProblemType::about_blank` is the type of a problem
+  that adds nothing to its status. A product defines its types once in a
+  `ProblemTypes` registry under a base URI it owns and documents, which
+  refuses a slug defined twice. `problem::refusal_body` and
+  `problem::panic_body` are the opt-in for the stack's own `408`, `413`,
+  `429`, `503` and panic `500`: set in a `StackPolicy`, they write those as
+  problems with a fixed detail and the request id as a `urn:uuid:`
+  instance, never the path or a panic's message. A product that does not
+  opt in keeps its bodies and `refusal::keep_status` (#160).
+
 ## [0.3.7] - 2026-10-28
 
 ### Fixed
