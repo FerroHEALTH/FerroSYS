@@ -6,7 +6,8 @@
 //! The line names the method, the matched route template, the status, the
 //! latency, the server's request id and whether the client named one of its
 //! own. A body, the raw path, a header value, a query value outside the
-//! configured allow-list and the client's request id never reach it: a path
+//! configured allow-list or of the wrong [`ValueShape`] and the client's
+//! request id never reach it: a path
 //! segment, a query value or the client's free-text id can name a patient.
 //! The span carries the method, the route template and the status under
 //! the OpenTelemetry semantic conventions v1.44.0
@@ -25,6 +26,7 @@
 
 pub mod fields;
 
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -47,6 +49,39 @@ pub const UNMATCHED: &str = "<unmatched>";
 
 /// The longest query value the line carries, in characters.
 pub const MAX_VALUE_LENGTH: usize = 64;
+
+/// The shape a logged query value must have to reach the line.
+///
+/// A value of another shape is left out of the line with its key, so an
+/// allow-listed name cannot carry text of the wrong kind, such as an
+/// identifier sent as `offset`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ValueShape {
+    /// Any text, cut to [`MAX_VALUE_LENGTH`] characters.
+    #[default]
+    Text,
+    /// One to `max` ASCII digits, and nothing else: a sign, a space or a
+    /// percent-encoded digit leaves the value out.
+    Digits {
+        /// The most digits the value may have.
+        max: usize,
+    },
+}
+
+impl ValueShape {
+    /// Returns `value` as the line carries it, or `None` when it does not
+    /// have this shape.
+    fn admit(self, value: &str) -> Option<&str> {
+        match self {
+            Self::Text => Some(value),
+            Self::Digits { max } => (!value.is_empty()
+                && value.len() <= max
+                && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .then_some(value),
+        }
+    }
+}
 
 /// The `tracing` target of the request line and span.
 pub const TARGET: &str = "ferrohealth_telemetry::request";
@@ -151,6 +186,8 @@ pub struct RequestLog {
 #[derive(Clone, Default)]
 struct Settings {
     logged_query_parameters: Arc<[String]>,
+    shapes: BTreeMap<String, ValueShape>,
+    default_shape: ValueShape,
     recorders: Vec<Arc<dyn Recorder>>,
     duration: Option<Histogram<f64>>,
     scheme: Scheme,
@@ -172,6 +209,8 @@ impl std::fmt::Debug for RequestLog {
         let settings = &self.settings;
         f.debug_struct("RequestLog")
             .field("logged_query_parameters", &settings.logged_query_parameters)
+            .field("shapes", &settings.shapes)
+            .field("default_shape", &settings.default_shape)
             .field("recorders", &settings.recorders.len())
             .field("metrics", &settings.duration.is_some())
             .field("scheme", &settings.scheme)
@@ -191,6 +230,39 @@ impl RequestLog {
                 ..Settings::default()
             }),
         }
+    }
+
+    /// Requires the logged value of the query parameter `name` to have
+    /// `shape`, over the shape of [`RequestLog::with_default_query_shape`].
+    ///
+    /// The shape admits nothing on its own: only a name the log was created
+    /// with reaches the line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ferrohealth_telemetry::request_log::{RequestLog, ValueShape};
+    ///
+    /// // `offset=20` is logged; `offset=SYNTHETIC-1` is left out with its key.
+    /// let log = RequestLog::new(&["offset".to_owned(), "fetch".to_owned()])
+    ///     .with_query_shape("offset", ValueShape::Digits { max: 10 })
+    ///     .with_query_shape("fetch", ValueShape::Digits { max: 10 });
+    /// # let _ = log;
+    /// ```
+    #[must_use]
+    pub fn with_query_shape(mut self, name: impl Into<String>, shape: ValueShape) -> Self {
+        Arc::make_mut(&mut self.settings)
+            .shapes
+            .insert(name.into(), shape);
+        self
+    }
+
+    /// Requires every logged query value without a shape of its own to have
+    /// `shape`; without this call it is [`ValueShape::Text`].
+    #[must_use]
+    pub fn with_default_query_shape(mut self, shape: ValueShape) -> Self {
+        Arc::make_mut(&mut self.settings).default_shape = shape;
+        self
     }
 
     /// Feeds every finished request to `recorder` too.
@@ -449,10 +521,7 @@ impl Begun {
                 .and_then(|namer| namer.route(&method, request.uri().path()))
                 .map_or(Route::Unmatched, Route::Named),
         };
-        let query = allowed_parameters(
-            request.uri().query().unwrap_or_default(),
-            &log.settings.logged_query_parameters,
-        );
+        let query = allowed_parameters(request.uri().query().unwrap_or_default(), &log.settings);
         let request_id = request.extensions().get::<RequestId>().cloned();
         // NOTE: semantic conventions v1.44.0, `docs/http/http-spans.md`, [5]: by our own
         // design `http.request.method_original` is left out, as text the client wrote.
@@ -545,17 +614,30 @@ impl Begun {
     }
 }
 
-/// Returns the allowed `key=value` pairs of `query`, each value cut to
-/// [`MAX_VALUE_LENGTH`] characters, joined by spaces.
-fn allowed_parameters(query: &str, allowed: &[String]) -> String {
+/// Returns the allowed `key=value` pairs of `query` whose value has its
+/// shape, each value cut to [`MAX_VALUE_LENGTH`] characters, joined by
+/// spaces.
+fn allowed_parameters(query: &str, settings: &Settings) -> String {
     let mut out = String::new();
     for pair in query.split('&') {
         let Some((key, value)) = pair.split_once('=') else {
             continue;
         };
-        if !allowed.iter().any(|name| name == key) {
+        if !settings
+            .logged_query_parameters
+            .iter()
+            .any(|name| name == key)
+        {
             continue;
         }
+        let shape = settings
+            .shapes
+            .get(key)
+            .copied()
+            .unwrap_or(settings.default_shape);
+        let Some(value) = shape.admit(value) else {
+            continue;
+        };
         if !out.is_empty() {
             out.push(' ');
         }
@@ -581,7 +663,7 @@ mod tests {
     use super::fields::{FieldError, LineFields, MAX_FIELDS, Token};
     use super::{
         Completed, MAX_VALUE_LENGTH, Recorder, RequestId, RequestLog, RouteNamer, UNMATCHED,
-        allowed_parameters, method_label, middleware,
+        ValueShape, allowed_parameters, method_label, middleware,
     };
     use crate::section::{Format, TelemetrySection};
     use crate::telemetry::{Console, Service, Telemetry};
@@ -1130,23 +1212,71 @@ mod tests {
         );
     }
 
+    fn logged(log: &RequestLog, query: &str) -> String {
+        allowed_parameters(query, &log.settings)
+    }
+
     #[test]
     fn nothing_is_logged_when_the_allowlist_is_empty() {
-        assert_eq!("", allowed_parameters("subject_id=1234&_count=10", &[]));
+        assert_eq!(
+            "",
+            logged(&RequestLog::default(), "subject_id=1234&_count=10")
+        );
     }
 
     #[test]
     fn only_an_allowed_parameter_contributes_and_its_value_is_cut() {
-        let allowed = ["_count".to_owned()];
-        assert_eq!(
-            "_count=10",
-            allowed_parameters("subject_id=1234&_count=10", &allowed)
-        );
+        let count = RequestLog::new(&["_count".to_owned()]);
+        assert_eq!("_count=10", logged(&count, "subject_id=1234&_count=10"));
         let long = "x".repeat(MAX_VALUE_LENGTH + 10);
         assert_eq!(
             format!("_count={}", "x".repeat(MAX_VALUE_LENGTH)),
-            allowed_parameters(&format!("_count={long}"), &allowed)
+            logged(&count, &format!("_count={long}"))
         );
-        assert_eq!("", allowed_parameters("_count", &allowed));
+        assert_eq!("", logged(&count, "_count"));
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_shape_is_left_out_with_its_key() {
+        let paging =
+            RequestLog::new(&["offset".to_owned(), "fetch".to_owned(), "_count".to_owned()])
+                .with_query_shape("offset", ValueShape::Digits { max: 10 })
+                .with_query_shape("fetch", ValueShape::Digits { max: 10 });
+        assert_eq!(
+            "offset=20 fetch=10 _count=Qz7text",
+            logged(&paging, "offset=20&fetch=10&_count=Qz7text&subject=1")
+        );
+        for value in [
+            "SYNTHETIC-1",
+            "",
+            "12345678901",
+            "-1",
+            "+1",
+            "1 0",
+            "%31",
+            "１",
+        ] {
+            assert_eq!(
+                "fetch=5",
+                logged(&paging, &format!("offset={value}&fetch=5")),
+                "{value:?}"
+            );
+        }
+        let digits = RequestLog::new(&["offset".to_owned(), "_count".to_owned()])
+            .with_default_query_shape(ValueShape::Digits { max: 3 })
+            .with_query_shape("_count", ValueShape::Text);
+        assert_eq!(
+            "offset=123 _count=Qz7text",
+            logged(&digits, "offset=123&_count=Qz7text")
+        );
+        assert_eq!("", logged(&digits, "offset=1234"));
+        assert_eq!(
+            "",
+            logged(
+                &RequestLog::default().with_query_shape("offset", ValueShape::Digits { max: 10 }),
+                "offset=20"
+            ),
+            "a shape admits no name on its own"
+        );
     }
 }

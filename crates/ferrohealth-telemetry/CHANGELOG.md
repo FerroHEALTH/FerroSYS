@@ -10,6 +10,16 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `request_log::ValueShape` and `RequestLog::with_query_shape` and
+  `RequestLog::with_default_query_shape`: a product can require a logged
+  query value to be one to `max` ASCII digits, per parameter or for the
+  whole allow-list, and a value of another shape is left out of the line
+  with its key, so `offset=<an identifier>` never reaches it. With no shape
+  set, `[telemetry] logged_query_parameters` logs any text cut to 64
+  characters, as before (#167).
+
 ### Changed
 
 - The request span is a server span named `{method} {route}` (`HTTP
