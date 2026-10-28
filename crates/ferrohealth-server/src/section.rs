@@ -83,7 +83,7 @@ pub struct TlsSection {
     /// Whether the listener asks a client certificate.
     pub client_auth: ClientAuth,
     /// The CA bundle a client certificate must chain to; required unless
-    /// `client_auth` is `none`.
+    /// `client_auth` is `none`, and refused when it is.
     pub client_ca_file: Option<std::path::PathBuf>,
     /// How often, in seconds, the files are read again; unset, only `SIGHUP`
     /// reads them again.
@@ -180,12 +180,35 @@ struct RawTls {
 #[error("client_auth asks a client certificate, and client_ca_file names no CA it must chain to")]
 pub struct NoClientCa;
 
+/// A `[server.tls]` table whose `client_auth` and `client_ca_file` disagree.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ClientAuthError {
+    /// `client_auth` asks a client certificate and no CA is named.
+    #[error(transparent)]
+    NoClientCa(#[from] NoClientCa),
+    /// `client_ca_file` is set while `client_auth` is `none`, the default, so
+    /// the listener would ask no client certificate and the CA would do
+    /// nothing.
+    #[error(
+        "client_ca_file is set while client_auth is \"none\" (the default), so the listener \
+         would ask no client certificate; set client_auth to \"required\" or \"optional\", or \
+         remove client_ca_file"
+    )]
+    UnusedClientCa,
+}
+
 impl TryFrom<RawTls> for TlsSection {
-    type Error = NoClientCa;
+    type Error = ClientAuthError;
 
     fn try_from(raw: RawTls) -> Result<Self, Self::Error> {
         if raw.client_auth != ClientAuth::None && raw.client_ca_file.is_none() {
-            return Err(NoClientCa);
+            return Err(NoClientCa.into());
+        }
+        // NOTE: RFC 8446 §4.3.2, a client sends a certificate only after a CertificateRequest,
+        // which a listener under `none` never sends, so the CA could never take effect.
+        if raw.client_auth == ClientAuth::None && raw.client_ca_file.is_some() {
+            return Err(ClientAuthError::UnusedClientCa);
         }
         Ok(Self {
             certificate_file: raw.certificate_file,

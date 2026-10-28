@@ -32,7 +32,7 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, ServerConfig, SignatureScheme};
 use secrecy::ExposeSecret as _;
 
-use crate::section::{ClientAuth, TlsSection};
+use crate::section::{ClientAuth, NoClientCa, TlsSection};
 
 /// The listener's TLS could not be set up.
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +63,11 @@ pub enum TlsError {
     /// rustls refused the chain, the key, or the pair.
     #[error("the TLS configuration was refused")]
     Config(#[source] rustls::Error),
+    /// `client_auth` and `client_ca_file` disagree: a CA under `none`, which
+    /// would ask no client certificate, or a client certificate asked with no
+    /// CA to verify it against.
+    #[error(transparent)]
+    ClientAuth(#[from] crate::section::ClientAuthError),
     /// The client CA bundle could not serve as trust anchors.
     #[error("server.tls.client_ca_file holds no CA a client certificate can chain to")]
     ClientCa(#[source] rustls::server::VerifierBuilderError),
@@ -137,7 +142,8 @@ pub(crate) fn protocol_versions(
 ///
 /// Returns [`TlsError::Read`] and [`TlsError::Key`] for a file that cannot
 /// be read, [`TlsError::Pem`] for one that holds no certificate or no key,
-/// and [`TlsError::Config`] when the key does not match the certificate.
+/// [`TlsError::Config`] when the key does not match the certificate, and
+/// [`TlsError::ClientAuth`] when `client_auth` and `client_ca_file` disagree.
 pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError> {
     let served = chain("server.tls.certificate_file", &section.certificate_file)?;
     let key = private_key("server.tls.key_file", &section.key_file)?;
@@ -146,7 +152,11 @@ pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError
         .with_protocol_versions(protocol_versions(section.min_version))
         .map_err(TlsError::Config)?;
     let builder = match (section.client_auth, &section.client_ca_file) {
-        (ClientAuth::None, _) | (_, None) => versions.with_no_client_auth(),
+        (ClientAuth::None, None) => versions.with_no_client_auth(),
+        (ClientAuth::None, Some(_)) => {
+            return Err(crate::section::ClientAuthError::UnusedClientCa.into());
+        }
+        (_, None) => return Err(crate::section::ClientAuthError::from(NoClientCa).into()),
         (policy, Some(path)) => {
             let mut roots = RootCertStore::empty();
             for certificate in chain("server.tls.client_ca_file", path)? {
@@ -613,5 +623,47 @@ mod tests {
         let section: TlsSection = toml::from_str("certificate_file = \"a\"\nkey_file = \"b\"\n")
             .expect("the plain table loads");
         assert_eq!(TlsSection::new("a".into(), "b".into()), section);
+    }
+
+    #[test]
+    fn a_ca_under_no_client_auth_is_refused_at_load() {
+        for table in [
+            "certificate_file = \"a\"\nkey_file = \"b\"\nclient_ca_file = \"ca.pem\"\n",
+            "certificate_file = \"a\"\nkey_file = \"b\"\nclient_auth = \"none\"\nclient_ca_file = \"ca.pem\"\n",
+        ] {
+            let error = toml::from_str::<TlsSection>(table)
+                .expect_err("a CA under client_auth none would ask no certificate");
+            let message = error.message();
+            assert!(message.contains("client_ca_file"), "{error}");
+            assert!(
+                message.contains("required") && message.contains("optional"),
+                "the refusal says what to set: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_section_built_in_code_with_a_ca_under_no_client_auth_is_refused() {
+        let files = Files::new();
+        let section = TlsSection {
+            client_ca_file: Some(files.path("ca.pem")),
+            ..files.section(ClientAuth::None, false)
+        };
+        assert!(matches!(
+            super::server_config(&section),
+            Err(TlsError::ClientAuth(
+                crate::section::ClientAuthError::UnusedClientCa
+            ))
+        ));
+        let section = TlsSection {
+            client_ca_file: None,
+            ..files.section(ClientAuth::Required, false)
+        };
+        assert!(matches!(
+            super::server_config(&section),
+            Err(TlsError::ClientAuth(
+                crate::section::ClientAuthError::NoClientCa(_)
+            ))
+        ));
     }
 }

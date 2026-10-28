@@ -10,6 +10,19 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- A `[server.tls]` table that sets `client_ca_file` while `client_auth` is
+  `none`, the default included, is refused when the configuration is read,
+  and `tls::server_config` refuses such a `TlsSection` built in code with
+  `TlsError::ClientAuth`. Before, the CA was read and ignored and the
+  listener asked no client certificate, so a deployment that meant mutual
+  TLS served without it (RFC 8446 §4.3.2: a client sends a certificate only
+  after the server's CertificateRequest). Migration: set `client_auth =
+  "required"` (or `"optional"`) beside `client_ca_file`, or remove the file.
+  A section built in code with `client_auth` set and no CA is refused there
+  too, as the configuration already refused it (#158).
+
 ### Added
 
 - `problem` writes RFC 9457 problem details as `application/problem+json`
