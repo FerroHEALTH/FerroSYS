@@ -44,6 +44,15 @@ runs the same stack, the same health routes and the same shutdown.
   caller, `health::Health::with_info` serves `/health/info`, and
   `tls_client` reads the TLS material of outbound calls (feature `reqwest`
   sets it on a reqwest client).
+- `problem` writes RFC 9457 problem details (`application/problem+json`)
+  for a product's error bodies outside FHIR: a `Problem` with the RFC's
+  members and extension members, the product's types defined once in a
+  `ProblemTypes` registry under a URI it documents, and
+  `problem::refusal_body` and `problem::panic_body`, which a product sets
+  in its `StackPolicy` to answer the stack's refusals and panics as
+  problems. The body is `application/problem+json` whatever the client
+  asked for; it is JSON, so a client that accepts `application/json`
+  reads it.
 - `console` (feature `console`) adds an operator console's nonce
   Content-Security-Policy and the security headers beside it, and
   `same_origin`, which refuses a state-changing request another site sent.

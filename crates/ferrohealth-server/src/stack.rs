@@ -1030,4 +1030,122 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
         assert_eq!(Some(crate::refusal::TOO_LARGE), body["reason"].as_str());
     }
+
+    fn problems() -> StackPolicy {
+        StackPolicy {
+            panic_body: crate::problem::panic_body(),
+            refusal_body: crate::problem::refusal_body(),
+            ..StackPolicy::default()
+        }
+    }
+
+    /// The status, the content type and the JSON body of `request`.
+    async fn problem_of(
+        app: Router,
+        request: http::Request<Body>,
+    ) -> (StatusCode, Option<String>, serde_json::Value) {
+        let (status, headers, body) = send(app, request).await;
+        let content_type = headers
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        (
+            status,
+            content_type,
+            serde_json::from_str(&body).expect("JSON"),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_opted_in_timeout_is_problem_json_to_a_client_that_asks_for_json() {
+        let app = app(product(), serving(), &section(), problems());
+        let request = http::Request::builder()
+            .uri("/ferrosys/slow")
+            .header(http::header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .expect("the request builds");
+        let (status, content_type, body) = problem_of(app, request).await;
+        assert_eq!(StatusCode::REQUEST_TIMEOUT, status);
+        assert_eq!(Some(crate::problem::MEDIA_TYPE), content_type.as_deref());
+        assert_eq!("about:blank", body["type"]);
+        assert_eq!("Request Timeout", body["title"]);
+        assert_eq!(408, body["status"]);
+        assert_eq!(crate::refusal::TIMEOUT, body["detail"]);
+        assert!(
+            body["instance"]
+                .as_str()
+                .is_some_and(|instance| instance.starts_with("urn:uuid:")),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn opted_in_body_limits_are_problems_however_the_body_arrives() {
+        let section = ServerSection {
+            max_concurrent_requests: NonZeroUsize::new(1),
+            retry_after_s: 2,
+            ..section()
+        };
+        let app = app(product(), serving(), &section, problems());
+        let declared = http::Request::builder()
+            .method("POST")
+            .uri("/ferrosys/echo")
+            .header(http::header::CONTENT_LENGTH, "33")
+            .body(Body::from("a body of more than sixteen bytes"))
+            .expect("the request builds");
+        let (status, content_type, body) = problem_of(app.clone(), declared).await;
+        assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, status);
+        assert_eq!(Some(crate::problem::MEDIA_TYPE), content_type.as_deref());
+        assert_eq!(413, body["status"]);
+        assert_eq!(crate::refusal::TOO_LARGE, body["detail"]);
+        let streamed = http::Request::builder()
+            .method("POST")
+            .uri("/ferrosys/echo")
+            .body(Body::new(Chunks(vec!["bytes!!!!", "sixteen "])))
+            .expect("the request builds");
+        let (status, _, body) = problem_of(app, streamed).await;
+        assert_eq!(StatusCode::PAYLOAD_TOO_LARGE, status);
+        assert_eq!(crate::refusal::TOO_LARGE, body["detail"]);
+    }
+
+    #[tokio::test]
+    async fn an_opted_in_panic_carries_no_message_path_or_trace() {
+        let app = app(product(), serving(), &section(), problems());
+        let request = http::Request::builder()
+            .uri("/ferrosys/boom?patient=Qz7query")
+            .body(Body::empty())
+            .expect("the request builds");
+        let (status, content_type, body) = problem_of(app, request).await;
+        assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status);
+        assert_eq!(Some(crate::problem::MEDIA_TYPE), content_type.as_deref());
+        assert_eq!(500, body["status"]);
+        assert_eq!(crate::problem::INTERNAL, body["detail"]);
+        let rendered = body.to_string();
+        for leak in ["Qz7", "boom", "panicked", "stack.rs", "SELECT"] {
+            assert!(!rendered.contains(leak), "{leak} in {rendered}");
+        }
+        let members: Vec<_> = body
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            vec!["detail", "instance", "status", "title", "type"],
+            members
+        );
+    }
+
+    #[tokio::test]
+    async fn a_product_that_has_not_moved_keeps_its_own_status_and_body() {
+        let app = app(product(), serving(), &section(), StackPolicy::default());
+        let (status, headers, _) = get_status(app, "/ferrosys/boom").await;
+        assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status);
+        assert_ne!(
+            Some(crate::problem::MEDIA_TYPE),
+            headers
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+        );
+    }
 }

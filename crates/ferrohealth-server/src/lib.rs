@@ -20,6 +20,10 @@
 //! - [`health`]: `/health`, `/health/liveness`, `/health/readiness` and,
 //!   when the product supplies it, `/health/info`.
 //!
+//! [`problem`] writes RFC 9457 problem details, for a product's own error
+//! bodies outside FHIR and, when the product opts in, for the stack's
+//! refusals and panics.
+//!
 //! [`caller_rate`] is the per-caller rate limit a product mounts inside its
 //! authentication.
 //!
@@ -49,6 +53,7 @@ pub mod health;
 pub mod healthcheck;
 pub mod overload;
 pub mod panic;
+pub mod problem;
 pub mod refusal;
 pub mod request_id;
 #[cfg(feature = "console")]
