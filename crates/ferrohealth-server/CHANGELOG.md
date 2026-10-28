@@ -18,6 +18,12 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   read came before a concurrent one's. A rate the nanosecond clock cannot
   resolve now limits nothing; one request per nanosecond still limits as
   before (#149).
+- An HTTP/1.1 response whose request body the routes left unread, such as a
+  `404` to a `POST` of an unserved path or a declared-length `413`, now
+  carries `Connection: close`. The connection closes after such a response,
+  and a client that reused it for its next request met a closed socket,
+  which a non-idempotent request cannot safely retry (RFC 9112 §9.6). A
+  request whose body was read to its end keeps its connection (#150).
 
 ## [0.3.6] - 2026-10-27
 
