@@ -9,9 +9,16 @@
 //! listener still accepts (so an orchestrator stops routing first), the
 //! listener closes, and the requests in flight get the shutdown bound to
 //! finish; a connection still open then is closed before the call returns.
+//!
+//! An HTTP/1.1 response whose request body the routes left unread says
+//! `Connection: close`, because the connection closes after it (RFC 9112
+//! §9.6), so a client opens a new one for its next request.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::Router;
@@ -258,26 +265,114 @@ struct WithConnection {
 
 impl<B> tower::Service<http::Request<B>> for WithConnection
 where
-    Router: tower::Service<http::Request<B>>,
+    B: hyper::body::Body,
+    Router: tower::Service<http::Request<ReadToEnd<B>>, Response = axum::response::Response>,
 {
-    type Response = <Router as tower::Service<http::Request<B>>>::Response;
-    type Error = <Router as tower::Service<http::Request<B>>>::Error;
-    type Future = <Router as tower::Service<http::Request<B>>>::Future;
+    type Response = axum::response::Response;
+    type Error = <Router as tower::Service<http::Request<ReadToEnd<B>>>>::Error;
+    type Future = CloseUnread<<Router as tower::Service<http::Request<ReadToEnd<B>>>>::Future>;
 
-    fn poll_ready(
-        &mut self,
-        context: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), Self::Error>> {
-        tower::Service::<http::Request<B>>::poll_ready(&mut self.app, context)
+    fn poll_ready(&mut self, context: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        tower::Service::<http::Request<ReadToEnd<B>>>::poll_ready(&mut self.app, context)
     }
 
-    fn call(&mut self, mut request: http::Request<B>) -> Self::Future {
-        let extensions = request.extensions_mut();
-        extensions.insert(axum::extract::ConnectInfo(self.peer));
+    fn call(&mut self, request: http::Request<B>) -> Self::Future {
+        let http1 = request.version() < http::Version::HTTP_2;
+        let (mut parts, body) = request.into_parts();
+        parts
+            .extensions
+            .insert(axum::extract::ConnectInfo(self.peer));
         if let Some(peers) = &self.peers {
-            extensions.insert(peers.clone());
+            parts.extensions.insert(peers.clone());
         }
-        self.app.call(request)
+        let read = Arc::new(AtomicBool::new(body.is_end_stream()));
+        let body = ReadToEnd {
+            body,
+            read: Arc::clone(&read),
+        };
+        CloseUnread {
+            response: self.app.call(http::Request::from_parts(parts, body)),
+            read: http1.then_some(read),
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// A request body that records whether it was read to its end.
+    struct ReadToEnd<B> {
+        #[pin]
+        body: B,
+        read: Arc<AtomicBool>,
+    }
+}
+
+impl<B: hyper::body::Body> hyper::body::Body for ReadToEnd<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        let mut this = self.project();
+        let polled = this.body.as_mut().poll_frame(context);
+        if matches!(polled, Poll::Ready(None)) || this.body.is_end_stream() {
+            this.read.store(true, Ordering::Release);
+        }
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.body.size_hint()
+    }
+}
+
+/// Whether `headers` carry the "close" connection option (RFC 9112 §9.6).
+fn says_close(headers: &http::HeaderMap) -> bool {
+    headers
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|options| options.split(','))
+        .any(|option| option.trim().eq_ignore_ascii_case("close"))
+}
+
+pin_project_lite::pin_project! {
+    /// The response to an HTTP/1 request, which says `Connection: close` when
+    /// the request body was left unread.
+    struct CloseUnread<F> {
+        #[pin]
+        response: F,
+        read: Option<Arc<AtomicBool>>,
+    }
+}
+
+impl<F, E> Future for CloseUnread<F>
+where
+    F: Future<Output = Result<axum::response::Response, E>>,
+{
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let mut response = std::task::ready!(this.response.poll(context))?;
+        let unread = this
+            .read
+            .as_ref()
+            .is_some_and(|read| !read.load(Ordering::Acquire));
+        // NOTE: RFC 9112 §9.6: a sender SHOULD send the "close" option when it
+        // intends to close, as hyper does after a response that left a body unread.
+        if unread && !says_close(response.headers()) {
+            response.headers_mut().append(
+                http::header::CONNECTION,
+                http::HeaderValue::from_static("close"),
+            );
+        }
+        Poll::Ready(Ok(response))
     }
 }
 
@@ -1097,5 +1192,104 @@ mod tests {
         );
         request.abort();
         client.abort();
+    }
+
+    /// Serves `product` through the stack with `section` on a fresh port
+    /// until the returned sender fires.
+    async fn start_run(
+        product: Router,
+        section: ServerSection,
+    ) -> (
+        std::net::SocketAddr,
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<Result<Drained, super::ServeError>>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let lifecycle = Lifecycle::default();
+        let app = app(
+            product,
+            Health::new(Registry::default(), lifecycle.clone()),
+            &section,
+            StackPolicy::default(),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let served = tokio::spawn(async move {
+            super::run(listener, app, &section, lifecycle, async move {
+                let _received = stopped.await;
+            })
+            .await
+        });
+        (address, stop, served)
+    }
+
+    fn short_head_bound() -> ServerSection {
+        ServerSection {
+            header_read_timeout_ms: std::num::NonZeroU64::new(200).expect("not zero"),
+            drain_delay_ms: 0,
+            ..ServerSection::default()
+        }
+    }
+
+    /// Sends a `POST path` with `size` body bytes, then `GET /health/liveness`
+    /// on the same connection, and returns everything the server answered.
+    async fn post_then_get(address: std::net::SocketAddr, path: &str, size: usize) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connects");
+        let (mut reader, mut writer) = stream.into_split();
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/xml\r\ncontent-length: {size}\r\n\r\n"
+        );
+        let sent = tokio::spawn(async move {
+            writer.write_all(head.as_bytes()).await?;
+            writer.write_all(&vec![b'x'; size]).await?;
+            writer
+                .write_all(b"GET /health/liveness HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+                .await?;
+            Ok::<_, std::io::Error>(writer)
+        });
+        let mut answer = Vec::new();
+        let _read = tokio::time::timeout(Duration::from_secs(5), reader.read_to_end(&mut answer))
+            .await
+            .expect("the server answers or closes");
+        let _sent = sent.await;
+        String::from_utf8_lossy(&answer).to_ascii_lowercase()
+    }
+
+    #[tokio::test]
+    async fn a_large_body_left_unread_closes_the_connection_with_connection_close() {
+        let (address, stop, served) = start_run(Router::new(), short_head_bound()).await;
+        let answer = post_then_get(address, "/definition/template/t/validation", 300_000).await;
+        let first = answer.split("\r\n\r\n").next().unwrap_or_default();
+        assert!(first.starts_with("http/1.1 404"), "{answer}");
+        let second_answered = answer.matches("http/1.1 ").count() > 1;
+        assert!(
+            second_answered || first.contains("\r\nconnection: close"),
+            "the second request is answered or the first response says it closes: {answer}"
+        );
+        stop.send(()).expect("the server listens for the signal");
+        let _drained = served.await.expect("the task ends");
+    }
+
+    #[tokio::test]
+    async fn a_body_read_to_its_end_keeps_the_connection() {
+        let product = Router::new().route(
+            "/echo",
+            axum::routing::post(|body: axum::body::Bytes| async move { body.len().to_string() }),
+        );
+        let (address, stop, served) = start_run(product, short_head_bound()).await;
+        let answer = post_then_get(address, "/echo", 300_000).await;
+        let first = answer.split("\r\n\r\n").next().unwrap_or_default();
+        assert!(first.starts_with("http/1.1 200"), "{answer}");
+        assert!(!first.contains("connection: close"), "{answer}");
+        assert_eq!(
+            2,
+            answer.matches("http/1.1 200").count(),
+            "the connection serves the second request: {answer}"
+        );
+        stop.send(()).expect("the server listens for the signal");
+        let _drained = served.await.expect("the task ends");
     }
 }
