@@ -40,7 +40,7 @@ Shipped with functional changes because: the two fixes beside it are in the same
   `ENFILE`, the listener pauses from 5 ms doubling up to 1 s before it
   accepts again, and logs at most one warning every 10 seconds with the
   count it suppressed, where it used to retry at once and log each failure
-  (#151).
+  (#151, GHSA-2mc2-h3jq-c5wg).
 
 ## [0.3.6] - 2026-10-27
 
