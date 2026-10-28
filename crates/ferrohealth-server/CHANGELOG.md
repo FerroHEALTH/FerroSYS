@@ -25,6 +25,23 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   which a non-idempotent request cannot safely retry (RFC 9112 §9.6). A
   request whose body was read to its end keeps its connection (#150).
 
+### Security
+
+Shipped with functional changes because: the two fixes beside it are in the same serving path, and every product takes `ferrohealth-server` by one exact pin in one lockstep pull request, so a security-only 0.3.7 would be followed by a 0.3.8 for the same products within the day.
+
+- A plain-HTTP connection that never sends a byte is closed once the header
+  read timeout passes, counted from accept (`[server]
+  header_read_timeout_ms`, 30 s by default). Before, hyper-util's protocol
+  detection waited for the first byte with no deadline, so a client with no
+  credentials that opened a few thousand silent connections held every file
+  descriptor of the process and the service stopped answering, health
+  checks included. The same bound now holds after a TLS handshake. After an
+  `accept` error that is not one connection's, such as `EMFILE` or
+  `ENFILE`, the listener pauses from 5 ms doubling up to 1 s before it
+  accepts again, and logs at most one warning every 10 seconds with the
+  count it suppressed, where it used to retry at once and log each failure
+  (#151).
+
 ## [0.3.6] - 2026-10-27
 
 ### Added

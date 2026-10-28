@@ -10,6 +10,11 @@
 //! listener closes, and the requests in flight get the shutdown bound to
 //! finish; a connection still open then is closed before the call returns.
 //!
+//! A connection whose first byte does not arrive inside the header read
+//! timeout, counted from accept, is closed. An `accept` error that is not one
+//! connection's, such as `EMFILE`, pauses the listener from 5 ms doubling up
+//! to a second, and is logged at most once every ten seconds.
+//!
 //! An HTTP/1.1 response whose request body the routes left unread says
 //! `Connection: close`, because the connection closes after it (RFC 9112
 //! §9.6), so a client opens a new one for its next request.
@@ -44,7 +49,8 @@ pub enum Drained {
 ///
 /// # Errors
 ///
-/// Never fails today: an accept error is logged and the listener goes on.
+/// Never fails today: an accept error is logged and the listener goes on,
+/// pausing first when the error is not one connection's.
 pub async fn serve<F>(
     listener: TcpListener,
     app: Router,
@@ -66,6 +72,10 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client may take to send a request head when the caller names
 /// no bound.
 ///
+/// The bound starts when the connection is accepted: a connection whose first
+/// byte does not arrive inside it is closed, over plain HTTP and over TLS, for
+/// HTTP/1.1 and HTTP/2 alike.
+///
 /// It is hyper's own default for HTTP/1
 /// (<https://docs.rs/hyper/1/hyper/server/conn/http1/struct.Builder.html#method.header_read_timeout>).
 pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -79,7 +89,8 @@ pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// # Errors
 ///
-/// Never fails today: an accept error is logged and the listener goes on.
+/// Never fails today: an accept error is logged and the listener goes on,
+/// pausing first when the error is not one connection's.
 /// The `Result` keeps the shape of [`serve`].
 pub async fn serve_tls<F>(
     listener: TcpListener,
@@ -104,6 +115,7 @@ where
 struct Connections {
     app: Router,
     tls: Option<Arc<crate::tls::ReloadableTls>>,
+    header_read_timeout: Duration,
     builder: hyper_util::server::conn::auto::Builder<Streams>,
     graceful: hyper_util::server::graceful::GracefulShutdown,
     tasks: tokio::task::JoinSet<()>,
@@ -158,6 +170,172 @@ fn no_delay(stream: &tokio::net::TcpStream) {
     }
 }
 
+pin_project_lite::pin_project! {
+    /// An accepted stream whose first byte must arrive before a deadline set
+    /// at accept.
+    ///
+    /// hyper's HTTP/1 header bound starts only once its dispatcher reads a
+    /// head, and the version sniff before it reads with no deadline
+    /// (<https://docs.rs/hyper-util/0.1/hyper_util/server/conn/auto/struct.Builder.html>),
+    /// so a connection that never sends a byte would be held for ever.
+    struct FirstByte<S> {
+        #[pin]
+        stream: S,
+        deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    }
+}
+
+impl<S> FirstByte<S> {
+    const fn new(stream: S, deadline: Pin<Box<tokio::time::Sleep>>) -> Self {
+        Self {
+            stream,
+            deadline: Some(deadline),
+        }
+    }
+}
+
+impl<S: tokio::io::AsyncRead> tokio::io::AsyncRead for FirstByte<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.project();
+        let before = buffer.filled().len();
+        let polled = this.stream.poll_read(context, buffer);
+        match &polled {
+            Poll::Ready(Ok(())) if buffer.filled().len() > before => *this.deadline = None,
+            Poll::Pending => {
+                if let Some(deadline) = this.deadline.as_mut()
+                    && deadline.as_mut().poll(context).is_ready()
+                {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "the client sent no byte inside the header read timeout",
+                    )));
+                }
+            }
+            Poll::Ready(_) => {}
+        }
+        polled
+    }
+}
+
+impl<S: tokio::io::AsyncWrite> tokio::io::AsyncWrite for FirstByte<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.project().stream.poll_write(context, buffer)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.project().stream.poll_flush(context)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.project().stream.poll_shutdown(context)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffers: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        self.project().stream.poll_write_vectored(context, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+}
+
+/// The first pause after an `accept` error that is not one connection's.
+const ACCEPT_PAUSE_FIRST: Duration = Duration::from_millis(5);
+
+/// The longest pause after an `accept` error, which axum's own `serve` waits
+/// after each one (<https://docs.rs/axum/0.8/axum/fn.serve.html>).
+const ACCEPT_PAUSE_MOST: Duration = Duration::from_secs(1);
+
+/// How often an `accept` error is logged at most.
+const ACCEPT_LOG_EVERY: Duration = Duration::from_secs(10);
+
+/// The `accept` errors of one listener: the pause before the next `accept`
+/// and the time of the last warning.
+///
+/// An error such as `EMFILE` or `ENFILE` lasts until a descriptor frees, so
+/// accepting again at once would spin and flood the log.
+#[derive(Debug, Default)]
+struct AcceptErrors {
+    pause: Duration,
+    logged_at: Option<tokio::time::Instant>,
+    suppressed: u64,
+}
+
+impl AcceptErrors {
+    /// Records `error` at `now` and returns the pause before the next
+    /// `accept`: none for an error of the one connection, and a pause that
+    /// doubles up to [`ACCEPT_PAUSE_MOST`] for the others.
+    fn failed(&mut self, error: &std::io::Error, now: tokio::time::Instant) -> Duration {
+        // NOTE: no specification governs this: our own design; axum's `serve`
+        // also goes on at once on these three kinds, which end one connection.
+        let one_connection = matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::ConnectionReset
+        );
+        if !one_connection {
+            self.pause = (self.pause * 2).clamp(ACCEPT_PAUSE_FIRST, ACCEPT_PAUSE_MOST);
+        }
+        if self
+            .logged_at
+            .is_some_and(|logged| now.saturating_duration_since(logged) < ACCEPT_LOG_EVERY)
+        {
+            self.suppressed = self.suppressed.saturating_add(1);
+        } else {
+            let pause_ms = if one_connection {
+                0
+            } else {
+                self.pause.as_millis()
+            };
+            tracing::warn!(
+                %error,
+                pause_ms,
+                suppressed = self.suppressed,
+                "a connection could not be accepted"
+            );
+            self.logged_at = Some(now);
+            self.suppressed = 0;
+        }
+        if one_connection {
+            Duration::ZERO
+        } else {
+            self.pause
+        }
+    }
+
+    /// Records an accepted connection, which ends the pauses.
+    const fn accepted(&mut self) {
+        self.pause = Duration::ZERO;
+    }
+}
+
+/// Where a listener's connections come from: the socket, or a test's stand-in.
+trait Accept {
+    /// The next connection, or the error of the attempt.
+    fn accept(
+        &mut self,
+    ) -> impl Future<Output = std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>> + Send;
+}
+
+impl Accept for TcpListener {
+    async fn accept(&mut self) -> std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)> {
+        TcpListener::accept(self).await
+    }
+}
+
 impl Connections {
     fn new(
         app: Router,
@@ -176,6 +354,7 @@ impl Connections {
         Self {
             app,
             tls,
+            header_read_timeout,
             builder,
             graceful: hyper_util::server::graceful::GracefulShutdown::new(),
             tasks: tokio::task::JoinSet::new(),
@@ -184,22 +363,17 @@ impl Connections {
     }
 
     /// Serves one accepted connection on its own task.
-    fn accept(&mut self, accepted: std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)>) {
+    fn accept(&mut self, stream: tokio::net::TcpStream, peer: std::net::SocketAddr) {
         while self.tasks.try_join_next().is_some() {}
-        let (stream, peer) = match accepted {
-            Ok(accepted) => accepted,
-            Err(error) => {
-                tracing::warn!(%error, "a connection could not be accepted");
-                return;
-            }
-        };
         no_delay(&stream);
+        let first_byte = Box::pin(tokio::time::sleep(self.header_read_timeout));
         let app = self.app.clone();
         let builder = self.builder.clone();
         let watcher = self.graceful.watcher();
         let Some(tls) = &self.tls else {
             self.tasks.spawn(async move {
                 let service = connection_service(app, peer, None);
+                let stream = FirstByte::new(stream, first_byte);
                 let connection = builder
                     .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
                     .into_owned();
@@ -232,6 +406,7 @@ impl Connections {
                 )
             });
             let service = connection_service(app, peer, peers);
+            let stream = FirstByte::new(stream, first_byte);
             let connection = builder
                 .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
                 .into_owned();
@@ -376,9 +551,43 @@ where
     }
 }
 
+/// Accepts on `listener` until `stop` completes, pausing after an `accept`
+/// error as `errors` says; returns once `stop` completed.
+async fn accept_until<L, S>(
+    listener: &mut L,
+    connections: &mut Connections,
+    errors: &mut AcceptErrors,
+    stop: Pin<&mut S>,
+) where
+    L: Accept,
+    S: Future<Output = ()>,
+{
+    let mut stop = stop;
+    loop {
+        let pause = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, peer)) => {
+                    errors.accepted();
+                    connections.accept(stream, peer);
+                    continue;
+                }
+                Err(error) => errors.failed(&error, tokio::time::Instant::now()),
+            },
+            () = stop.as_mut() => return,
+        };
+        if pause.is_zero() {
+            continue;
+        }
+        tokio::select! {
+            () = tokio::time::sleep(pause) => {}
+            () = stop.as_mut() => return,
+        }
+    }
+}
+
 /// Accepts on `listener` until `signal` completes, then drains.
-async fn drive<F>(
-    listener: TcpListener,
+async fn drive<L, F>(
+    mut listener: L,
     mut connections: Connections,
     lifecycle: Lifecycle,
     signal: F,
@@ -386,16 +595,19 @@ async fn drive<F>(
     bound: Duration,
 ) -> Drained
 where
+    L: Accept,
     F: Future<Output = ()> + Send + 'static,
 {
     lifecycle.booted();
+    let mut errors = AcceptErrors::default();
     tokio::pin!(signal);
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => connections.accept(accepted),
-            () = &mut signal => break,
-        }
-    }
+    accept_until(
+        &mut listener,
+        &mut connections,
+        &mut errors,
+        signal.as_mut(),
+    )
+    .await;
     lifecycle.drain();
     tracing::info!(
         drain_delay_ms = delay.as_millis(),
@@ -403,12 +615,13 @@ where
     );
     let delayed = tokio::time::sleep(delay);
     tokio::pin!(delayed);
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => connections.accept(accepted),
-            () = &mut delayed => break,
-        }
-    }
+    accept_until(
+        &mut listener,
+        &mut connections,
+        &mut errors,
+        delayed.as_mut(),
+    )
+    .await;
     drop(listener);
     tracing::info!("the listener stops accepting; draining the requests in flight");
     let Connections {
@@ -1231,6 +1444,67 @@ mod tests {
         }
     }
 
+    /// How long until `stream` is closed by the server, waiting at most five
+    /// seconds; `None` when it is still open then.
+    async fn closed_after<S>(stream: &mut S) -> Option<Duration>
+    where
+        S: tokio::io::AsyncRead + Unpin,
+    {
+        use tokio::io::AsyncReadExt as _;
+        let started = std::time::Instant::now();
+        let mut rest = Vec::new();
+        let read =
+            tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut rest)).await;
+        read.is_ok().then(|| started.elapsed())
+    }
+
+    #[tokio::test]
+    async fn a_connection_that_sends_no_byte_is_closed_at_the_header_read_timeout() {
+        let (address, stop, served) = start_run(Router::new(), short_head_bound()).await;
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connects");
+        let closed = closed_after(&mut stream).await;
+        assert!(
+            closed.is_some_and(|after| after >= Duration::from_millis(150)),
+            "a silent connection is closed once the bound from accept passes: {closed:?}"
+        );
+        assert_eq!(
+            Outcome::Healthy,
+            check(address, "", Duration::from_secs(2)).await,
+            "the listener still serves"
+        );
+        stop.send(()).expect("the server listens for the signal");
+        let _drained = served.await.expect("the task ends");
+    }
+
+    #[tokio::test]
+    async fn a_tls_connection_that_sends_no_request_byte_is_closed_at_the_header_read_timeout() {
+        let certificate = certificate();
+        let section = ServerSection {
+            tls: Some(certificate.section.clone()),
+            ..short_head_bound()
+        };
+        let (address, stop, served) = start_run(Router::new(), section).await;
+        let pinned = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+        let stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connects");
+        let mut stream = tokio_rustls::TlsConnector::from(pinned.config())
+            .connect(
+                rustls::pki_types::ServerName::IpAddress(address.ip().into()),
+                stream,
+            )
+            .await
+            .expect("the handshake completes");
+        assert!(
+            closed_after(&mut stream).await.is_some(),
+            "a connection silent after its handshake is closed once the bound passes"
+        );
+        stop.send(()).expect("the server listens for the signal");
+        let _drained = served.await.expect("the task ends");
+    }
+
     /// Sends a `POST path` with `size` body bytes, then `GET /health/liveness`
     /// on the same connection, and returns everything the server answered.
     async fn post_then_get(address: std::net::SocketAddr, path: &str, size: usize) -> String {
@@ -1291,5 +1565,70 @@ mod tests {
         );
         stop.send(()).expect("the server listens for the signal");
         let _drained = served.await.expect("the task ends");
+    }
+
+    #[test]
+    fn an_accept_error_pauses_more_each_time_and_is_logged_once_a_window() {
+        let mut errors = super::AcceptErrors::default();
+        let now = tokio::time::Instant::now();
+        let emfile = std::io::Error::from_raw_os_error(24);
+        let pauses: Vec<_> = (0..10).map(|_| errors.failed(&emfile, now)).collect();
+        assert_eq!(super::ACCEPT_PAUSE_FIRST, pauses[0]);
+        assert_eq!(super::ACCEPT_PAUSE_FIRST * 2, pauses[1]);
+        assert_eq!(super::ACCEPT_PAUSE_MOST, pauses[9], "{pauses:?}");
+        assert_eq!(9, errors.suppressed, "one warning in the window");
+        let later = now + super::ACCEPT_LOG_EVERY;
+        let _pause = errors.failed(&emfile, later);
+        assert_eq!(0, errors.suppressed, "the next window warns again");
+        errors.accepted();
+        assert_eq!(super::ACCEPT_PAUSE_FIRST, errors.failed(&emfile, later));
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionAborted);
+        assert_eq!(Duration::ZERO, errors.failed(&reset, later));
+    }
+
+    /// A listener whose every `accept` fails with `EMFILE`, counting the
+    /// attempts; after `limit` of them it never answers again.
+    struct Exhausted {
+        attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        limit: usize,
+    }
+
+    impl super::Accept for Exhausted {
+        async fn accept(
+            &mut self,
+        ) -> std::io::Result<(tokio::net::TcpStream, std::net::SocketAddr)> {
+            let attempts = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if attempts >= self.limit {
+                std::future::pending::<()>().await;
+            }
+            Err(std::io::Error::from_raw_os_error(24))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_accept_loop_backs_off_while_descriptors_are_exhausted() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let listener = Exhausted {
+            attempts: attempts.clone(),
+            limit: 10_000,
+        };
+        let connections = super::Connections::new(Router::new(), None, super::HEADER_READ_TIMEOUT);
+        let drained = super::drive(
+            listener,
+            connections,
+            Lifecycle::default(),
+            tokio::time::sleep(Duration::from_secs(3)),
+            Duration::ZERO,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert_eq!(Drained::Complete, drained);
+        let attempts = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            (2..=12).contains(&attempts),
+            "three seconds of EMFILE take a few attempts, not a spin: {attempts}"
+        );
     }
 }
