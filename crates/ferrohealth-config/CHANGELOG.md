@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-10-28
+
 ### Added
 
 - `Loaded::table_with_secrets` returns the table the file, the environment
@@ -126,7 +128,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.6...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.7...HEAD
+[0.2.7]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.6...ferrohealth-config-v0.2.7
 [0.2.6]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.5...ferrohealth-config-v0.2.6
 [0.2.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.4...ferrohealth-config-v0.2.5
 [0.2.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.3...ferrohealth-config-v0.2.4
