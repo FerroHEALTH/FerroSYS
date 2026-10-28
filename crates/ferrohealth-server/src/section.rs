@@ -191,9 +191,9 @@ pub enum ClientAuthError {
     /// the listener would ask no client certificate and the CA would do
     /// nothing.
     #[error(
-        "client_ca_file is set while client_auth is \"none\" (the default), so the listener \
-         would ask no client certificate; set client_auth to \"required\" or \"optional\", or \
-         remove client_ca_file"
+        "client_ca_file is set while client_auth is none (the default), so the listener would \
+         ask no client certificate; set client_auth to required or optional, or remove \
+         client_ca_file"
     )]
     UnusedClientCa,
 }
@@ -542,6 +542,18 @@ mod tests {
             Err(super::TlsVersionError::Deprecated("1.0")),
             super::TlsVersion::try_from("1.0".to_owned())
         );
+    }
+
+    #[test]
+    fn the_client_ca_refusal_reads_in_full_through_the_loader() {
+        let error = load(
+            "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nclient_ca_file = \"ca.pem\"\n",
+        )
+        .expect_err("a client CA under none is refused");
+        let rendered = error.to_string();
+        for word in ["client_ca_file", "none", "required", "optional"] {
+            assert!(rendered.contains(word), "{word} in {rendered}");
+        }
     }
 
     #[test]
