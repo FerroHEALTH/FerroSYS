@@ -19,6 +19,10 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   read, and the `Debug` rendering of `Loaded` leaves it out, so a product
   that keeps configuration revisions takes the table from the loader in
   place of placing the overrides a second time (#156).
+- `Provenance::secret_source` answers where a secret's setting came from,
+  counting the secret and its `<key>_file` sibling as one setting: either
+  name gives the stronger source of the two, so a settings page reads one
+  source for both (#157).
 
 ## [0.2.6] - 2026-10-27
 

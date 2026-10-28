@@ -1505,6 +1505,43 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_and_its_file_sibling_report_one_source() {
+        let cdr = "[cdr]\nurl = \"https://cdr.example.org/\"\n";
+        let through_file = format!("{cdr}password_file = \"/run/secrets/cdr\"\n");
+        let cases = [
+            (
+                Source::File,
+                loader().load_sources::<Config>(Some(&through_file), None, &BTreeMap::new()),
+            ),
+            (
+                Source::Environment,
+                loader().load_sources::<Config>(
+                    Some(cdr),
+                    None,
+                    &environment(&[("FERROSYS__CDR__PASSWORD_FILE", "/run/secrets/cdr")]),
+                ),
+            ),
+            (
+                Source::Set,
+                loader().load_sources_with::<Config>(
+                    Some(cdr),
+                    None,
+                    &BTreeMap::new(),
+                    &[("cdr.password".to_owned(), SENTINEL.to_owned())],
+                ),
+            ),
+        ];
+        for (expected, loaded) in cases {
+            let loaded = loaded.expect("the secret loads");
+            let provenance = loaded.provenance();
+            assert_eq!(expected, provenance.secret_source("cdr.password"));
+            assert_eq!(expected, provenance.secret_source("cdr.password_file"));
+            assert_eq!(Source::File, provenance.secret_source("cdr.url"));
+            assert_eq!(Source::Default, provenance.secret_source("cdr.user"));
+        }
+    }
+
+    #[test]
     fn a_secret_and_its_file_sibling_together_are_refused() {
         let loaded = loader()
             .load_sources::<Config>(

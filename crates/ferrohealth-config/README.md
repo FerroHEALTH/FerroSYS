@@ -30,7 +30,8 @@ console reads its configuration the same way, so an operator learns it once.
   and the typed overrides applied and the defaults left out, for a product
   that stores its configuration as revisions. It holds secrets as read.
 - `provenance::Provenance` says where each key came from: the default, the
-  file or the environment, with the variable.
+  file or the environment, with the variable; `Provenance::secret_source`
+  counts a secret and its `<key>_file` sibling as one setting.
 - `report::check_report` renders the running tree for `config check`, one
   key per line with its source. Secrets held in the redacting types of
   `ferrohealth-secret` show as `***`, and a secret's `<key>_file` sibling is
