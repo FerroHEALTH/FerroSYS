@@ -10,6 +10,23 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- The request span is a server span named `{method} {route}` (`HTTP
+  {route}` for a method outside the known set, the method alone when no
+  route matched or was named), and its status is `Error` for a 5xx, under
+  the OpenTelemetry semantic conventions v1.44.0 (`docs/http/http-spans.md`,
+  Name and Status), read by `tracing-opentelemetry` from `otel.name`,
+  `otel.kind` and `otel.status_code`. The `tracing` span keeps the name
+  `request`; a product test that reads the exported span's name `request`
+  reads the new name (#166).
+
+### Fixed
+
+- A method outside the known set is `_OTHER` in the request line's
+  `method` and the span's `http.request.method`, as it already was in the
+  histogram; the client's token reaches neither (#166).
+
 ## [0.2.2] - 2026-10-27
 
 ### Added

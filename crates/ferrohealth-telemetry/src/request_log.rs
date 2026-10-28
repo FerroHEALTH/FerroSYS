@@ -11,7 +11,11 @@
 //! The span carries the method, the route template and the status under
 //! the OpenTelemetry semantic conventions v1.44.0
 //! (`docs/http/http-spans.md`, HTTP server span), and is the root of a
-//! trace of the server's own.
+//! trace of the server's own. It is a server span named `{method} {route}`,
+//! and its status is `Error` for a 5xx. A method outside the known set is
+//! `_OTHER` in the line, the span and the histogram ([`method_label`]), and
+//! the client's token is kept out of all three: `http.request.method_original`
+//! would carry text the client wrote.
 //!
 //! With [`RequestLog::with_metrics`] every request is also recorded in the
 //! `http.server.request.duration` histogram (semantic conventions v1.44.0,
@@ -285,6 +289,20 @@ pub fn method_label(method: &Method) -> &'static str {
     }
 }
 
+/// The name of a request's span: `{method} {route}`, with `HTTP` for the
+/// method when it is [`OTHER_METHOD`] and the method alone when no route
+/// matched or was named.
+///
+/// Semantic conventions v1.44.0, `docs/http/http-spans.md`, Name: the
+/// target of a server span is `http.route`, never the path.
+fn span_name(label: &str, route: Option<&str>) -> String {
+    let method = if label == OTHER_METHOD { "HTTP" } else { label };
+    match route {
+        Some(route) => format!("{method} {route}"),
+        None => method.to_owned(),
+    }
+}
+
 /// The `network.protocol.version` of `version`.
 const fn protocol_version(version: Version) -> Option<&'static str> {
     match version {
@@ -436,10 +454,16 @@ impl Begun {
             &log.settings.logged_query_parameters,
         );
         let request_id = request.extensions().get::<RequestId>().cloned();
+        // NOTE: semantic conventions v1.44.0, `docs/http/http-spans.md`, [5]: by our own
+        // design `http.request.method_original` is left out, as text the client wrote.
+        let label = method_label(&method);
         let span = tracing::info_span!(
             target: TARGET,
             "request",
-            http.request.method = method.as_str(),
+            otel.name = span_name(label, route.template()),
+            otel.kind = "server",
+            otel.status_code = Empty,
+            http.request.method = label,
             http.route = route.template().unwrap_or(UNMATCHED),
             http.response.status_code = Empty,
             request_id = request_id.as_ref().map_or("", RequestId::id),
@@ -462,6 +486,11 @@ impl Begun {
         let latency = self.started.elapsed();
         self.span
             .record("http.response.status_code", status.as_u16());
+        // NOTE: semantic conventions v1.44.0, `docs/http/http-spans.md`, Status: a server
+        // span's status is `Error` for a 5xx and left unset for every other code.
+        if status.is_server_error() {
+            self.span.record("otel.status_code", "ERROR");
+        }
         let completed = Completed {
             method: &self.method,
             route: self.route.template(),
@@ -474,7 +503,7 @@ impl Begun {
         log.measure(&completed, self.version);
         let latency_ms = latency.as_secs_f64() * 1000.0;
         let (method, route, query, request_id) = (
-            self.method.as_str(),
+            method_label(&self.method),
             completed.route.unwrap_or(UNMATCHED),
             self.query.as_str(),
             self.request_id.as_ref().map_or("", RequestId::id),
@@ -691,7 +720,9 @@ mod tests {
         telemetry.shutdown().expect("the providers stop");
         assert_eq!(1, spans.len(), "one span: the request's");
         let span = spans.first().expect("the request span");
-        assert_eq!("request", span.name);
+        assert_eq!("GET /fhir/Patient/{id}", span.name);
+        assert_eq!(opentelemetry::trace::SpanKind::Server, span.span_kind);
+        assert_eq!(opentelemetry::trace::Status::Unset, span.status);
         assert_eq!(SpanId::INVALID, span.parent_span_id, "the span is a root");
         assert_ne!(
             TraceId::from_hex("4bf92f3577b34da6a3ce929d0e0e4736").expect("the client's trace id"),
@@ -710,6 +741,104 @@ mod tests {
             .find(|kv| kv.key.as_str() == "http.response.status_code")
             .map(|kv| kv.value.to_string());
         assert_eq!(Some("200".to_owned()), status);
+    }
+
+    #[test]
+    fn an_unknown_method_is_other_everywhere_and_a_server_error_marks_the_span() {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let telemetry = Telemetry::with_tracers(Service::new("ferrosys", "0.0.0"), provider);
+        let section = TelemetrySection {
+            format: Format::Json,
+            ..TelemetrySection::default()
+        };
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::registry().with(
+            telemetry
+                .layers(&section, &Console::new(false, None), capture.clone())
+                .expect("the layers build")
+                .layers,
+        );
+        let app = Router::new()
+            .route("/v1/query/aql", axum::routing::any(|| async { "ok" }))
+            .route("/broken", get(|| async { http::StatusCode::BAD_GATEWAY }))
+            .layer(RequestLog::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("the runtime builds");
+        tracing::subscriber::with_default(subscriber, || {
+            for (method, uri) in [
+                ("QZ7METHOD", "/v1/query/aql"),
+                ("POST", "/v1/query/aql"),
+                ("GET", "/broken"),
+                ("GET", "/elsewhere"),
+            ] {
+                let request = http::Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("the request builds");
+                runtime
+                    .block_on(app.clone().oneshot(request))
+                    .expect("the request is served");
+            }
+        });
+        let spans = exporter.get_finished_spans().expect("the spans");
+        telemetry.shutdown().expect("the providers stop");
+        let seen: Vec<(String, String, opentelemetry::trace::Status)> = spans
+            .iter()
+            .map(|span| {
+                let method = span
+                    .attributes
+                    .iter()
+                    .find(|kv| kv.key.as_str() == "http.request.method")
+                    .map(|kv| kv.value.to_string())
+                    .unwrap_or_default();
+                assert_eq!(opentelemetry::trace::SpanKind::Server, span.span_kind);
+                (span.name.to_string(), method, span.status.clone())
+            })
+            .collect();
+        assert_eq!(
+            vec![
+                (
+                    "HTTP /v1/query/aql".to_owned(),
+                    "_OTHER".to_owned(),
+                    opentelemetry::trace::Status::Unset
+                ),
+                (
+                    "POST /v1/query/aql".to_owned(),
+                    "POST".to_owned(),
+                    opentelemetry::trace::Status::Unset
+                ),
+                (
+                    "GET /broken".to_owned(),
+                    "GET".to_owned(),
+                    opentelemetry::trace::Status::error("")
+                ),
+                (
+                    "GET".to_owned(),
+                    "GET".to_owned(),
+                    opentelemetry::trace::Status::Unset
+                ),
+            ],
+            seen
+        );
+        let text = capture.text();
+        let methods: Vec<String> = text
+            .lines()
+            .map(|line| {
+                let line: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
+                line["method"].as_str().unwrap_or_default().to_owned()
+            })
+            .collect();
+        assert_eq!(vec!["_OTHER", "POST", "GET", "GET"], methods);
+        assert!(!text.contains("QZ7METHOD"), "{text}");
+        assert!(
+            !format!("{spans:?}").contains("QZ7METHOD"),
+            "no span carries the client's token"
+        );
     }
 
     fn json_lines(
