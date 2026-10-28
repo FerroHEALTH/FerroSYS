@@ -366,6 +366,8 @@ impl Connections {
     fn accept(&mut self, stream: tokio::net::TcpStream, peer: std::net::SocketAddr) {
         while self.tasks.try_join_next().is_some() {}
         no_delay(&stream);
+        // NOTE: RFC 9112 §9.5 lets a server close a connection it holds inactive;
+        // the bound counts from accept so the version sniff is held to it too.
         let first_byte = Box::pin(tokio::time::sleep(self.header_read_timeout));
         let app = self.app.clone();
         let builder = self.builder.clone();
