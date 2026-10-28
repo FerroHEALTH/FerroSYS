@@ -669,13 +669,41 @@ pub async fn run<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    let tls = match &section.tls {
+        Some(tls) => Some(Arc::new(crate::tls::ReloadableTls::new(tls)?)),
+        None => None,
+    };
+    run_with_tls(listener, app, section, tls, lifecycle, signal).await
+}
+
+/// Serves `app` as [`run`] does, over `tls` when it is set, which the
+/// product built and keeps; `section.tls` is not read.
+///
+/// The server reads `tls` again on `SIGHUP` and every `reload_interval_s`
+/// of its table, and the product may call [`crate::tls::ReloadableTls::reload`]
+/// from its own reload path too.
+///
+/// # Errors
+///
+/// Returns [`ServeError::Io`] for an I/O error of the listener.
+pub async fn run_with_tls<F>(
+    listener: TcpListener,
+    app: Router,
+    section: &crate::section::ServerSection,
+    tls: Option<Arc<crate::tls::ReloadableTls>>,
+    lifecycle: Lifecycle,
+    signal: F,
+) -> Result<Drained, ServeError>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let (delay, bound) = (section.drain_delay(), section.shutdown_timeout());
     let section_timeout = section.header_read_timeout();
-    let Some(section) = &section.tls else {
+    let Some(tls) = tls else {
         let connections = Connections::new(app, None, section_timeout);
         return Ok(drive(listener, connections, lifecycle, signal, delay, bound).await);
     };
-    let tls = Arc::new(crate::tls::ReloadableTls::new(section)?);
+    let section = tls.section().clone();
     let reloads = tokio::spawn(reload_on_signal(Arc::clone(&tls)));
     let interval = section.reload_interval_s.map(|seconds| {
         tokio::spawn(reload_every(
@@ -697,7 +725,15 @@ where
 pub struct Listener {
     socket: TcpListener,
     app: Router,
-    tls: Option<crate::section::TlsSection>,
+    tls: Option<ListenerTls>,
+}
+
+/// The TLS of one listener: a table the server reads, or a configuration the
+/// product keeps.
+#[derive(Debug)]
+enum ListenerTls {
+    Section(crate::section::TlsSection),
+    Kept(Arc<crate::tls::ReloadableTls>),
 }
 
 impl Listener {
@@ -714,7 +750,16 @@ impl Listener {
     /// Serves over the TLS `tls` configures.
     #[must_use]
     pub fn with_tls(mut self, tls: crate::section::TlsSection) -> Self {
-        self.tls = Some(tls);
+        self.tls = Some(ListenerTls::Section(tls));
+        self
+    }
+
+    /// Serves over `tls`, which the product built and keeps, so it can read
+    /// it again from its own reload path and its faults name the keys it
+    /// was built with ([`crate::tls::ReloadableTls::of`]).
+    #[must_use]
+    pub fn with_reloadable_tls(mut self, tls: Arc<crate::tls::ReloadableTls>) -> Self {
+        self.tls = Some(ListenerTls::Kept(tls));
         self
     }
 }
@@ -743,8 +788,15 @@ where
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let mut tasks = tokio::task::JoinSet::new();
     for one in listeners {
+        let tls = match one.tls {
+            Some(ListenerTls::Section(tls)) => {
+                Some(Arc::new(crate::tls::ReloadableTls::new(&tls)?))
+            }
+            Some(ListenerTls::Kept(tls)) => Some(tls),
+            None => None,
+        };
         let section = crate::section::ServerSection {
-            tls: one.tls,
+            tls: None,
             ..section.clone()
         };
         let lifecycle = lifecycle.clone();
@@ -753,7 +805,7 @@ where
             let signal = async move {
                 let _stopped: bool = stopped.wait_for(|stop| *stop).await.is_ok();
             };
-            run(one.socket, one.app, &section, lifecycle, signal).await
+            run_with_tls(one.socket, one.app, &section, tls, lifecycle, signal).await
         });
     }
     let signalled = {
@@ -1035,6 +1087,103 @@ mod tests {
         std::fs::copy(&other.section.certificate_file, &certificate_file)
             .expect("the certificate is copied");
         crate::section::TlsSection::new(certificate_file, dir.join("unused.key"))
+    }
+
+    #[tokio::test]
+    async fn a_listener_serves_the_tls_the_product_keeps_and_reloads() {
+        let certificate = certificate();
+        let kept = std::sync::Arc::new(
+            crate::tls::ReloadableTls::of(&certificate.section, crate::tls_keys!("metrics.tls"))
+                .expect("the TLS files read"),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let lifecycle = Lifecycle::default();
+        lifecycle.booted();
+        let app = app(
+            Router::new(),
+            Health::new(Registry::default(), lifecycle.clone()),
+            &ServerSection::default(),
+            StackPolicy::default(),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let signal = async move {
+            let _received = stopped.await;
+        };
+        let section = ServerSection {
+            drain_delay_ms: 0,
+            ..ServerSection::default()
+        };
+        let reloaded = std::sync::Arc::clone(&kept);
+        let served = tokio::spawn(async move {
+            super::run_all(
+                vec![
+                    super::Listener::new(listener, app)
+                        .with_reloadable_tls(std::sync::Arc::clone(&kept)),
+                ],
+                &section,
+                lifecycle,
+                signal,
+            )
+            .await
+        });
+        let first = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+        assert_eq!(
+            Outcome::Healthy,
+            crate::healthcheck::check_tls(address, "", Duration::from_secs(5), &first).await
+        );
+        let renewed = super::tests::certificate();
+        std::fs::copy(
+            &renewed.section.certificate_file,
+            &certificate.section.certificate_file,
+        )
+        .expect("the renewed certificate is written");
+        std::fs::copy(&renewed.section.key_file, &certificate.section.key_file)
+            .expect("the renewed key is written");
+        reloaded.reload().expect("the renewed pair reads");
+        let second = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+        assert_eq!(
+            Outcome::Healthy,
+            crate::healthcheck::check_tls(address, "", Duration::from_secs(5), &second).await,
+            "the next handshake serves the renewed certificate"
+        );
+        stop.send(()).expect("the server listens for the signal");
+        served
+            .await
+            .expect("the task ends")
+            .expect("the server serves");
+    }
+
+    #[test]
+    fn a_kept_tls_names_its_own_keys_and_a_failed_reload_keeps_the_running_pair() {
+        let certificate = certificate();
+        let missing = crate::section::TlsSection {
+            certificate_file: "/nonexistent/server.pem".into(),
+            ..certificate.section.clone()
+        };
+        let error = crate::tls::ReloadableTls::of(&missing, crate::tls_keys!("metrics.tls"))
+            .expect_err("the file is missing");
+        assert!(
+            error
+                .to_string()
+                .starts_with("metrics.tls.certificate_file "),
+            "{error}"
+        );
+        assert_eq!(
+            "server.tls.key_file",
+            crate::tls::TlsKeys::SERVER.key_file()
+        );
+        let kept =
+            crate::tls::ReloadableTls::of(&certificate.section, crate::tls_keys!("admin.tls"))
+                .expect("the TLS files read");
+        let running = kept.current();
+        std::fs::write(&certificate.section.key_file, "not a key").expect("the key is broken");
+        let refused = kept.reload().expect_err("a broken key does not read");
+        assert!(refused.to_string().contains("admin.tls.key"), "{refused}");
+        assert!(
+            std::sync::Arc::ptr_eq(&running, &kept.current()),
+            "the running configuration stays"
+        );
     }
 
     #[test]

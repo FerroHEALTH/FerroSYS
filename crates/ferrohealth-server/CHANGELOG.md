@@ -10,19 +10,6 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
-### Changed
-
-- A `[server.tls]` table that sets `client_ca_file` while `client_auth` is
-  `none`, the default included, is refused when the configuration is read,
-  and `tls::server_config` refuses such a `TlsSection` built in code with
-  `TlsError::ClientAuth`. Before, the CA was read and ignored and the
-  listener asked no client certificate, so a deployment that meant mutual
-  TLS served without it (RFC 8446 §4.3.2: a client sends a certificate only
-  after the server's CertificateRequest). Migration: set `client_auth =
-  "required"` (or `"optional"`) beside `client_ca_file`, or remove the file.
-  A section built in code with `client_auth` set and no CA is refused there
-  too, as the configuration already refused it (#158).
-
 ### Added
 
 - `problem` writes RFC 9457 problem details as `application/problem+json`
@@ -38,6 +25,35 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   problems with a fixed detail and the request id as a `urn:uuid:`
   instance, never the path or a panic's message. A product that does not
   opt in keeps its bodies and `refusal::keep_status` (#160).
+
+- A product can keep a listener's TLS and reload it from its own reload
+  path: `serve::run_with_tls` and `serve::Listener::with_reloadable_tls`
+  serve a `tls::ReloadableTls` the product built, and its `reload` returns
+  the outcome, so a configuration change whose renewed pair does not read
+  is refused with it. The server still reads the same configuration again
+  on `SIGHUP` and every `reload_interval_s` (#159).
+
+- `tls::TlsKeys`, with `tls::TlsKeys::SERVER` and the `tls_keys!` macro,
+  names the table a listener's TLS comes from: `tls::server_config_of`,
+  `tls::ReloadableTls::of` and `tls::HealthcheckTls::read_of` name every
+  fault under its keys, so a second listener configured from
+  `[metrics.tls]` reports `metrics.tls.certificate_file` where it reported
+  `server.tls.certificate_file`. A client CA bundle rustls refuses is
+  `TlsError::ClientCaRefused` with its key; `TlsError::ClientCa` is
+  deprecated and no longer returned (#159).
+
+### Changed
+
+- A `[server.tls]` table that sets `client_ca_file` while `client_auth` is
+  `none`, the default included, is refused when the configuration is read,
+  and `tls::server_config` refuses such a `TlsSection` built in code with
+  `TlsError::ClientAuth`. Before, the CA was read and ignored and the
+  listener asked no client certificate, so a deployment that meant mutual
+  TLS served without it (RFC 8446 §4.3.2: a client sends a certificate only
+  after the server's CertificateRequest). Migration: set `client_auth =
+  "required"` (or `"optional"`) beside `client_ca_file`, or remove the file.
+  A section built in code with `client_auth` set and no CA is refused there
+  too, as the configuration already refused it (#158).
 
 ## [0.3.7] - 2026-10-28
 
