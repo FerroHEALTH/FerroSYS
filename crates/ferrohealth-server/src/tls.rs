@@ -488,7 +488,7 @@ mod tests {
 
     use super::{HealthcheckTls, PeerCertificates, ReloadableTls, TlsError, provider};
     use crate::health::Health;
-    use crate::healthcheck::{Outcome, check_tls, check_url};
+    use crate::healthcheck::{Get, GetError, Outcome, check_tls, check_url};
     use crate::section::{ClientAuth, ServerSection, TlsSection};
     use crate::stack::{StackPolicy, app};
 
@@ -662,6 +662,115 @@ mod tests {
             ),
             "https needs the pin"
         );
+    }
+
+    #[tokio::test]
+    async fn a_get_over_the_pinned_tls_reads_the_status_and_the_body() {
+        let files = Files::new();
+        let address = start(&files.section(ClientAuth::Required, false)).await;
+        let with = HealthcheckTls::read(&files.section(ClientAuth::Required, true))
+            .expect("the identity reads");
+        let answer = Get::new(address, "/peer", Duration::from_secs(5), 64)
+            .with_tls(with.clone())
+            .send()
+            .await
+            .expect("an answer");
+        assert_eq!(http::StatusCode::OK, answer.status());
+        assert_eq!(b"1", answer.body(), "the identity reached the handler");
+        let readiness = Get::new(address, "/health/readiness", Duration::from_secs(5), 65_536)
+            .with_tls(with)
+            .send()
+            .await
+            .expect("an answer");
+        assert_eq!(http::StatusCode::OK, readiness.status());
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(readiness.body()).is_ok(),
+            "the readiness document is read whole"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_get_over_the_pinned_tls_refuses_a_listener_with_another_certificate() {
+        let served = Files::new();
+        let address = start(&served.section(ClientAuth::None, false)).await;
+        let other = Files::new();
+        let pin =
+            HealthcheckTls::read(&other.section(ClientAuth::None, false)).expect("the pin reads");
+        let error = Get::new(address, "/peer", Duration::from_secs(5), 64)
+            .with_tls(pin.clone())
+            .send()
+            .await
+            .expect_err("the listener presents a certificate the pin does not hold");
+        assert!(matches!(error, GetError::Handshake(_)), "{error:?}");
+        assert!(
+            matches!(
+                check_tls(address, "", Duration::from_secs(5), &pin).await,
+                Outcome::Failed(reason) if reason.starts_with("the TLS handshake failed")
+            ),
+            "the check refuses it too"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_get_over_the_pinned_tls_refuses_a_body_past_its_bound() {
+        let files = Files::new();
+        let address = start(&files.section(ClientAuth::None, false)).await;
+        let pin =
+            HealthcheckTls::read(&files.section(ClientAuth::None, false)).expect("the pin reads");
+        let error = Get::new(address, "/health/readiness", Duration::from_secs(5), 4)
+            .with_tls(pin.clone())
+            .send()
+            .await
+            .expect_err("the readiness document is longer than four bytes");
+        assert!(
+            matches!(
+                error,
+                GetError::TooLong {
+                    status: http::StatusCode::OK,
+                    limit: 4
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            Outcome::Healthy,
+            check_tls(address, "", Duration::from_secs(5), &pin).await,
+            "the check reads no body, so no bound refuses it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_get_over_the_pinned_tls_gives_up_at_its_timeout() {
+        let files = Files::new();
+        let pin =
+            HealthcheckTls::read(&files.section(ClientAuth::None, false)).expect("the pin reads");
+        let silent = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = silent.local_addr().expect("the address");
+        let held = tokio::spawn(async move {
+            let (stream, _peer) = silent.accept().await.expect("a connection");
+            std::future::pending::<()>().await;
+            drop(stream);
+        });
+        let timeout = Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        let error = Get::new(address, "/peer", timeout, 64)
+            .with_tls(pin.clone())
+            .send()
+            .await
+            .expect_err("the listener never answers the handshake");
+        assert!(
+            matches!(error, GetError::Timeout(t) if t == timeout),
+            "{error:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "it gave up in time"
+        );
+        assert_eq!(
+            Outcome::Timeout,
+            check_tls(address, "", timeout, &pin).await
+        );
+        held.abort();
     }
 
     #[test]
