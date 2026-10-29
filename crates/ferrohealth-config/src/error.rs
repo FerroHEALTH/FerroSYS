@@ -15,7 +15,8 @@ use ferrohealth_secret::file::SecretError;
 /// error is not kept as the cause of [`ConfigError::Syntax`] and
 /// [`ConfigError::Invalid`]: its rendering quotes the offending line of the
 /// document, which can hold a secret under a misspelt key, so the variants
-/// keep its position and its reason with every quoted value masked.
+/// keep its position and its reason with every refused value masked,
+/// whatever its type.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ConfigError {
@@ -43,7 +44,7 @@ pub enum ConfigError {
         /// The 1-based line and column of the fault, when the reader names
         /// one.
         position: Option<(usize, usize)>,
-        /// What the reader reported, every quoted value masked.
+        /// What the reader reported, every refused value masked.
         reason: String,
     },
     /// The merged configuration names a key the tree does not have, or holds
@@ -56,7 +57,7 @@ pub enum ConfigError {
         variable: Option<String>,
         /// The closest key the tree knows, for an unknown key.
         suggestion: Option<String>,
-        /// What the reader reported, every quoted value masked.
+        /// What the reader reported, every refused value masked.
         reason: String,
     },
     /// A variable this loader reads holds a value that is not UTF-8.
@@ -186,23 +187,54 @@ impl fmt::Display for Position {
     }
 }
 
-/// Returns `message` with every double-quoted run replaced by the redaction
-/// placeholder.
+/// Returns `message` with every refused value replaced by the redaction
+/// placeholder, whatever its type.
 ///
-/// serde quotes a refused value in double quotes and names a field in
-/// backticks, so the field names stay and the values go.
+/// serde quotes a refused string in double quotes and renders any other
+/// refused value in backticks after `invalid type: ` or `invalid value: `
+/// and its kind (``integer `7` ``, ``boolean `true` ``), up to the
+/// `, expected` that names the type it wanted. Every double-quoted run goes,
+/// and every backticked run of that part goes too, so a field or variant
+/// name in an `unknown field` or `expected` list stays.
 pub(crate) fn mask_values(message: &str) -> String {
-    let mut out = String::with_capacity(message.len());
+    let masked = mask_quoted(message, '"', '"');
+    let mut out = String::with_capacity(masked.len());
+    let mut rest = masked.as_str();
+    while let Some((at, prefix)) = UNEXPECTED
+        .iter()
+        .filter_map(|prefix| rest.find(prefix).map(|at| (at, *prefix)))
+        .min()
+    {
+        let (before, after) = rest.split_at(at + prefix.len());
+        out.push_str(before);
+        let end = after.find(EXPECTED).unwrap_or(after.len());
+        let (unexpected, tail) = after.split_at(end);
+        out.push_str(&mask_quoted(unexpected, '`', '`'));
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The prefixes after which serde renders the value it refused.
+const UNEXPECTED: [&str; 2] = ["invalid type: ", "invalid value: "];
+
+/// What follows the refused value in serde's message.
+const EXPECTED: &str = ", expected";
+
+/// Returns `text` with every run between `open` and `close` replaced by the
+/// redaction placeholder, an unclosed run to the end.
+fn mask_quoted(text: &str, open: char, close: char) -> String {
+    let mut out = String::with_capacity(text.len());
     let mut quoted = false;
-    for character in message.chars() {
-        if character == '"' {
-            if quoted {
-                out.push_str(ferrohealth_secret::REDACTED);
-                out.push('"');
-            } else {
-                out.push('"');
-            }
-            quoted = !quoted;
+    for character in text.chars() {
+        if quoted && character == close {
+            out.push_str(ferrohealth_secret::REDACTED);
+            out.push(close);
+            quoted = false;
+        } else if !quoted && character == open {
+            out.push(open);
+            quoted = true;
         } else if !quoted {
             out.push(character);
         }
@@ -240,6 +272,44 @@ mod tests {
             mask_values("unknown field `pasword`, expected `user` or `password`")
         );
         assert_eq!("an open \"***", mask_values("an open \"Qz7sentinel"));
+    }
+
+    #[test]
+    fn a_refused_value_of_every_kind_is_masked_and_the_expected_type_stays() {
+        for (message, masked) in [
+            (
+                "invalid type: integer `73194426`, expected a string",
+                "invalid type: integer `***`, expected a string",
+            ),
+            (
+                "invalid type: floating point `7319.4426`, expected a string",
+                "invalid type: floating point `***`, expected a string",
+            ),
+            (
+                "invalid type: boolean `true`, expected a string",
+                "invalid type: boolean `***`, expected a string",
+            ),
+            (
+                "invalid value: integer `73194426`, expected u16",
+                "invalid value: integer `***`, expected u16",
+            ),
+            (
+                "invalid type: character `Q`, expected `a` or `b`",
+                "invalid type: character `***`, expected `a` or `b`",
+            ),
+            ("invalid type: integer `7319", "invalid type: integer `***"),
+            (
+                "invalid type: sequence, expected a string",
+                "invalid type: sequence, expected a string",
+            ),
+        ] {
+            assert_eq!(masked, mask_values(message), "{message}");
+        }
+        assert_eq!("missing field `url`", mask_values("missing field `url`"));
+        assert_eq!(
+            "unknown variant `put`, expected `get` or `post`",
+            mask_values("unknown variant `put`, expected `get` or `post`")
+        );
     }
 
     #[test]

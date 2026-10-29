@@ -1542,6 +1542,35 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_of_the_wrong_type_is_never_echoed() {
+        for (value, sentinel) in [
+            ("73194426", "73194426"),
+            ("-73194426", "73194426"),
+            ("7319.4426", "7319"),
+            ("7.3194426e3", "3194426"),
+            ("true", "true"),
+            ("1979-05-27T07:32:00Z", "1979"),
+            ("[73194426, 2]", "73194426"),
+            ("{ part = 73194426 }", "73194426"),
+        ] {
+            let file = format!("[cdr]\nurl = \"https://cdr.example.org/\"\npassword = {value}\n");
+            let error = loader()
+                .load_sources::<Config>(Some(&file), None, &BTreeMap::new())
+                .err();
+            let Some(ConfigError::Invalid { key, reason, .. }) = &error else {
+                panic!("{value}: a refusal of the value: {error:?}");
+            };
+            assert_eq!(Some("cdr.password"), key.as_deref(), "{value}");
+            assert!(reason.contains("expected"), "{value}: {reason}");
+            let shown = format!(
+                "{error:?} {}",
+                error.as_ref().map(ToString::to_string).unwrap_or_default()
+            );
+            assert!(!shown.contains(sentinel), "{value}: {shown}");
+        }
+    }
+
+    #[test]
     fn a_secret_and_its_file_sibling_together_are_refused() {
         let loaded = loader()
             .load_sources::<Config>(
