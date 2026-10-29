@@ -449,7 +449,9 @@ const fn protocol_version(version: Version) -> Option<&'static str> {
 /// without the boxing of `axum::middleware`.
 pub async fn middleware(State(log): State<RequestLog>, request: Request, next: Next) -> Response {
     let begun = Begun::of(&log, &request);
-    let response = next.run(request).instrument(begun.span.clone()).await;
+    let response = Serving::new(next.run(request), begun.serving())
+        .instrument(begun.span.clone())
+        .await;
     begun.finish(&log, &response);
     response
 }
@@ -487,8 +489,13 @@ where
 
     fn call(&mut self, request: http::Request<B>) -> Self::Future {
         let begun = Begun::of(&self.log, &request);
+        let serving = begun.serving();
+        let inner = {
+            let _serving = crate::panic::serving(serving.clone());
+            self.inner.call(request)
+        };
         RequestLogFuture {
-            inner: self.inner.call(request).instrument(begun.span.clone()),
+            inner: Serving::new(inner, serving).instrument(begun.span.clone()),
             begun: Some(begun),
             log: self.log.clone(),
         }
@@ -500,9 +507,36 @@ pin_project_lite::pin_project! {
     /// response is ready.
     pub struct RequestLogFuture<F> {
         #[pin]
-        inner: Instrumented<F>,
+        inner: Instrumented<Serving<F>>,
         begun: Option<Begun>,
         log: RequestLog,
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// A request's future that names the request to the panic hook while it
+    /// is polled ([`crate::panic::record`]).
+    struct Serving<F> {
+        #[pin]
+        inner: F,
+        request_id: Option<Arc<str>>,
+    }
+}
+
+impl<F> Serving<F> {
+    /// Wraps `inner`, the future serving the request `request_id`.
+    const fn new(inner: F, request_id: Option<Arc<str>>) -> Self {
+        Self { inner, request_id }
+    }
+}
+
+impl<F: Future> Future for Serving<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let _serving = crate::panic::serving(this.request_id.clone());
+        this.inner.poll(cx)
     }
 }
 
@@ -603,6 +637,11 @@ impl Begun {
             started: Instant::now(),
             _in_flight: in_flight,
         }
+    }
+
+    /// The server's id of the request, for the panic hook.
+    fn serving(&self) -> Option<Arc<str>> {
+        self.request_id.as_ref().map(|id| Arc::clone(&id.id))
     }
 
     /// Records the answered request: the span's status, the recorders, the
@@ -1185,6 +1224,75 @@ mod tests {
             assert_eq!(2, seen.len(), "{uri}: both feed the recorder");
             assert_eq!(seen.first(), seen.last(), "{uri}");
         }
+    }
+
+    #[test]
+    fn a_panic_inside_a_request_names_its_server_id_and_nothing_else_of_it() {
+        let boom = || {
+            Router::new().route(
+                "/fhir/Patient/{id}",
+                get(|| async {
+                    let caught = std::panic::catch_unwind(|| {
+                        panic!("patient Qz7sentinel has no EHR");
+                    });
+                    if caught.is_ok() { "kept" } else { "caught" }
+                }),
+            )
+        };
+        let with_id = |router: Router| {
+            router.layer(axum::middleware::map_request(
+                |mut request: axum::extract::Request| async move {
+                    request
+                        .extensions_mut()
+                        .insert(RequestId::new("srv-1", true));
+                    request
+                },
+            ))
+        };
+        let by_middleware = |log: RequestLog| {
+            with_id(boom().layer(axum::middleware::from_fn_with_state(log, middleware)))
+        };
+        let by_layer = |log: RequestLog| with_id(boom().layer(log));
+        let without_id = |log: RequestLog| boom().layer(log);
+        let panic_line = |lines: &[serde_json::Value]| {
+            lines
+                .iter()
+                .find(|line| line["target"] == crate::panic::TARGET)
+                .cloned()
+                .expect("a panic line")
+        };
+        let _hook = crate::panic::HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::panic::install_hook();
+        let request = || {
+            http::Request::builder()
+                .uri("/fhir/Patient/999911120?subject=Qz7query")
+                .header("x-request-id", "Qz7client")
+                .body(Body::empty())
+                .expect("the request builds")
+        };
+        let apps: [&dyn Fn(RequestLog) -> Router; 2] = [&by_middleware, &by_layer];
+        for app in apps {
+            let (status, lines) = json_lines(RequestLog::default(), app, request());
+            assert_eq!(http::StatusCode::OK, status);
+            let line = panic_line(&lines);
+            assert_eq!("srv-1", line["request_id"], "{lines:?}");
+            let text = format!("{line}");
+            for leaked in ["Qz7sentinel", "999911120", "Qz7query", "Qz7client"] {
+                assert!(
+                    !text.contains(leaked),
+                    "the panic line carries {leaked}: {text}"
+                );
+            }
+        }
+        let (_, lines) = json_lines(RequestLog::default(), without_id, request());
+        let line = panic_line(&lines);
+        assert!(
+            line.get("request_id").is_none(),
+            "a request with no id names none: {line}"
+        );
+        let _default = std::panic::take_hook();
     }
 
     #[test]

@@ -10,6 +10,18 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- The panic line of `panic::install_hook` carries `request_id`, the
+  server's id of the request the panicking thread is serving, when the
+  request log (feature `axum`, as `RequestLog` layer or `middleware`) wraps
+  that request and the request carries a `request_log::RequestId`. A panic
+  outside a request, or in a request with no id, leaves the field off. The
+  id is the server's own, so nothing a client wrote reaches the line, and
+  the panic message stays withheld. A product with a hook of its own for
+  the request id can drop it for this one. A task the handler spawns runs
+  outside the request and names none (#181).
+
 ## [0.2.3] - 2026-10-29
 
 ### Added

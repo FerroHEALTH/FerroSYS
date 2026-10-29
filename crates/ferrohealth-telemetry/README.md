@@ -22,8 +22,9 @@ same way.
 - `telemetry::Console` decides colour from the format, the terminal and
   `NO_COLOR`, and carries the directives no filter can drop. `install`
   returns the `FilterHandle` that replaces the filter at run time.
-- `panic::install_hook` writes one fixed line per panic, with the thread
-  and the source location and never the message.
+- `panic::install_hook` writes one fixed line per panic, with the thread,
+  the source location and the server's id of the request being served
+  when the request log wraps it, and never the message.
 - `request_log` (feature `axum`) writes one line and opens one span per
   request: the method, the route template, the status, the latency and the
   server's request id. It never carries a body, the raw path, a header
