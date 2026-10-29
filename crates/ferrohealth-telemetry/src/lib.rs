@@ -15,7 +15,8 @@
 //!   request starts a trace of the server's own.
 //! - [`panic::install_hook`] replaces Rust's panic hook with one fixed log
 //!   line that leaves the panic message out, since a message can quote
-//!   whatever value the thread held.
+//!   whatever value the thread held, and names the server's id of the
+//!   request the thread serves when the request log wraps it.
 //! - `request_log` (feature `axum`) writes one line and opens one span per
 //!   request: the method, the matched route template, the status, the
 //!   latency and the server's request id, never a body, the raw path, a
