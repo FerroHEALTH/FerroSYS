@@ -4,7 +4,7 @@
 name = "ferrohealth-server"
 description = "The HTTP server plumbing of the FerroHEALTH products: the request id, the panic catch, the limits, the health routes, the bounded drain, the healthcheck and the CLI skeleton"
 # Its own version line, released by the tag ferrohealth-server-v<version>.
-version = "0.4.0"
+version = "0.4.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
