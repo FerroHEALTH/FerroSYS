@@ -39,7 +39,7 @@ same way.
 
 ```toml
 [dependencies]
-ferrohealth-telemetry = { version = "=0.2.2", features = ["otlp", "prometheus", "axum"] }
+ferrohealth-telemetry = { version = "=0.2.3", features = ["otlp", "prometheus", "axum"] }
 ```
 
 Pin the version exactly, as every FerroHEALTH product does. A console leaves
