@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-10-29
+
 ### Fixed
 
 - The refusal of a client CA under `client_auth = "none"` names `none`,
@@ -311,7 +313,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.8...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.9...HEAD
+[0.3.9]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.8...ferrohealth-server-v0.3.9
 [0.3.8]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.7...ferrohealth-server-v0.3.8
 [0.3.7]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.6...ferrohealth-server-v0.3.7
 [0.3.6]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.5...ferrohealth-server-v0.3.6
