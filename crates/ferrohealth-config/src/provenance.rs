@@ -3,6 +3,7 @@
 
 //! Where each key of a loaded configuration came from.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -79,13 +80,17 @@ impl Provenance {
     }
 
     /// Returns where the value of the dotted key `key` came from.
+    ///
+    /// A key inside an array of tables, such as `pixm.manager[1].method`,
+    /// came from where its array came from.
     #[must_use]
     pub fn source(&self, key: &str) -> Source {
-        if covers(&self.sets, key) {
+        let key = unindexed(key);
+        if covers(&self.sets, &key) {
             Source::Set
-        } else if self.variable(key).is_some() {
+        } else if self.variable(&key).is_some() {
             Source::Environment
-        } else if covers(&self.file_keys, key) {
+        } else if covers(&self.file_keys, &key) {
             Source::File
         } else {
             Source::Default
@@ -145,10 +150,11 @@ impl Provenance {
     }
 
     /// Returns the environment variable that set the dotted key `key`, or a
-    /// table above it, when one did.
+    /// table or an array of tables above it, when one did.
     #[must_use]
     pub fn variable(&self, key: &str) -> Option<&str> {
-        above(key)
+        let key = unindexed(key);
+        above(&key)
             .find_map(|candidate| self.environment.get(candidate))
             .map(String::as_str)
     }
@@ -159,12 +165,32 @@ impl Provenance {
     /// dotted key `key`, for a refusal of `key` itself, such as an unknown
     /// section a `<PREFIX>__SECTION__KEY` override created.
     pub(crate) fn variable_below(&self, key: &str) -> Option<&str> {
-        let prefix = format!("{key}.");
+        let prefix = format!("{}.", unindexed(key));
         self.environment
             .iter()
             .find(|(set, _)| set.starts_with(&prefix))
             .map(|(_, variable)| variable.as_str())
     }
+}
+
+/// Returns the dotted key `key` with the index of every element of an array
+/// of tables left out: `pixm.manager[1].method` is `pixm.manager.method`.
+fn unindexed(key: &str) -> Cow<'_, str> {
+    if !key.contains('[') {
+        return Cow::Borrowed(key);
+    }
+    let segments: Vec<&str> = key.split('.').map(|segment| indexed(segment).0).collect();
+    Cow::Owned(segments.join("."))
+}
+
+/// The name and the index of a segment of a dotted key such as
+/// `manager[1]`; a segment without an index is the name alone.
+pub(crate) fn indexed(segment: &str) -> (&str, Option<usize>) {
+    segment
+        .strip_suffix(']')
+        .and_then(|head| head.rsplit_once('['))
+        .and_then(|(name, index)| index.parse().ok().map(|index| (name, Some(index))))
+        .unwrap_or((segment, None))
 }
 
 /// Returns `key` and every dotted key above it, the key itself first.
@@ -250,6 +276,34 @@ mod tests {
             provenance.file()
         );
         assert_eq!("environment", Source::Environment.to_string());
+    }
+
+    #[test]
+    fn a_key_inside_an_array_of_tables_reads_its_array() {
+        let file: toml::Table = toml::from_str("[[trust.issuer]]\nurl = \"https://a.example\"\n")
+            .expect("the file parses");
+        let provenance = Provenance::new(
+            None,
+            Some(&file),
+            BTreeMap::from([(
+                "pixm.manager".to_owned(),
+                "FERROSYS__PIXM__MANAGER".to_owned(),
+            )]),
+            std::collections::BTreeSet::new(),
+        );
+        assert_eq!(
+            Some("FERROSYS__PIXM__MANAGER"),
+            provenance.variable("pixm.manager[1].method")
+        );
+        assert_eq!(
+            Source::Environment,
+            provenance.source("pixm.manager[0].method")
+        );
+        assert_eq!(Source::File, provenance.source("trust.issuer[0].url"));
+        assert_eq!(None, provenance.variable("trust.issuer[0].url"));
+        assert_eq!(super::indexed("manager[12]"), ("manager", Some(12)));
+        assert_eq!(super::indexed("manager[x]"), ("manager[x]", None));
+        assert_eq!(super::indexed("manager"), ("manager", None));
     }
 
     #[test]
