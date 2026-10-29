@@ -5,6 +5,7 @@
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::handler::Handler;
 use ferrohealth_telemetry::request_log::RequestLog;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
@@ -57,25 +58,162 @@ impl Default for StackPolicy {
 /// for every extractor), the response compression when it is on, then the
 /// routes, the product's behind the overload bound when one is configured.
 /// Every request leaves one request line, a refusal and a panic included.
+///
+/// It is [`Stack::new`] with nothing beside the base path and axum's empty
+/// `404` for a request no route matched; [`Stack`] adds both.
 pub fn app(
     product: Router,
     health: Health,
     section: &ServerSection,
     policy: StackPolicy,
 ) -> Router {
-    let product = match section.max_concurrent_requests {
-        Some(limit) => product.route_layer(axum::middleware::from_fn_with_state(
-            Admission::new(limit, std::time::Duration::from_secs(section.retry_after_s)),
-            overload::admit,
-        )),
-        None => product,
-    };
-    let routes = health::routes(health).merge(product);
-    let routes = if section.base_path.as_str().is_empty() {
-        routes
-    } else {
-        Router::new().nest(section.base_path.as_str(), routes)
-    };
+    Stack::new(product, health, section, policy).into_router()
+}
+
+/// The stack around a product, with the routes it serves beside its base
+/// path and the fallback of a request no route matched.
+///
+/// [`Stack::into_router`] mounts the product and the health routes under
+/// the base path, as [`app`] does, the routes of [`Stack::beside`] at the
+/// root next to them, and the handler of [`Stack::fallback`] for every
+/// request no route matched. Every layer of [`app`] covers all three, and
+/// the overload bound covers the product's routes and the routes beside.
+///
+/// # Examples
+///
+/// ```
+/// use axum::Router;
+/// use axum::routing::get;
+/// use ferrohealth_health::lifecycle::Lifecycle;
+/// use ferrohealth_health::registry::Registry;
+/// use ferrohealth_server::health::Health;
+/// use ferrohealth_server::section::{BasePath, ServerSection};
+/// use ferrohealth_server::stack::{Stack, StackPolicy};
+/// use http::StatusCode;
+///
+/// let section = ServerSection {
+///     base_path: BasePath::new("/ehr")?,
+///     ..ServerSection::default()
+/// };
+/// let health = Health::new(Registry::default(), Lifecycle::default());
+/// // `/ehr/v1/ehr` and `/ehr/health` under the base path, `/fhir/metadata`
+/// // beside it, and the product's own `404` for every other path.
+/// let product = Router::new().route("/v1/ehr", get(|| async { "ehr" }));
+/// let fhir = Router::new().route("/fhir/metadata", get(|| async { "metadata" }));
+/// let app: Router = Stack::new(product, health, &section, StackPolicy::default())
+///     .beside(fhir)
+///     .fallback(|| async { (StatusCode::NOT_FOUND, "no such resource") })
+///     .into_router();
+/// # let _ = app;
+/// # Ok::<(), ferrohealth_server::section::BasePathError>(())
+/// ```
+#[derive(Debug)]
+#[must_use]
+pub struct Stack {
+    product: Router,
+    health: Health,
+    section: ServerSection,
+    policy: StackPolicy,
+    beside: Router,
+    fallback: Option<Router>,
+}
+
+impl Stack {
+    /// The stack around `product` and `health` under `section`, with
+    /// `policy`: what [`app`] builds.
+    pub fn new(
+        product: Router,
+        health: Health,
+        section: &ServerSection,
+        policy: StackPolicy,
+    ) -> Self {
+        Self {
+            product,
+            health,
+            section: section.clone(),
+            policy,
+            beside: Router::new(),
+            fallback: None,
+        }
+    }
+
+    /// Mounts `routes` at the root, beside the base path, with every layer
+    /// of the stack and the overload bound around them.
+    ///
+    /// A path of `routes` is served as written, whatever the base path; with
+    /// an empty base path they sit next to the product's routes. Called more
+    /// than once, the routes add up.
+    pub fn beside(mut self, routes: Router) -> Self {
+        self.beside = self.beside.merge(routes);
+        self
+    }
+
+    /// Answers every request no route matched with `handler`, inside every
+    /// layer of the stack and outside the overload bound.
+    ///
+    /// It answers a path outside the base path and every route beside it,
+    /// and a path under the base path that no route matched, unless the
+    /// product's router has a fallback of its own (axum `Router::nest`,
+    /// "Fallbacks"). A second call replaces the first.
+    pub fn fallback<H, T>(mut self, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.fallback = Some(Router::new().fallback(handler));
+        self
+    }
+
+    /// Builds the router the listener serves.
+    ///
+    /// # Panics
+    ///
+    /// When axum refuses the routes it merges: a route beside the base path
+    /// that is also a route under it, or, with [`Stack::fallback`] set, a
+    /// router beside or a product under an empty base path that carries a
+    /// fallback of its own (axum `Router::merge`, "Panics").
+    pub fn into_router(self) -> Router {
+        let Self {
+            product,
+            health,
+            section,
+            policy,
+            beside,
+            fallback,
+        } = self;
+        let admission = section.max_concurrent_requests.map(|limit| {
+            Admission::new(limit, std::time::Duration::from_secs(section.retry_after_s))
+        });
+        let product = match &admission {
+            Some(admission) => product.route_layer(axum::middleware::from_fn_with_state(
+                admission.clone(),
+                overload::admit,
+            )),
+            None => product,
+        };
+        let routes = health::routes(health).merge(product);
+        let routes = if section.base_path.as_str().is_empty() {
+            routes
+        } else {
+            Router::new().nest(section.base_path.as_str(), routes)
+        };
+        let beside = match admission {
+            Some(admission) if beside.has_routes() => beside.route_layer(
+                axum::middleware::from_fn_with_state(admission, overload::admit),
+            ),
+            _ => beside,
+        };
+        let routes = routes.merge(beside);
+        let routes = match fallback {
+            Some(fallback) => routes.merge(fallback),
+            None => routes,
+        };
+        wrap(routes, &section, policy)
+    }
+}
+
+/// Wraps `routes` in every layer of the stack.
+fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router {
     // NOTE: axum `Router::layer` wraps every route and the fallback, so the matched
     // route is still known and a request no route matched is logged too.
     let edge = EdgeLayer::new(edge::Settings {
@@ -123,7 +261,7 @@ mod tests {
     use tower::ServiceExt as _;
     use tracing_subscriber_shim::Capture;
 
-    use super::{StackPolicy, app};
+    use super::{Stack, StackPolicy, app};
     use crate::health::Health;
     use crate::section::{BasePath, ServerSection};
 
@@ -237,6 +375,177 @@ mod tests {
         }
         let (_, _, body) = get_status(app, "/ferrosys/health/readiness").await;
         assert_eq!(r#"{"state":"up","phase":"serving","indicators":[]}"#, body);
+    }
+
+    fn beside_and_fallback(section: &ServerSection, policy: StackPolicy) -> Router {
+        Stack::new(product(), serving(), section, policy)
+            .beside(
+                Router::new()
+                    .route("/fhir/r4/Patient/{id}", get(|| async { "beside" }))
+                    .route("/fhir/r4/boom", get(boom))
+                    .route(
+                        "/fhir/r4/hold",
+                        get(|| async {
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            "held"
+                        }),
+                    ),
+            )
+            .fallback(|| async { (StatusCode::NOT_FOUND, "the product's own 404") })
+            .into_router()
+    }
+
+    #[tokio::test]
+    async fn routes_beside_the_base_path_and_the_fallback_run_inside_the_stack() {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(capture.clone())
+            .finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+        let section = ServerSection {
+            compression_min_bytes: 0,
+            ..section()
+        };
+        let app = beside_and_fallback(&section, StackPolicy::default());
+        let mut ids = Vec::new();
+        for (uri, status, body) in [
+            ("/ferrosys/fhir/Patient/7", StatusCode::OK, "ok"),
+            (
+                "/ferrosys/health/liveness",
+                StatusCode::OK,
+                r#"{"state":"up"}"#,
+            ),
+            ("/fhir/r4/Patient/7", StatusCode::OK, "beside"),
+            ("/elsewhere", StatusCode::NOT_FOUND, "the product's own 404"),
+            (
+                "/ferrosys/nothing",
+                StatusCode::NOT_FOUND,
+                "the product's own 404",
+            ),
+            (
+                "/ferrosys/fhir/r4/Patient/7",
+                StatusCode::NOT_FOUND,
+                "the product's own 404",
+            ),
+            ("/health", StatusCode::NOT_FOUND, "the product's own 404"),
+        ] {
+            let (got, headers, got_body) = get_status(app.clone(), uri).await;
+            assert_eq!((status, body), (got, got_body.as_str()), "{uri}");
+            let id = headers
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            assert!(id.is_some(), "{uri} carries a request id");
+            ids.extend(id);
+        }
+        let log = String::from_utf8(capture.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        let lines: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .filter(|line: &serde_json::Value| line["message"] == "request")
+            .collect();
+        let seen: Vec<(String, u64, String)> = lines
+            .iter()
+            .map(|line| {
+                (
+                    line["route"].as_str().unwrap_or_default().to_owned(),
+                    line["status"].as_u64().unwrap_or_default(),
+                    line["request_id"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect();
+        let routes = [
+            ("/ferrosys/fhir/Patient/{id}", 200),
+            ("/ferrosys/health/liveness", 200),
+            ("/fhir/r4/Patient/{id}", 200),
+            ("<unmatched>", 404),
+            ("<unmatched>", 404),
+            ("<unmatched>", 404),
+            ("<unmatched>", 404),
+        ];
+        let expected: Vec<(String, u64, String)> = routes
+            .iter()
+            .zip(&ids)
+            .map(|((route, status), id)| ((*route).to_owned(), *status, id.clone()))
+            .collect();
+        assert_eq!(expected, seen, "one line per request, each with its id");
+    }
+
+    #[tokio::test]
+    async fn every_layer_covers_the_routes_beside_and_the_fallback() {
+        let section = ServerSection {
+            compression_min_bytes: 0,
+            max_concurrent_requests: NonZeroUsize::new(1),
+            retry_after_s: 2,
+            ..section()
+        };
+        let app = beside_and_fallback(&section, refusing());
+        let (status, headers, body) = get_status(app.clone(), "/fhir/r4/boom").await;
+        assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status);
+        assert!(!body.contains("Qz7sentinel"), "{body}");
+        assert!(headers.contains_key("x-request-id"));
+        for uri in ["/fhir/r4/Patient/7", "/elsewhere"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    http::Request::builder()
+                        .uri(uri)
+                        .header(http::header::ACCEPT_ENCODING, "gzip")
+                        .body(Body::empty())
+                        .expect("the request builds"),
+                )
+                .await
+                .expect("the request is served");
+            assert_eq!(
+                Some("gzip"),
+                response
+                    .headers()
+                    .get(http::header::CONTENT_ENCODING)
+                    .and_then(|v| v.to_str().ok()),
+                "{uri} is compressed"
+            );
+        }
+        let held = tokio::spawn(get_status(app.clone(), "/fhir/r4/hold"));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let (status, _, body) = get_status(app.clone(), "/ferrosys/fhir/Patient/7").await;
+        assert_eq!(
+            StatusCode::SERVICE_UNAVAILABLE,
+            status,
+            "one bound for both"
+        );
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(503, body["refused"]);
+        let (status, _, _) = get_status(app.clone(), "/elsewhere").await;
+        assert_eq!(StatusCode::NOT_FOUND, status, "the fallback is not bounded");
+        let (status, _, body) = held.await.expect("the held request ends");
+        assert_eq!((StatusCode::OK, "held"), (status, body.as_str()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_route_beside_is_answered_408_with_the_product_body() {
+        let app = Stack::new(product(), serving(), &section(), refusing())
+            .beside(Router::new().route(
+                "/fhir/r4/slow",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    "late"
+                }),
+            ))
+            .into_router();
+        let (status, _, body) = get_status(app, "/fhir/r4/slow").await;
+        assert_eq!(StatusCode::REQUEST_TIMEOUT, status);
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        assert_eq!(408, body["refused"]);
+    }
+
+    #[tokio::test]
+    async fn without_a_fallback_a_path_outside_is_axums_empty_404() {
+        let app = app(product(), serving(), &section(), StackPolicy::default());
+        let (status, headers, body) = get_status(app, "/elsewhere").await;
+        assert_eq!((StatusCode::NOT_FOUND, ""), (status, body.as_str()));
+        assert!(headers.contains_key("x-request-id"));
     }
 
     #[tokio::test]
