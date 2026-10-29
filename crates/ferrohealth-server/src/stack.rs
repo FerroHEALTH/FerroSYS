@@ -59,8 +59,9 @@ impl Default for StackPolicy {
 /// routes, the product's behind the overload bound when one is configured.
 /// Every request leaves one request line, a refusal and a panic included.
 ///
-/// It is [`Stack::new`] with nothing beside the base path and axum's empty
-/// `404` for a request no route matched; [`Stack`] adds both.
+/// It is [`Stack::new`] with nothing beside the base path, and a request no
+/// route matched takes the product's fallback with the product's layers
+/// (axum's empty `404` unless the product changes it); [`Stack`] adds both.
 pub fn app(
     product: Router,
     health: Health,
@@ -143,6 +144,14 @@ impl Stack {
     /// A path of `routes` is served as written, whatever the base path; with
     /// an empty base path they sit next to the product's routes. Called more
     /// than once, the routes add up.
+    ///
+    /// Without [`Stack::fallback`], a path no route matched takes the
+    /// fallback `routes` declare when they declare one, and the product's
+    /// otherwise, with every layer the product applied. Under an empty base
+    /// path that is the product's own or default fallback; under a non-empty
+    /// one only a fallback the product declares, for the paths under the
+    /// base path (axum `Router::nest`, "Fallbacks"), and axum's empty `404`
+    /// for the rest.
     pub fn beside(mut self, routes: Router) -> Self {
         self.beside = self.beside.merge(routes);
         self
@@ -203,7 +212,9 @@ impl Stack {
             ),
             _ => beside,
         };
-        let routes = routes.merge(beside);
+        // NOTE: axum 0.8 `Router::merge` keeps the fallback of `other` when neither router
+        // declares one, so `routes` merges last and keeps the product's layered fallback.
+        let routes = beside.merge(routes);
         let routes = match fallback {
             Some(fallback) => routes.merge(fallback),
             None => routes,
@@ -546,6 +557,85 @@ mod tests {
         let (status, headers, body) = get_status(app, "/elsewhere").await;
         assert_eq!((StatusCode::NOT_FOUND, ""), (status, body.as_str()));
         assert!(headers.contains_key("x-request-id"));
+    }
+
+    async fn guard(
+        request: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
+        if request.headers().contains_key(http::header::AUTHORIZATION) {
+            next.run(request).await
+        } else {
+            StatusCode::UNAUTHORIZED.into_response()
+        }
+    }
+
+    fn guarded_product() -> Router {
+        product().layer(axum::middleware::from_fn(guard))
+    }
+
+    #[tokio::test]
+    async fn app_keeps_the_layers_of_the_product_on_a_path_no_route_matched() {
+        let app = app(
+            guarded_product(),
+            serving(),
+            &ServerSection::default(),
+            StackPolicy::default(),
+        );
+        for (uri, status) in [
+            ("/fhir/Patient/7", StatusCode::UNAUTHORIZED),
+            ("/fhir/Practitioner", StatusCode::UNAUTHORIZED),
+            ("/nowhere", StatusCode::UNAUTHORIZED),
+            ("/health/liveness", StatusCode::OK),
+        ] {
+            let (got, headers, _) = get_status(app.clone(), uri).await;
+            assert_eq!(status, got, "{uri}");
+            assert!(headers.contains_key("x-request-id"), "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn routes_beside_with_no_fallback_keep_the_layers_of_the_product_on_a_path_no_route_matched()
+     {
+        let app = Stack::new(
+            guarded_product(),
+            serving(),
+            &ServerSection::default(),
+            StackPolicy::default(),
+        )
+        .beside(Router::new().route("/open", get(|| async { "open" })))
+        .into_router();
+        for (uri, status) in [
+            ("/open", StatusCode::OK),
+            ("/fhir/Practitioner", StatusCode::UNAUTHORIZED),
+            ("/nowhere", StatusCode::UNAUTHORIZED),
+        ] {
+            let (got, _, _) = get_status(app.clone(), uri).await;
+            assert_eq!(status, got, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_fallback_routes_beside_declare_answers_a_path_no_route_matched() {
+        let app = Stack::new(
+            guarded_product(),
+            serving(),
+            &ServerSection::default(),
+            StackPolicy::default(),
+        )
+        .beside(
+            Router::new()
+                .route("/open", get(|| async { "open" }))
+                .fallback(|| async { (StatusCode::NOT_FOUND, "beside's 404") }),
+        )
+        .into_router();
+        let (status, _, body) = get_status(app.clone(), "/nowhere").await;
+        assert_eq!(
+            (StatusCode::NOT_FOUND, "beside's 404"),
+            (status, body.as_str())
+        );
+        let (status, _, _) = get_status(app, "/fhir/Patient/7").await;
+        assert_eq!(StatusCode::UNAUTHORIZED, status);
     }
 
     #[tokio::test]

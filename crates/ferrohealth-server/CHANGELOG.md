@@ -10,6 +10,16 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `stack::app` and `Stack::into_router` keep the product's default fallback
+  with every layer the product applied, a regression since 0.3.10: merging
+  the routes beside the base path, empty through `stack::app`, replaced it
+  with a bare one, so a path no route matched was answered past the
+  product's layers (a guard answered `404` where it answered `401` before).
+  Routes beside that declare no fallback now keep the product's; routes
+  beside that declare one still answer with theirs (#199).
+
 ## [0.4.0] - 2026-10-29
 
 ### Added
