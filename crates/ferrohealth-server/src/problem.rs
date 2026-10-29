@@ -441,10 +441,10 @@ impl IntoResponse for Problem {
 /// the status code, so they carry no type of a product's.
 #[must_use]
 pub fn refusal_body() -> RefusalBody {
-    Arc::new(|_uri, request_id, status, reason| {
+    Arc::new(|_uri, ids, status, reason| {
         Problem::new(status)
             .with_detail(reason)
-            .with_request_id(request_id)
+            .with_request_id(ids.server)
             .into_response()
     })
 }
@@ -454,10 +454,10 @@ pub fn refusal_body() -> RefusalBody {
 /// instance, never the panic's message.
 #[must_use]
 pub fn panic_body() -> PanicBody {
-    Arc::new(|_uri, request_id| {
+    Arc::new(|_uri, ids| {
         Problem::new(StatusCode::INTERNAL_SERVER_ERROR)
             .with_detail(INTERNAL)
-            .with_request_id(request_id)
+            .with_request_id(ids.server)
             .into_response()
     })
 }

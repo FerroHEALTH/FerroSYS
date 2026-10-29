@@ -21,17 +21,29 @@ use axum::response::{IntoResponse as _, Response};
 use ferrohealth_telemetry::request_log::RequestId;
 use http::{StatusCode, Uri};
 
+use crate::request_id::{self, RequestIds};
+
 /// The body of a panicked request: the product writes it for the request's
-/// URI and the server's request id, such as a FHIR `OperationOutcome` under
-/// its FHIR base.
-pub type PanicBody = Arc<dyn Fn(&Uri, &str) -> Response + Send + Sync>;
+/// URI and its [`RequestIds`], such as a FHIR `OperationOutcome` under its
+/// FHIR base.
+pub type PanicBody = Arc<dyn Fn(&Uri, RequestIds<'_>) -> Response + Send + Sync>;
+
+/// A [`PanicBody`] from a body written for the URI and the server's request
+/// id alone, the shape of `PanicBody` before 0.4.0.
+#[must_use]
+pub fn from_server_id<F>(body: F) -> PanicBody
+where
+    F: Fn(&Uri, &str) -> Response + Send + Sync + 'static,
+{
+    Arc::new(move |uri, ids| body(uri, ids.server))
+}
 
 /// The body a product that names none answers with: a JSON object naming the
 /// failure and the server's request id. No specification governs its shape:
 /// our own design.
 #[must_use]
 pub fn default_body() -> PanicBody {
-    Arc::new(|_uri, request_id| {
+    from_server_id(|_uri, request_id| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             axum::Json(serde_json::json!({
@@ -67,18 +79,19 @@ pub async fn render(body: PanicBody, request: Request, next: Next) -> Response {
         .get::<RequestId>()
         .map(|id| id.id().to_owned())
         .unwrap_or_default();
+    let client = request_id::of_client(request.headers()).map(str::to_owned);
     let response = next.run(request).await;
     if response.extensions().get::<Panicked>().is_none() {
         return response;
     }
-    answer(&body, &uri, &request_id)
+    answer(&body, &uri, RequestIds::new(&request_id, client.as_deref()))
 }
 
-/// Logs one line naming the server's `request_id` and answers the panicked
+/// Logs one line naming the server's request id and answers the panicked
 /// request with the product's `body`.
-pub(crate) fn answer(body: &PanicBody, uri: &Uri, request_id: &str) -> Response {
-    tracing::error!(request_id, "the request handler panicked");
-    let mut rendered = body(uri, request_id);
+pub(crate) fn answer(body: &PanicBody, uri: &Uri, ids: RequestIds<'_>) -> Response {
+    tracing::error!(request_id = ids.server, "the request handler panicked");
+    let mut rendered = body(uri, ids);
     *rendered.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
     rendered
 }

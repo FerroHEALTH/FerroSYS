@@ -33,6 +33,31 @@ pub fn is_legal(value: &str) -> bool {
         && value.chars().all(|c| c.is_ascii_graphic() || c == ' ')
 }
 
+/// The two ids of one exchange, as an error body the stack writes may name
+/// them: the server's, which the request log names, and the one the
+/// response echoes in `X-Request-Id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestIds<'a> {
+    /// The server's id, which the request log and the panic line name.
+    pub server: &'a str,
+    /// The id the response echoes: the client's legal id when it sent one,
+    /// the server's otherwise. It goes back to the client that sent it and
+    /// is never logged.
+    pub echoed: &'a str,
+}
+
+impl<'a> RequestIds<'a> {
+    /// The ids of an exchange with the server's id `server`, and `client`,
+    /// the client's id when it sent a legal one.
+    #[must_use]
+    pub fn new(server: &'a str, client: Option<&'a str>) -> Self {
+        Self {
+            server,
+            echoed: client.filter(|client| is_legal(client)).unwrap_or(server),
+        }
+    }
+}
+
 /// Returns a fresh server id.
 #[must_use]
 pub fn mint() -> String {
@@ -88,6 +113,16 @@ pub async fn assign(mut request: Request, next: Next) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_echoed_id_is_the_client_s_legal_one_or_the_server_s() {
+        use super::RequestIds;
+        let server = "67e55044-10b1-426f-9247-bb680e5fe0c8";
+        assert_eq!(server, RequestIds::new(server, None).echoed);
+        assert_eq!("corr-1", RequestIds::new(server, Some("corr-1")).echoed);
+        assert_eq!(server, RequestIds::new(server, Some("bad\nid")).echoed);
+        assert_eq!(server, RequestIds::new(server, Some("corr-1")).server);
+    }
+
     use axum::Router;
     use axum::body::Body;
     use axum::extract::Extension;

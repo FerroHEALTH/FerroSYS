@@ -619,7 +619,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(String::new()));
         let recorded = Arc::clone(&seen);
         let policy = StackPolicy {
-            panic_body: Arc::new(move |uri: &http::Uri, request_id: &str| {
+            panic_body: crate::panic::from_server_id(move |uri: &http::Uri, request_id: &str| {
                 *recorded.lock().expect("the slot") = request_id.to_owned();
                 format!(
                     "{{\"resourceType\":\"OperationOutcome\",\"path\":\"{}\"}}",
@@ -697,7 +697,7 @@ mod tests {
 
     fn refusing() -> StackPolicy {
         StackPolicy {
-            refusal_body: Arc::new(
+            refusal_body: crate::refusal::from_server_id(
                 |uri: &http::Uri, request_id: &str, status: StatusCode, reason: &str| {
                     axum::Json(serde_json::json!({
                         "refused": status.as_u16(),
@@ -932,6 +932,108 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A policy whose bodies write both ids, the panic's as `500` and each
+    /// refusal's with its status.
+    fn naming_both_ids() -> StackPolicy {
+        StackPolicy {
+            panic_body: Arc::new(|_uri: &http::Uri, ids: crate::request_id::RequestIds<'_>| {
+                axum::Json(serde_json::json!({"server": ids.server, "echoed": ids.echoed}))
+                    .into_response()
+            }),
+            refusal_body: Arc::new(
+                |_uri: &http::Uri,
+                 ids: crate::request_id::RequestIds<'_>,
+                 _status: StatusCode,
+                 _reason: &str| {
+                    axum::Json(serde_json::json!({"server": ids.server, "echoed": ids.echoed}))
+                        .into_response()
+                },
+            ),
+            ..StackPolicy::default()
+        }
+    }
+
+    /// The ids the body named and the id the response echoed, for `GET uri`
+    /// with the client id `client`.
+    async fn named_ids(
+        app: Router,
+        uri: &str,
+        client: Option<&str>,
+    ) -> (StatusCode, String, String, String) {
+        let mut request = http::Request::builder().uri(uri);
+        if let Some(client) = client {
+            request = request.header("x-request-id", client);
+        }
+        let (status, headers, body) = send(
+            app,
+            request.body(Body::empty()).expect("the request builds"),
+        )
+        .await;
+        let body: serde_json::Value = serde_json::from_str(&body).expect("JSON");
+        (
+            status,
+            body["server"].as_str().unwrap_or_default().to_owned(),
+            body["echoed"].as_str().unwrap_or_default().to_owned(),
+            headers
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_panic_body_names_the_id_the_response_echoes_beside_the_server_s() {
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(capture.clone())
+            .finish();
+        let _default = tracing::subscriber::set_default(subscriber);
+        let app = app(product(), serving(), &section(), naming_both_ids());
+        let (status, server, echoed, header) =
+            named_ids(app.clone(), "/ferrosys/boom", Some("corr-panic")).await;
+        assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status);
+        assert_eq!(
+            ("corr-panic", "corr-panic"),
+            (echoed.as_str(), header.as_str())
+        );
+        assert_eq!(36, server.len(), "the server's id stays available");
+        let log = String::from_utf8(capture.0.lock().expect("the buffer").clone()).expect("UTF-8");
+        assert!(
+            log.contains(&server),
+            "the panic line names the server's id: {log}"
+        );
+        assert!(
+            !log.contains("corr-panic"),
+            "the client's id is never logged: {log}"
+        );
+        let (status, server, echoed, header) = named_ids(app, "/ferrosys/boom", None).await;
+        assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status);
+        assert_eq!(36, server.len());
+        assert_eq!(
+            (server.as_str(), server.as_str()),
+            (echoed.as_str(), header.as_str())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_body_names_the_id_the_response_echoes_beside_the_server_s() {
+        let app = app(product(), serving(), &section(), naming_both_ids());
+        let (status, server, echoed, header) =
+            named_ids(app.clone(), "/ferrosys/slow", Some("corr-408")).await;
+        assert_eq!(StatusCode::REQUEST_TIMEOUT, status);
+        assert_eq!(("corr-408", "corr-408"), (echoed.as_str(), header.as_str()));
+        assert_eq!(36, server.len(), "the server's id stays available");
+        let (status, server, echoed, header) = named_ids(app, "/ferrosys/slow", None).await;
+        assert_eq!(StatusCode::REQUEST_TIMEOUT, status);
+        assert_eq!(36, server.len());
+        assert_eq!(
+            (server.as_str(), server.as_str()),
+            (echoed.as_str(), header.as_str())
+        );
     }
 
     #[tokio::test]
@@ -1183,7 +1285,7 @@ mod tests {
 
     fn gateway() -> StackPolicy {
         StackPolicy {
-            refusal_body: Arc::new(
+            refusal_body: crate::refusal::from_server_id(
                 |_uri: &http::Uri, _request_id: &str, status: StatusCode, reason: &str| {
                     let chosen = if status == StatusCode::REQUEST_TIMEOUT {
                         StatusCode::GATEWAY_TIMEOUT
@@ -1260,7 +1362,7 @@ mod tests {
     #[tokio::test]
     async fn without_the_mark_the_stack_keeps_its_own_status() {
         let policy = StackPolicy {
-            refusal_body: Arc::new(
+            refusal_body: crate::refusal::from_server_id(
                 |_uri: &http::Uri, _id: &str, _status: StatusCode, _reason: &str| {
                     (StatusCode::GATEWAY_TIMEOUT, "unmarked").into_response()
                 },
