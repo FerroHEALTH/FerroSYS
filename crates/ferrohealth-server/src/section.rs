@@ -26,11 +26,16 @@ pub struct ServerSection {
     pub base_path: BasePath,
     /// How long one request may take before the server answers `408`.
     pub request_timeout_ms: u64,
-    /// How long a client may take to send a request head once it connected
-    /// or once its last response was written; a client still sending its
-    /// head then is disconnected, which bounds a connection that never
-    /// finishes one.
+    /// How long a client may take to send its first byte once it connected,
+    /// and each HTTP/1.1 request head from that head's first byte; a client
+    /// still sending its head then is disconnected, which bounds a
+    /// connection that never finishes one.
     pub header_read_timeout_ms: std::num::NonZeroU64,
+    /// How long a kept-alive HTTP/1.1 connection may wait for its next
+    /// request before the server closes it. Keep it longer than the idle
+    /// timeout of the clients and proxies in front, so they close an idle
+    /// connection first.
+    pub idle_timeout_ms: std::num::NonZeroU64,
     /// The largest request body the server reads before answering `413`.
     pub body_limit_bytes: usize,
     /// How long readiness stays withdrawn before the listener closes, so an
@@ -246,6 +251,7 @@ impl Default for ServerSection {
             base_path: BasePath::default(),
             request_timeout_ms: 30_000,
             header_read_timeout_ms: std::num::NonZeroU64::MIN.saturating_add(29_999),
+            idle_timeout_ms: std::num::NonZeroU64::MIN.saturating_add(119_999),
             body_limit_bytes: 1024 * 1024,
             drain_delay_ms: 0,
             shutdown_timeout_ms: 10_000,
@@ -272,6 +278,12 @@ impl ServerSection {
     #[must_use]
     pub const fn header_read_timeout(&self) -> Duration {
         Duration::from_millis(self.header_read_timeout_ms.get())
+    }
+
+    /// The idle limit of a kept-alive connection.
+    #[must_use]
+    pub const fn idle_timeout(&self) -> Duration {
+        Duration::from_millis(self.idle_timeout_ms.get())
     }
 
     /// The drain delay.
@@ -532,6 +544,18 @@ mod tests {
             "TLS 1.3 is the default minimum"
         );
         assert!(load("[server]\nheader_read_timeout_ms = 0\n").is_err());
+        assert_eq!(
+            std::time::Duration::from_secs(120),
+            ServerSection::default().idle_timeout(),
+            "the idle limit outlasts the 90 s a Go client keeps an idle connection"
+        );
+        assert_eq!(
+            std::time::Duration::from_secs(95),
+            load("[server]\nidle_timeout_ms = 95000\n")
+                .expect("the section loads")
+                .idle_timeout()
+        );
+        assert!(load("[server]\nidle_timeout_ms = 0\n").is_err());
         let refused =
             load(&format!("{tls}min_version = \"1.1\"\n")).expect_err("TLS 1.1 is refused");
         assert!(

@@ -10,6 +10,31 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
+### Added
+
+- Breaking: `[server] idle_timeout_ms` (`ServerSection::idle_timeout_ms`,
+  default 120000) closes a kept-alive HTTP/1.1 connection that waits that
+  long for its next request, and `serve::IDLE_TIMEOUT` is the bound of
+  `serve::serve` and `serve::serve_tls`. The default outlasts the 90 s Go's
+  `http.DefaultTransport` keeps an idle connection, so a client normally
+  closes first. A product that builds `ServerSection` with a struct
+  literal and no `..ServerSection::default()` names the new field (#193).
+
+### Fixed
+
+- On a kept-alive HTTP/1.1 connection, `header_read_timeout_ms` counts from
+  the first byte of each request head. It used to count from the end of
+  the previous response, so it doubled as a 30 s idle limit and the server
+  closed the connection without an answer when a request head was still
+  arriving as it passed: a client that reused the connection then met a
+  closed socket, which a `POST` cannot safely retry (RFC 9112 §9.3.1). An
+  idle connection is now closed after `idle_timeout_ms` with a clean end of
+  stream, and a head that takes longer than the bound from its own first
+  byte is still refused. HTTP/2 and upgraded connections are left to their
+  own protocol (#193).
+
 ## [0.3.10] - 2026-10-29
 
 ### Added
