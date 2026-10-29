@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-29
+
 ### Fixed
 
 - A refusal of a value of the wrong type no longer echoes the value when
@@ -147,7 +149,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.7...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.8...HEAD
+[0.2.8]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.7...ferrohealth-config-v0.2.8
 [0.2.7]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.6...ferrohealth-config-v0.2.7
 [0.2.6]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.5...ferrohealth-config-v0.2.6
 [0.2.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.4...ferrohealth-config-v0.2.5
