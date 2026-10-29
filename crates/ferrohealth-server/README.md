@@ -36,7 +36,10 @@ runs the same stack, the same health routes and the same shutdown.
   never finishes one is closed, and a kept-alive connection is closed
   after `idle_timeout_ms` without a request.
 - `healthcheck::check` is the container probe: readiness over loopback,
-  exit `0` only on `200`.
+  exit `0` only on `200`. `healthcheck::Get` makes the same exchange for a
+  product that reads more from its own listener, over plain HTTP or the
+  pinned TLS, and answers the status and the body, read up to a bound and
+  within a timeout.
 - `cli::Common` holds the `serve`, `config check` and `healthcheck`
   subcommands every binary flattens into its own, and `cli::ConfigArgs`
   the `--config` and `--set` arguments.

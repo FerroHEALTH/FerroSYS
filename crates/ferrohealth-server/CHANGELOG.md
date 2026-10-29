@@ -21,6 +21,15 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   `http.DefaultTransport` keeps an idle connection, so a client normally
   closes first. A product that builds `ServerSection` with a struct
   literal and no `..ServerSection::default()` names the new field (#193).
+- `healthcheck::Get`, a `GET` to a server on this host over plain HTTP or
+  over the healthcheck's pinned TLS (`tls::HealthcheckTls`), with request
+  headers, that answers `healthcheck::Answer`, the status and the body. The
+  caller bounds the body and the whole exchange; past either, and for a
+  connection, a handshake or an answer that fails, it answers a typed
+  `healthcheck::GetError`. A product reads its own readiness, operator or
+  metrics documents through it with no TLS client of its own.
+  `healthcheck::check`, `check_tls` and `check_url` run the same exchange
+  and answer as before (#195).
 
 ### Fixed
 
