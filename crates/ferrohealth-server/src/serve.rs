@@ -11,7 +11,11 @@
 //! finish; a connection still open then is closed before the call returns.
 //!
 //! A connection whose first byte does not arrive inside the header read
-//! timeout, counted from accept, is closed. An `accept` error that is not one
+//! timeout, counted from accept, is closed, and so is an HTTP/1.1 connection
+//! whose request head does not arrive whole inside it, counted from the
+//! head's first byte. A kept-alive HTTP/1.1 connection with no request in
+//! flight is closed after the idle timeout, which counts apart from the head
+//! bound, so a request begun on a reused connection is answered. An `accept` error that is not one
 //! connection's, such as `EMFILE`, pauses the listener from 5 ms doubling up
 //! to a second, and is logged at most once every ten seconds.
 //!
@@ -30,6 +34,8 @@ use axum::Router;
 use ferrohealth_health::lifecycle::Lifecycle;
 use tokio::net::TcpListener;
 
+mod keep_alive;
+
 /// How the drain ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Drained {
@@ -44,7 +50,8 @@ pub enum Drained {
 /// `lifecycle` moves to serving when this starts and to draining on the
 /// signal. `delay` is the drain delay and `bound` the time the requests in
 /// flight get once the listener closed. A client gets
-/// [`HEADER_READ_TIMEOUT`] to send a request head; [`run`] takes the bound
+/// [`HEADER_READ_TIMEOUT`] to send a request head and a kept-alive
+/// connection is closed after [`IDLE_TIMEOUT`]; [`run`] takes both bounds
 /// from the section.
 ///
 /// # Errors
@@ -62,7 +69,7 @@ pub async fn serve<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let connections = Connections::new(app, None, HEADER_READ_TIMEOUT);
+    let connections = Connections::new(app, None, DEFAULT_BOUNDS);
     Ok(drive(listener, connections, lifecycle, signal, delay, bound).await)
 }
 
@@ -72,13 +79,30 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a client may take to send a request head when the caller names
 /// no bound.
 ///
-/// The bound starts when the connection is accepted: a connection whose first
-/// byte does not arrive inside it is closed, over plain HTTP and over TLS, for
-/// HTTP/1.1 and HTTP/2 alike.
+/// A connection whose first byte does not arrive inside it from accept is
+/// closed, over plain HTTP and over TLS, for HTTP/1.1 and HTTP/2 alike. An
+/// HTTP/1.1 request head must then arrive whole inside it from its own first
+/// byte; the time a kept-alive connection was idle before the head does not
+/// count.
 ///
 /// It is hyper's own default for HTTP/1
 /// (<https://docs.rs/hyper/1/hyper/server/conn/http1/struct.Builder.html#method.header_read_timeout>).
 pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a kept-alive HTTP/1.1 connection may wait for its next request
+/// when the caller names no bound.
+///
+/// It is longer than the idle timeouts clients and proxies keep by default,
+/// such as the 90 s of Go's `http.DefaultTransport`, so a client normally
+/// closes an idle connection before the server does and never writes a
+/// request into one the server is closing (RFC 9112 §9.5).
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The bounds of [`serve`] and [`serve_tls`].
+const DEFAULT_BOUNDS: keep_alive::Bounds = keep_alive::Bounds {
+    header_read: HEADER_READ_TIMEOUT,
+    idle: IDLE_TIMEOUT,
+};
 
 /// Serves `app` over TLS on `listener` until `signal` completes, then
 /// drains, as [`serve`] does over plain HTTP.
@@ -104,7 +128,7 @@ pub async fn serve_tls<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let connections = Connections::new(app, Some(tls), HEADER_READ_TIMEOUT);
+    let connections = Connections::new(app, Some(tls), DEFAULT_BOUNDS);
     Ok(drive(listener, connections, lifecycle, signal, delay, bound).await)
 }
 
@@ -115,7 +139,7 @@ where
 struct Connections {
     app: Router,
     tls: Option<Arc<crate::tls::ReloadableTls>>,
-    header_read_timeout: Duration,
+    bounds: keep_alive::Bounds,
     builder: hyper_util::server::conn::auto::Builder<Streams>,
     graceful: hyper_util::server::graceful::GracefulShutdown,
     tasks: tokio::task::JoinSet<()>,
@@ -167,87 +191,6 @@ fn no_delay(stream: &tokio::net::TcpStream) {
     // is unacknowledged, which the peer's delayed ACK stretches per response.
     if let Err(error) = stream.set_nodelay(true) {
         tracing::warn!(%error, "TCP_NODELAY could not be set on a connection");
-    }
-}
-
-pin_project_lite::pin_project! {
-    /// An accepted stream whose first byte must arrive before a deadline set
-    /// at accept.
-    ///
-    /// hyper's HTTP/1 header bound starts only once its dispatcher reads a
-    /// head, and the version sniff before it reads with no deadline
-    /// (<https://docs.rs/hyper-util/0.1/hyper_util/server/conn/auto/struct.Builder.html>),
-    /// so a connection that never sends a byte would be held for ever.
-    struct FirstByte<S> {
-        #[pin]
-        stream: S,
-        deadline: Option<Pin<Box<tokio::time::Sleep>>>,
-    }
-}
-
-impl<S> FirstByte<S> {
-    const fn new(stream: S, deadline: Pin<Box<tokio::time::Sleep>>) -> Self {
-        Self {
-            stream,
-            deadline: Some(deadline),
-        }
-    }
-}
-
-impl<S: tokio::io::AsyncRead> tokio::io::AsyncRead for FirstByte<S> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &mut tokio::io::ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let this = self.project();
-        let before = buffer.filled().len();
-        let polled = this.stream.poll_read(context, buffer);
-        match &polled {
-            Poll::Ready(Ok(())) if buffer.filled().len() > before => *this.deadline = None,
-            Poll::Pending => {
-                if let Some(deadline) = this.deadline.as_mut()
-                    && deadline.as_mut().poll(context).is_ready()
-                {
-                    return Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "the client sent no byte inside the header read timeout",
-                    )));
-                }
-            }
-            Poll::Ready(_) => {}
-        }
-        polled
-    }
-}
-
-impl<S: tokio::io::AsyncWrite> tokio::io::AsyncWrite for FirstByte<S> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        self.project().stream.poll_write(context, buffer)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        self.project().stream.poll_flush(context)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        self.project().stream.poll_shutdown(context)
-    }
-
-    fn poll_write_vectored(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffers: &[std::io::IoSlice<'_>],
-    ) -> Poll<std::io::Result<usize>> {
-        self.project().stream.poll_write_vectored(context, buffers)
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.stream.is_write_vectored()
     }
 }
 
@@ -340,21 +283,21 @@ impl Connections {
     fn new(
         app: Router,
         tls: Option<Arc<crate::tls::ReloadableTls>>,
-        header_read_timeout: Duration,
+        bounds: keep_alive::Bounds,
     ) -> Self {
         let streams = Streams::default();
         let mut builder = hyper_util::server::conn::auto::Builder::new(streams.clone());
-        // NOTE: hyper bounds the request head only with a timer set
-        // (<https://docs.rs/hyper/1/hyper/server/conn/http1/struct.Builder.html#method.timer>).
+        // NOTE: hyper 1.12 restarts its head bound when a kept-alive connection goes
+        // idle (`proto/h1/conn.rs`, `State::idle`), so `keep_alive::Bounded` holds both bounds.
         builder
             .http1()
             .timer(hyper_util::rt::TokioTimer::new())
-            .header_read_timeout(header_read_timeout);
+            .header_read_timeout(None);
         builder.http2().timer(hyper_util::rt::TokioTimer::new());
         Self {
             app,
             tls,
-            header_read_timeout,
+            bounds,
             builder,
             graceful: hyper_util::server::graceful::GracefulShutdown::new(),
             tasks: tokio::task::JoinSet::new(),
@@ -368,14 +311,16 @@ impl Connections {
         no_delay(&stream);
         // NOTE: RFC 9112 §9.5 lets a server close a connection it holds inactive;
         // the bound counts from accept so the version sniff is held to it too.
-        let first_byte = Box::pin(tokio::time::sleep(self.header_read_timeout));
+        let first_byte = Box::pin(tokio::time::sleep(self.bounds.header_read));
+        let bounds = self.bounds;
+        let activity = Arc::new(keep_alive::Activity::default());
         let app = self.app.clone();
         let builder = self.builder.clone();
         let watcher = self.graceful.watcher();
         let Some(tls) = &self.tls else {
             self.tasks.spawn(async move {
-                let service = connection_service(app, peer, None);
-                let stream = FirstByte::new(stream, first_byte);
+                let service = connection_service(app, peer, None, Arc::clone(&activity));
+                let stream = keep_alive::Bounded::new(stream, activity, bounds, first_byte);
                 let connection = builder
                     .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
                     .into_owned();
@@ -407,8 +352,8 @@ impl Connections {
                         .collect(),
                 )
             });
-            let service = connection_service(app, peer, peers);
-            let stream = FirstByte::new(stream, first_byte);
+            let service = connection_service(app, peer, peers, Arc::clone(&activity));
+            let stream = keep_alive::Bounded::new(stream, activity, bounds, first_byte);
             let connection = builder
                 .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
                 .into_owned();
@@ -425,8 +370,14 @@ fn connection_service(
     app: Router,
     peer: std::net::SocketAddr,
     peers: Option<crate::tls::PeerCertificates>,
+    activity: Arc<keep_alive::Activity>,
 ) -> hyper_util::service::TowerToHyperService<WithConnection> {
-    hyper_util::service::TowerToHyperService::new(WithConnection { app, peer, peers })
+    hyper_util::service::TowerToHyperService::new(WithConnection {
+        app,
+        peer,
+        peers,
+        activity,
+    })
 }
 
 /// The one router of a listener, putting one connection's facts on each
@@ -438,6 +389,7 @@ struct WithConnection {
     app: Router,
     peer: std::net::SocketAddr,
     peers: Option<crate::tls::PeerCertificates>,
+    activity: Arc<keep_alive::Activity>,
 }
 
 impl<B> tower::Service<http::Request<B>> for WithConnection
@@ -445,7 +397,7 @@ where
     B: hyper::body::Body,
     Router: tower::Service<http::Request<ReadToEnd<B>>, Response = axum::response::Response>,
 {
-    type Response = axum::response::Response;
+    type Response = http::Response<keep_alive::Tracked>;
     type Error = <Router as tower::Service<http::Request<ReadToEnd<B>>>>::Error;
     type Future = CloseUnread<<Router as tower::Service<http::Request<ReadToEnd<B>>>>::Future>;
 
@@ -455,6 +407,11 @@ where
 
     fn call(&mut self, request: http::Request<B>) -> Self::Future {
         let http1 = request.version() < http::Version::HTTP_2;
+        if !http1 {
+            self.activity.unbound();
+        }
+        let connect = request.method() == http::Method::CONNECT;
+        let busy = http1.then(|| self.activity.begin());
         let (mut parts, body) = request.into_parts();
         parts
             .extensions
@@ -470,6 +427,8 @@ where
         CloseUnread {
             response: self.app.call(http::Request::from_parts(parts, body)),
             read: http1.then_some(read),
+            busy,
+            connect,
         }
     }
 }
@@ -520,11 +479,14 @@ fn says_close(headers: &http::HeaderMap) -> bool {
 
 pin_project_lite::pin_project! {
     /// The response to an HTTP/1 request, which says `Connection: close` when
-    /// the request body was left unread.
+    /// the request body was left unread and keeps the request in flight
+    /// until its body is sent.
     struct CloseUnread<F> {
         #[pin]
         response: F,
         read: Option<Arc<AtomicBool>>,
+        busy: Option<keep_alive::Busy>,
+        connect: bool,
     }
 }
 
@@ -532,7 +494,7 @@ impl<F, E> Future for CloseUnread<F>
 where
     F: Future<Output = Result<axum::response::Response, E>>,
 {
-    type Output = F::Output;
+    type Output = Result<http::Response<keep_alive::Tracked>, E>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -549,7 +511,15 @@ where
                 http::HeaderValue::from_static("close"),
             );
         }
-        Poll::Ready(Ok(response))
+        let busy = this.busy.take();
+        let status = response.status();
+        if let Some(busy) = &busy
+            && (status == http::StatusCode::SWITCHING_PROTOCOLS
+                || (*this.connect && status.is_success()))
+        {
+            busy.activity().unbound();
+        }
+        Poll::Ready(Ok(response.map(|body| keep_alive::Tracked::new(body, busy))))
     }
 }
 
@@ -698,9 +668,12 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let (delay, bound) = (section.drain_delay(), section.shutdown_timeout());
-    let section_timeout = section.header_read_timeout();
+    let bounds = keep_alive::Bounds {
+        header_read: section.header_read_timeout(),
+        idle: section.idle_timeout(),
+    };
     let Some(tls) = tls else {
-        let connections = Connections::new(app, None, section_timeout);
+        let connections = Connections::new(app, None, bounds);
         return Ok(drive(listener, connections, lifecycle, signal, delay, bound).await);
     };
     let section = tls.section().clone();
@@ -711,7 +684,7 @@ where
             Duration::from_secs(seconds.get()),
         ))
     });
-    let connections = Connections::new(app, Some(tls), section_timeout);
+    let connections = Connections::new(app, Some(tls), bounds);
     let served = drive(listener, connections, lifecycle, signal, delay, bound).await;
     reloads.abort();
     if let Some(interval) = interval {
@@ -1765,7 +1738,7 @@ mod tests {
             attempts: attempts.clone(),
             limit: 10_000,
         };
-        let connections = super::Connections::new(Router::new(), None, super::HEADER_READ_TIMEOUT);
+        let connections = super::Connections::new(Router::new(), None, super::DEFAULT_BOUNDS);
         let drained = super::drive(
             listener,
             connections,
