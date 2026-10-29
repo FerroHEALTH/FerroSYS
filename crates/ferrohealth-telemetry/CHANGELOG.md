@@ -10,6 +10,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-29
+
 ### Added
 
 - `request_log::ValueShape` and `RequestLog::with_query_shape` and
@@ -135,7 +137,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.2...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.3...HEAD
+[0.2.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.2...ferrohealth-telemetry-v0.2.3
 [0.2.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.1...ferrohealth-telemetry-v0.2.2
 [0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.0...ferrohealth-telemetry-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.1.0...ferrohealth-telemetry-v0.2.0
