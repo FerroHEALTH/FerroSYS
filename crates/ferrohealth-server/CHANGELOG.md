@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-29
+
 ### Fixed
 
 - `stack::app` and `Stack::into_router` keep the product's default fallback
@@ -384,7 +386,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.1...HEAD
+[0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.0...ferrohealth-server-v0.4.1
 [0.4.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.10...ferrohealth-server-v0.4.0
 [0.3.10]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.9...ferrohealth-server-v0.3.10
 [0.3.9]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.3.8...ferrohealth-server-v0.3.9
