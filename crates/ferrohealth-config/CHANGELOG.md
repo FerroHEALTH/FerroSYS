@@ -22,6 +22,12 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   quoting; the key and the expected type still show, and so do the field
   and variant names of `unknown field`, `missing field` and `unknown
   variant` (#186).
+- A refusal inside an array of tables, such as `[[pixm.manager]]`, names
+  its key with the element's index (`pixm.manager[1].method`), where it
+  named no key; an unknown key there names its suggestion the same way,
+  and the variable that set the array is named when an override set it.
+  `Provenance::source` and `Provenance::variable` read such a key as the
+  key of its array (#187).
 
 ## [0.2.7] - 2026-10-28
 

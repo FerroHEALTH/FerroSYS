@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 
 use crate::error::{ConfigError, mask_values, position};
 use crate::overrides::{Override, Placement, retype};
-use crate::provenance::Provenance;
+use crate::provenance::{Provenance, indexed};
 use crate::strict::did_you_mean;
 
 /// The loader of one product's configuration.
@@ -621,7 +621,7 @@ impl Loader {
             if follows_a_drop(&error, key.as_deref(), &dropped) {
                 match key {
                     Some(table) => {
-                        dropped.push(table.split('.').map(str::to_owned).collect());
+                        dropped.push(segments(&table, true));
                         continue;
                     }
                     None => return Err(collected(errors)),
@@ -630,7 +630,7 @@ impl Loader {
             errors.push(refusal);
             match key {
                 Some(key) if errors.len() < MAX_REFUSALS => {
-                    dropped.push(key.split('.').map(str::to_owned).collect());
+                    dropped.push(segments(&key, true));
                 }
                 _ => return Err(collected(errors)),
             }
@@ -739,7 +739,8 @@ fn key_at(merged: &str, span: &Range<usize>) -> Option<String> {
     find_key(&document, span.start).map(|path| path.join("."))
 }
 
-/// Walks `table` for the deepest key that holds `at`.
+/// Walks `table` for the deepest key that holds `at`, a table in an array
+/// named with its index (`manager[1]`).
 fn find_key(table: &toml::de::DeTable<'_>, at: usize) -> Option<Vec<String>> {
     for (key, value) in table {
         let name = key.get_ref().to_string();
@@ -749,11 +750,39 @@ fn find_key(table: &toml::de::DeTable<'_>, at: usize) -> Option<Vec<String>> {
             below.insert(0, name);
             return Some(below);
         }
+        // NOTE: no specification governs this: our own design; an element of an
+        // array of tables is named by its index, as `pixm.manager[0].method`.
+        if let Some(elements) = value.get_ref().as_array() {
+            for (index, element) in elements.iter().enumerate() {
+                let Some(inner) = element.get_ref().as_table() else {
+                    continue;
+                };
+                if let Some(mut below) = find_key(inner, at) {
+                    below.insert(0, format!("{name}[{index}]"));
+                    return Some(below);
+                }
+                if element.span().contains(&at) {
+                    return Some(vec![format!("{name}[{index}]")]);
+                }
+            }
+        }
         if key.span().contains(&at) || value.span().contains(&at) {
             return Some(vec![name]);
         }
     }
     None
+}
+
+/// The segments of the dotted key `key`, an indexed segment such as
+/// `manager[1]` kept whole; with `whole_array`, a last indexed segment
+/// names its array, so dropping it drops every element and no index moves.
+fn segments(key: &str, whole_array: bool) -> Vec<String> {
+    let mut path: Vec<String> = key.split('.').map(str::to_owned).collect();
+    if whole_array && let Some(last) = path.last_mut() {
+        let (name, _) = indexed(last);
+        *last = name.to_owned();
+    }
+    path
 }
 
 /// The refusal of `error`, read from the merged text, and the dotted key it
@@ -797,9 +826,7 @@ fn follows_a_drop(error: &toml::de::Error, key: Option<&str>, dropped: &[Vec<Str
     else {
         return false;
     };
-    let mut path: Vec<String> = key
-        .map(|key| key.split('.').map(str::to_owned).collect())
-        .unwrap_or_default();
+    let mut path: Vec<String> = key.map(|key| segments(key, false)).unwrap_or_default();
     path.push(field.to_owned());
     dropped.contains(&path)
 }
@@ -847,9 +874,28 @@ fn take(table: &mut toml::Table, path: &[String]) -> Option<toml::Value> {
 
 /// Removes the value at `path` in `table`, when there is one.
 fn remove(table: &mut toml::Table, path: &[String]) {
-    // NOTE: no specification governs this: our own design; a refused key that is
-    // already gone has nothing left to remove.
-    let _removed: Option<toml::Value> = take(table, path);
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    let mut cursor = table;
+    for parent in parents {
+        let (name, index) = indexed(parent);
+        let value = cursor.get_mut(name);
+        let next = match (value, index) {
+            (Some(toml::Value::Table(inner)), None) => Some(inner),
+            (Some(toml::Value::Array(elements)), Some(index)) => {
+                elements.get_mut(index).and_then(toml::Value::as_table_mut)
+            }
+            _ => None,
+        };
+        // NOTE: no specification governs this: our own design; a refused key that is
+        // already gone has nothing left to remove.
+        let Some(next) = next else {
+            return;
+        };
+        cursor = next;
+    }
+    let _removed: Option<toml::Value> = cursor.remove(last.as_str());
 }
 
 /// Puts every key of `above` into `below`, merging the tables both hold.
@@ -940,6 +986,27 @@ mod tests {
         server: Server,
         telemetry: Telemetry,
         cdr: Option<Cdr>,
+        pixm: Option<Pixm>,
+    }
+
+    #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct Pixm {
+        manager: Vec<Manager>,
+    }
+
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(deny_unknown_fields)]
+    struct Manager {
+        url: String,
+        method: Method,
+    }
+
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(rename_all = "lowercase")]
+    enum Method {
+        Get,
+        Post,
     }
 
     #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -1539,6 +1606,85 @@ mod tests {
             assert_eq!(Source::File, provenance.secret_source("cdr.url"));
             assert_eq!(Source::Default, provenance.secret_source("cdr.user"));
         }
+    }
+
+    fn refusals(error: &ConfigError) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+        let one = |error: &ConfigError| match error {
+            ConfigError::Invalid {
+                key,
+                variable,
+                suggestion,
+                ..
+            } => (key.clone(), variable.clone(), suggestion.clone()),
+            other => panic!("an invalid key: {other:?}"),
+        };
+        match error {
+            ConfigError::Refusals { refusals } => refusals.iter().map(one).collect(),
+            other => vec![one(other)],
+        }
+    }
+
+    #[test]
+    fn a_refusal_inside_an_array_of_tables_names_the_element_and_its_key() {
+        let file = "[[pixm.manager]]\nurl = \"https://a.example\"\nmethod = \"get\"\n\n\
+                    [[pixm.manager]]\nurl = \"https://b.example\"\nmethod = \"put\"\n";
+        let error = loader()
+            .load_sources::<Config>(Some(file), None, &BTreeMap::new())
+            .expect_err("the method is refused");
+        assert_eq!(
+            vec![(
+                Some("pixm.manager[1].method".to_owned()),
+                None,
+                Some("get".to_owned())
+            )],
+            refusals(&error)
+        );
+        assert!(
+            error
+                .to_string()
+                .starts_with("`pixm.manager[1].method` is not valid"),
+            "{error}"
+        );
+
+        let file = "[[pixm.manager]]\nurl = \"https://a.example\"\nmethod = \"get\"\n\n\
+                    [[pixm.manager]]\nurl = \"https://b.example\"\nmthod = \"post\"\n";
+        let error = loader()
+            .load_sources::<Config>(Some(file), None, &BTreeMap::new())
+            .expect_err("the unknown key is refused");
+        assert_eq!(
+            vec![
+                (
+                    Some("pixm.manager[1].mthod".to_owned()),
+                    None,
+                    Some("pixm.manager[1].method".to_owned())
+                ),
+                (Some("pixm.manager[1]".to_owned()), None, None),
+            ],
+            refusals(&error),
+            "the unknown key with its suggestion, then the field it left missing"
+        );
+    }
+
+    #[test]
+    fn a_refusal_inside_an_array_an_override_set_names_the_variable() {
+        let error = loader()
+            .load_sources::<Config>(
+                None,
+                None,
+                &environment(&[(
+                    "FERROSYS__PIXM__MANAGER",
+                    "[{ url = \"https://a.example\", method = \"get\" }, { url = \"https://b.example\", method = \"put\" }]",
+                )]),
+            )
+            .expect_err("the method is refused");
+        assert_eq!(
+            vec![(
+                Some("pixm.manager[1].method".to_owned()),
+                Some("FERROSYS__PIXM__MANAGER".to_owned()),
+                Some("get".to_owned())
+            )],
+            refusals(&error)
+        );
     }
 
     #[test]

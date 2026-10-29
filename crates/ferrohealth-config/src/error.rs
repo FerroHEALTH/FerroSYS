@@ -51,7 +51,9 @@ pub enum ConfigError {
     /// a value the tree refuses.
     #[error("{}", Refusal(self))]
     Invalid {
-        /// The dotted key at fault, when the refusal names one.
+        /// The dotted key at fault, when the refusal names one; a key inside
+        /// an array of tables names its element by index, as
+        /// `pixm.manager[1].method`.
         key: Option<String>,
         /// The environment variable that set the key, when one did.
         variable: Option<String>,
