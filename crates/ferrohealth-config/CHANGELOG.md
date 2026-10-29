@@ -10,6 +10,19 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A refusal of a value of the wrong type no longer echoes the value when
+  it is not a string. serde renders a refused integer, float, boolean or
+  character in backticks (``invalid type: integer `73194426`, expected a
+  string``), which the masking of double-quoted values let through, so a
+  secret written unquoted in the file reached the refusal's `reason`, its
+  `Display` and every log line that rendered it. The refused value of every
+  `invalid type` and `invalid value` message is now masked whatever its
+  quoting; the key and the expected type still show, and so do the field
+  and variant names of `unknown field`, `missing field` and `unknown
+  variant` (#186).
+
 ## [0.2.7] - 2026-10-28
 
 ### Added
