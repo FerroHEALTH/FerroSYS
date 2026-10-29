@@ -4,7 +4,8 @@
 //! The HTTP server plumbing of the FerroHEALTH products.
 //!
 //! [`stack::app`] wraps a product's router in the one stack every server
-//! runs, under its base path:
+//! runs, under its base path, and [`stack::Stack`] also mounts routes
+//! beside the base path and the product's fallback inside it:
 //!
 //! - [`request_id`]: the server mints its own id for every request and logs
 //!   it; a client's `X-Request-Id` is echoed and never logged.

@@ -10,6 +10,18 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `stack::Stack`, the builder behind `stack::app`: `Stack::beside` mounts
+  routes at the root beside the base path, and `Stack::fallback` answers
+  every request no route matched with the product's handler, such as a
+  `404` body of its own for a path outside the base path. The request id,
+  the request log, the client address, the refusal and panic bodies, the
+  timeout, the body limit and the compression cover both; the overload
+  bound covers the routes beside and leaves the fallback unbounded. The
+  health routes stay under the base path. `stack::app` is
+  `Stack::new(..).into_router()` and serves as before (#180).
+
 ## [0.3.9] - 2026-10-29
 
 ### Fixed

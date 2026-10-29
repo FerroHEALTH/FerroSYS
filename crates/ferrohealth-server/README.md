@@ -22,6 +22,9 @@ runs the same stack, the same health routes and the same shutdown.
     `503` with `Retry-After`, and the health routes are never refused;
   - the request log of `ferrohealth-telemetry`, one line for every request,
     a refusal and a panic included.
+- `stack::Stack` builds the same stack and also mounts routes beside the
+  base path (`beside`) and the product's own answer to a request no route
+  matched (`fallback`), each inside every layer above.
 - `health::routes` serves `/health`, `/health/liveness` and
   `/health/readiness` over `ferrohealth-health`. Readiness names each
   indicator and its state and never its detail, since anyone who reaches
