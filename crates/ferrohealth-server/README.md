@@ -68,7 +68,7 @@ runs the same stack, the same health routes and the same shutdown.
 
 ```toml
 [dependencies]
-ferrohealth-server = "=0.3.9"
+ferrohealth-server = "=0.3.10"
 ```
 
 Install `ferrohealth_telemetry::panic::install_hook` at start, so Rust's own
