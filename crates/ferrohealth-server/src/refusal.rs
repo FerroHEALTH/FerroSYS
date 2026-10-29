@@ -22,13 +22,26 @@ use axum::response::{IntoResponse as _, Response};
 use ferrohealth_telemetry::request_log::RequestId;
 use http::{StatusCode, Uri, header};
 
-/// The body of a refusal: the product writes it for the request's URI, the
-/// server's request id, the status and a reason in plain words.
-pub type RefusalBody = Arc<dyn Fn(&Uri, &str, StatusCode, &str) -> Response + Send + Sync>;
+use crate::request_id::{self, RequestIds};
+
+/// The body of a refusal: the product writes it for the request's URI, its
+/// [`RequestIds`], the status and a reason in plain words.
+pub type RefusalBody =
+    Arc<dyn Fn(&Uri, RequestIds<'_>, StatusCode, &str) -> Response + Send + Sync>;
+
+/// A [`RefusalBody`] from a body written for the URI, the server's request
+/// id, the status and the reason, the shape of `RefusalBody` before 0.4.0.
+#[must_use]
+pub fn from_server_id<F>(body: F) -> RefusalBody
+where
+    F: Fn(&Uri, &str, StatusCode, &str) -> Response + Send + Sync + 'static,
+{
+    Arc::new(move |uri, ids, status, reason| body(uri, ids.server, status, reason))
+}
 
 /// The one default body, so the stack can tell it from a product's.
 static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
-    Arc::new(|_uri, _request_id, status, reason| (status, reason.to_owned()).into_response())
+    Arc::new(|_uri, _ids, status, reason| (status, reason.to_owned()).into_response())
 });
 
 /// The body a product that names none answers with: the reason as plain
@@ -108,6 +121,7 @@ pub async fn render(body: RefusalBody, request: Request, next: Next) -> Response
         .get::<RequestId>()
         .map(|id| id.id().to_owned())
         .unwrap_or_default();
+    let client = request_id::of_client(request.headers()).map(str::to_owned);
     let response = next.run(request).await;
     let status = response.status();
     let reason = match reason(&response) {
@@ -117,7 +131,13 @@ pub async fn render(body: RefusalBody, request: Request, next: Next) -> Response
         None if status == StatusCode::PAYLOAD_TOO_LARGE => TOO_LARGE,
         None => return response,
     };
-    rewrite(&body, &uri, &request_id, &response, reason)
+    rewrite(
+        &body,
+        &uri,
+        RequestIds::new(&request_id, client.as_deref()),
+        &response,
+        reason,
+    )
 }
 
 /// The reason of a refusal [`refused`] wrote, when `response` is one.
@@ -133,12 +153,12 @@ pub(crate) fn reason<B>(response: &http::Response<B>) -> Option<&'static str> {
 pub(crate) fn rewrite<B>(
     body: &RefusalBody,
     uri: &Uri,
-    request_id: &str,
+    ids: RequestIds<'_>,
     response: &http::Response<B>,
     reason: &str,
 ) -> Response {
     let status = response.status();
-    let mut rendered = body(uri, request_id, status, reason);
+    let mut rendered = body(uri, ids, status, reason);
     set_status(&mut rendered, status);
     if let Some(wait) = response.headers().get(header::RETRY_AFTER) {
         rendered
@@ -154,11 +174,11 @@ pub(crate) fn rewrite<B>(
 pub(crate) fn write(
     body: &RefusalBody,
     uri: &Uri,
-    request_id: &str,
+    ids: RequestIds<'_>,
     status: StatusCode,
     reason: &str,
 ) -> Response {
-    let mut rendered = body(uri, request_id, status, reason);
+    let mut rendered = body(uri, ids, status, reason);
     set_status(&mut rendered, status);
     rendered
 }

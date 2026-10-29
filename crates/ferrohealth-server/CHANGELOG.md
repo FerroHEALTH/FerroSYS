@@ -31,6 +31,19 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   `healthcheck::check`, `check_tls` and `check_url` run the same exchange
   and answer as before (#195).
 
+### Changed
+
+- Breaking: a `panic::PanicBody` and a `refusal::RefusalBody` take
+  `request_id::RequestIds` in place of the server's request id: `server`,
+  the id the request log and the panic line name, and `echoed`, the id the
+  response echoes in `X-Request-Id` (the client's legal id when it sent
+  one, the server's otherwise). A product whose error bodies name the id
+  the client sees writes `ids.echoed`; the client's id goes back only to
+  the client that sent it and is still never logged. A body written for
+  the server's id keeps its closure through `panic::from_server_id` and
+  `refusal::from_server_id`. `problem::panic_body`, `problem::refusal_body`
+  and the default bodies keep naming the server's id (#191).
+
 ### Fixed
 
 - On a kept-alive HTTP/1.1 connection, `header_read_timeout_ms` counts from

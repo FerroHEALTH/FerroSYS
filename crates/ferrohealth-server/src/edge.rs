@@ -34,7 +34,7 @@ use tokio::time::{Instant, Sleep};
 use crate::client_address::{ClientAddress, Forwarding};
 use crate::panic::{self, PanicBody};
 use crate::refusal::{self, RefusalBody};
-use crate::request_id;
+use crate::request_id::{self, RequestIds};
 
 /// What the outer service holds, shared by its clones.
 pub(crate) struct Settings {
@@ -149,12 +149,20 @@ impl Answer {
         response
     }
 
+    /// The server's id and the one [`Answer::finish`] echoes.
+    fn ids(&self) -> RequestIds<'_> {
+        RequestIds::new(
+            self.id.id(),
+            self.client.as_ref().and_then(|client| client.to_str().ok()),
+        )
+    }
+
     /// A refusal of `status` for `reason` the stack writes itself.
     fn refusal(&self, status: StatusCode, reason: &str) -> Response {
         self.finish(refusal::write(
             &self.settings.refusal_body,
             &self.uri,
-            self.id.id(),
+            self.ids(),
             status,
             reason,
         ))
@@ -345,7 +353,7 @@ fn answered(answer: &Answer, response: Response) -> Response {
         Some(reason) => refusal::rewrite(
             &answer.settings.refusal_body,
             &answer.uri,
-            answer.id.id(),
+            answer.ids(),
             &response,
             reason,
         ),
@@ -412,6 +420,6 @@ fn panicked(answer: &Answer) -> Response {
     answer.finish(panic::answer(
         &answer.settings.panic_body,
         &answer.uri,
-        answer.id.id(),
+        answer.ids(),
     ))
 }

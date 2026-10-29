@@ -32,6 +32,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use url::Url;
 
 use crate::refusal::{RefusalBody, default_body};
+use crate::request_id::{self, RequestIds};
 
 /// The fetch metadata header that names where a request comes from.
 const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
@@ -206,7 +207,7 @@ pub async fn only(check: SameOrigin, request: Request, next: Next) -> Response {
         .unwrap_or_default();
     let mut response = (check.body)(
         request.uri(),
-        &request_id,
+        RequestIds::new(&request_id, request_id::of_client(request.headers())),
         StatusCode::FORBIDDEN,
         refused.reason(),
     );
