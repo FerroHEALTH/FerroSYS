@@ -65,9 +65,12 @@ runs the same stack, the same health routes and the same shutdown.
   problems. The body is `application/problem+json` whatever the client
   asked for; it is JSON, so a client that accepts `application/json`
   reads it.
-- `console` (feature `console`) adds an operator console's nonce
-  Content-Security-Policy and the security headers beside it, and
-  `same_origin`, which refuses a state-changing request another site sent.
+- `console` (feature `console`) adds an operator console's
+  Content-Security-Policy and the security headers beside it: a nonce
+  policy for a hydrated console (`ConsoleHeaders::new`), or
+  `script-src 'self'; style-src 'self'` with no nonce for a server-rendered
+  one (`ConsoleHeaders::server_rendered`), and `same_origin`, which refuses
+  a state-changing request another site sent.
 
 ## Use
 
