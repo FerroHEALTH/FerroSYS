@@ -3,14 +3,19 @@
 
 //! The browser security headers of an operator console.
 //!
-//! Every response carries a Content-Security-Policy whose script source is a
-//! nonce minted for that response alone (W3C Content Security Policy Level
-//! 3), with `'wasm-unsafe-eval'` so the WebAssembly bundle compiles and
-//! nothing admitting `'unsafe-inline'` or `'unsafe-eval'`. Beside it:
-//! `nosniff`, `DENY` framing, no referrer, and a same-origin opener. A
-//! document is marked `Cache-Control: no-store` and the site bundle
-//! `no-cache` (RFC 9111 §5.2.2.4, §5.2.2.5), so a rebuilt bundle is fetched
-//! again; a response that set its own `Cache-Control` keeps it.
+//! Every response carries a Content-Security-Policy that admits nothing
+//! `'unsafe-inline'` or `'unsafe-eval'` would (W3C Content Security Policy
+//! Level 3). A hydrated console ([`ConsoleHeaders::new`]) has its scripts
+//! admitted by a nonce minted for that response alone, with
+//! `'wasm-unsafe-eval'` so the WebAssembly bundle compiles. A server-rendered
+//! console ([`ConsoleHeaders::server_rendered`]) loads scripts and styles
+//! from its own origin alone, with no nonce and no WebAssembly (§6.1.1
+//! `script-src`). Beside the policy: `nosniff`, `DENY` framing, no referrer,
+//! and a same-origin opener. A document is marked `Cache-Control: no-store`
+//! and the site bundle `no-cache` (RFC 9111 §5.2.2.4, §5.2.2.5), so a
+//! rebuilt bundle is fetched again; a response that set its own
+//! `Cache-Control` keeps it, except a refusal under a server-rendered
+//! console's bundle, which is always `no-store`.
 
 use std::sync::Arc;
 
@@ -46,27 +51,57 @@ impl CspNonce {
     }
 }
 
-/// The policy's sources a console names: where its forms may post.
+/// How a console's pages run their scripts, which decides the policy's
+/// script source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scripts {
+    /// A hydrated console: a nonce per response and the WebAssembly bundle.
+    Nonce,
+    /// A server-rendered console: modules from its own origin, nothing inline.
+    SelfOnly,
+}
+
+/// The policy's sources a console names: where its forms may post, and
+/// how its pages run their scripts.
 #[derive(Debug, Clone)]
 pub struct ConsoleHeaders {
     form_action: Arc<str>,
     bundle: Option<Arc<str>>,
+    scripts: Scripts,
 }
 
 impl ConsoleHeaders {
-    /// The headers of a console whose forms post to `form_action`, such as
-    /// `'self'`.
+    /// The headers of a hydrated console whose forms post to `form_action`,
+    /// such as `'self'`: a nonce is minted for every response, handed to the
+    /// renderer as a [`CspNonce`] in the request's extensions and named in
+    /// `script-src` beside `'wasm-unsafe-eval'`.
     #[must_use]
     pub fn new(form_action: impl Into<Arc<str>>) -> Self {
         Self {
             form_action: form_action.into(),
             bundle: None,
+            scripts: Scripts::Nonce,
+        }
+    }
+
+    /// The headers of a server-rendered console whose forms post to
+    /// `form_action`, such as `'self'`: `script-src 'self'` and
+    /// `style-src 'self'`, with no nonce and no `'wasm-unsafe-eval'`, the
+    /// policy of a console that writes no inline script or style and runs no
+    /// WebAssembly. No nonce is minted, and none is put in the request.
+    #[must_use]
+    pub fn server_rendered(form_action: impl Into<Arc<str>>) -> Self {
+        Self {
+            scripts: Scripts::SelfOnly,
+            ..Self::new(form_action)
         }
     }
 
     /// Serves the paths under `bundle`, such as `/pkg`, as the site bundle:
     /// `no-cache` on a successful or not-modified answer there, and `no-store`
-    /// on every other response, a refusal under the bundle included.
+    /// on every other response, a refusal under the bundle included. An
+    /// answer that set its own `Cache-Control` keeps it; under a
+    /// server-rendered console's bundle a refusal is `no-store` whatever it set.
     #[must_use]
     pub fn with_bundle(mut self, bundle: impl Into<Arc<str>>) -> Self {
         self.bundle = Some(bundle.into());
@@ -83,12 +118,25 @@ impl ConsoleHeaders {
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
     }
 
-    /// The Content-Security-Policy that names `nonce`.
+    /// The Content-Security-Policy: for a hydrated console it names
+    /// `nonce`, and a server-rendered console's names no nonce, so `nonce`
+    /// goes unused.
     #[must_use]
     pub fn policy(&self, nonce: &CspNonce) -> String {
+        match self.scripts {
+            Scripts::Nonce => self.policy_with(&format!(
+                "'self' 'wasm-unsafe-eval' 'nonce-{}'",
+                nonce.as_str()
+            )),
+            Scripts::SelfOnly => self.policy_with("'self'"),
+        }
+    }
+
+    /// The Content-Security-Policy whose `script-src` is `scripts`.
+    fn policy_with(&self, scripts: &str) -> String {
         format!(
             "default-src 'self'; \
-             script-src 'self' 'wasm-unsafe-eval' 'nonce-{nonce}'; \
+             script-src {scripts}; \
              style-src 'self'; \
              img-src 'self' data:; \
              connect-src 'self'; \
@@ -96,31 +144,45 @@ impl ConsoleHeaders {
              base-uri 'self'; \
              form-action {form_action}; \
              frame-ancestors 'none'",
-            nonce = nonce.as_str(),
             form_action = self.form_action
         )
     }
 }
 
-/// The middleware: mints the response's nonce, hands it to the renderer,
-/// and sets the policy and the headers beside it.
+/// The middleware: for a hydrated console it mints the response's nonce and
+/// hands it to the renderer, and for every console it sets the policy and
+/// the headers beside it.
 ///
 /// Mount it with
 /// `axum::middleware::from_fn(move |r, n| console::headers(headers.clone(), r, n))`.
 pub async fn headers(headers: ConsoleHeaders, mut request: Request, next: Next) -> Response {
-    let nonce = CspNonce::mint();
-    let policy = HeaderValue::from_str(&headers.policy(&nonce));
+    let policy = match headers.scripts {
+        Scripts::Nonce => {
+            let nonce = CspNonce::mint();
+            let policy = headers.policy(&nonce);
+            request.extensions_mut().insert(nonce);
+            policy
+        }
+        Scripts::SelfOnly => headers.policy_with("'self'"),
+    };
+    let policy = HeaderValue::from_str(&policy);
     let bundle = headers.is_bundle(request.uri().path());
-    request.extensions_mut().insert(nonce);
     let mut response = next.run(request).await;
     let status = response.status();
-    let caching = if bundle && (status.is_success() || status == StatusCode::NOT_MODIFIED) {
+    let kept = status.is_success() || status == StatusCode::NOT_MODIFIED;
+    let caching = if bundle && kept {
         HeaderValue::from_static("no-cache")
     } else {
         HeaderValue::from_static("no-store")
     };
     let set = response.headers_mut();
-    set.entry(CACHE_CONTROL).or_insert(caching);
+    if bundle && !kept && headers.scripts == Scripts::SelfOnly {
+        // NOTE: RFC 9111 §4.2.2 lets a cache keep a 404 heuristically, so a refusal under
+        // the bundle is no-store whatever long-cache header its handler set.
+        set.insert(CACHE_CONTROL, caching);
+    } else {
+        set.entry(CACHE_CONTROL).or_insert(caching);
+    }
     match policy {
         Ok(policy) => {
             set.insert(CONTENT_SECURITY_POLICY, policy);
@@ -273,6 +335,135 @@ mod tests {
             "max-age=60",
             cache_control(&app, "/own").await,
             "a handler's own header stays"
+        );
+    }
+
+    #[test]
+    fn the_nonce_policy_is_the_hydrated_consoles() {
+        let nonce = CspNonce::mint();
+        assert_eq!(
+            format!(
+                "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'nonce-{}'; \
+                 style-src 'self'; img-src 'self' data:; connect-src 'self'; \
+                 object-src 'none'; base-uri 'self'; form-action 'self'; \
+                 frame-ancestors 'none'",
+                nonce.as_str()
+            ),
+            ConsoleHeaders::new("'self'").policy(&nonce)
+        );
+    }
+
+    #[test]
+    fn the_server_rendered_policy_names_no_nonce_and_no_webassembly() {
+        let policy = ConsoleHeaders::server_rendered("'self'").policy(&CspNonce::mint());
+        assert_eq!(
+            "default-src 'self'; script-src 'self'; style-src 'self'; \
+             img-src 'self' data:; connect-src 'self'; object-src 'none'; \
+             base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            policy
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_rendered_console_mints_no_nonce() {
+        let console = ConsoleHeaders::server_rendered("https://console.example");
+        let app = Router::new()
+            .route(
+                "/",
+                get(|nonce: Option<Extension<CspNonce>>| async move {
+                    if nonce.is_some() { "nonce" } else { "none" }
+                }),
+            )
+            .layer(axum::middleware::from_fn(move |request, next| {
+                headers(console.clone(), request, next)
+            }));
+        let response = app
+            .oneshot(
+                http::Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the request is served");
+        let get = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let policy = get("content-security-policy");
+        assert!(policy.contains("script-src 'self';"), "{policy}");
+        assert!(
+            policy.contains("form-action https://console.example;"),
+            "{policy}"
+        );
+        assert!(
+            !policy.contains("nonce-") && !policy.contains("'wasm-unsafe-eval'"),
+            "{policy}"
+        );
+        assert_eq!("nosniff", get("x-content-type-options"));
+        assert_eq!("DENY", get("x-frame-options"));
+        assert_eq!("no-referrer", get("referrer-policy"));
+        assert_eq!("same-origin", get("cross-origin-opener-policy"));
+        assert_eq!("no-store", get("cache-control"));
+        let body = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .expect("the body");
+        assert_eq!(body, "none", "no nonce reaches the renderer");
+    }
+
+    #[tokio::test]
+    async fn a_server_rendered_bundle_keeps_its_own_cache_and_a_refusal_is_no_store() {
+        const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+        let console = ConsoleHeaders::server_rendered("'self'").with_bundle("/assets");
+        let app = Router::new()
+            .route("/", get(|| async { "page" }))
+            .route(
+                "/assets/1.0.0/console.css",
+                get(|| async { ([(http::header::CACHE_CONTROL, IMMUTABLE)], "css") }),
+            )
+            .route("/assets/console.js", get(|| async { "js" }))
+            .route(
+                "/assets/gone.js",
+                get(|| async {
+                    (
+                        http::StatusCode::NOT_FOUND,
+                        [(http::header::CACHE_CONTROL, IMMUTABLE)],
+                        "gone",
+                    )
+                }),
+            )
+            .route(
+                "/own",
+                get(|| async { ([(http::header::CACHE_CONTROL, "max-age=60")], "own") }),
+            )
+            .layer(axum::middleware::from_fn(move |request, next| {
+                headers(console.clone(), request, next)
+            }));
+        assert_eq!("no-store", cache_control(&app, "/").await);
+        assert_eq!(
+            IMMUTABLE,
+            cache_control(&app, "/assets/1.0.0/console.css").await,
+            "a versioned asset keeps its handler's long cache"
+        );
+        assert_eq!("no-cache", cache_control(&app, "/assets/console.js").await);
+        assert_eq!(
+            "no-store",
+            cache_control(&app, "/assets/missing.js").await,
+            "a refusal under the bundle is nothing to keep"
+        );
+        assert_eq!(
+            "no-store",
+            cache_control(&app, "/assets/gone.js").await,
+            "a refusal under the bundle is no-store whatever its handler set"
+        );
+        assert_eq!(
+            "max-age=60",
+            cache_control(&app, "/own").await,
+            "a document's own header stays"
         );
     }
 }

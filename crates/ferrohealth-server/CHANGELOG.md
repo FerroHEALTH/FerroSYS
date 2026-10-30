@@ -10,6 +10,21 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `console::ConsoleHeaders::server_rendered`, the console headers of a
+  console drawn on the server with no inline script, no inline style and
+  no WebAssembly, such as one on FerroUI 0.6: `script-src 'self'` and
+  `style-src 'self'`, with no nonce and no `'wasm-unsafe-eval'` (W3C
+  Content Security Policy Level 3, §6.1.1). `console::headers` mints no
+  nonce for it and puts no `CspNonce` in the request. Under its bundle
+  path an asset keeps the `Cache-Control` its handler set, such as the
+  one-year `immutable` of FerroUI's asset router (RFC 9111 §5.2.2), and a
+  refusal is `no-store` whatever it set. A console that writes its own
+  policy over the header takes `ConsoleHeaders::server_rendered` in the
+  place of `ConsoleHeaders::new` and drops that layer.
+  `ConsoleHeaders::new` and its nonce policy are unchanged (#202).
+
 ## [0.4.1] - 2026-10-29
 
 ### Fixed
