@@ -15,5 +15,3 @@
   tracked file here, never a per-user note
 - [Licence: BUSL 1.1](license-busl.md): the FerroHEALTH terms, Cadasto B.V.
   the Licensor, Apache 2.0 four years after each version
-- [PR licence box](pr-licence-box.md): tick the contribution-licence box in
-  every pull request body; the owner's standing consent
