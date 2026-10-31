@@ -66,9 +66,6 @@ milestone set and its crates.io name reserved, which needs the owner.
 - **Branches use conventional types** (`feat/`, `fix/`, `chore/`, `docs/`,
   `refactor/`, `perf/`, `test/`, `ci/`, `build/`, `release/`); every commit is
   signed; `main` takes changes only through pull requests.
-- **Every pull request ticks the contribution-licence box**
-  (`.claude/memory/pr-licence-box.md`); the `contribution-licence-guard`
-  check reads it.
 - **NEVER add AI or Claude attribution** to a commit, PR, issue, comment, or
   code comment.
 - **Never weaken, skip, or delete a test** to make a build pass.
@@ -86,7 +83,7 @@ milestone set and its crates.io name reserved, which needs the owner.
   dependency edges).
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
-  version rule, the advisory exceptions, the contribution-licence box, and
+  version rule, the advisory exceptions, and
   `semver.sh`, cargo-semver-checks against crates.io).
 - `scripts/release/`: the release plan, the preflight, the milestone check
   and close, and the crates.io publish and read-back (`docs/release.md`).

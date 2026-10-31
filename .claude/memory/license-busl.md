@@ -27,4 +27,4 @@ with the Licensed Work, and no distribution for a fee.
 - Vendored material keeps its upstream terms, recorded in a `PROVENANCE.md`
   beside it.
 - A contribution is licensed under the same terms (CONTRIBUTING.md §
-  Licensing of contributions); the pull request box records it.
+  Licensing of contributions); opening the pull request accepts them.

@@ -18,7 +18,6 @@
 [![Family](https://img.shields.io/badge/family-FerroHEALTH-3F6070?logo=rust&logoColor=white)](https://ferrohealth.eu/)
 
 **Quality and security**<br>
-[![Contribution licence](https://img.shields.io/github/actions/workflow/status/FerroHEALTH/FerroSYS/contribution-licence.yml?logo=githubactions&logoColor=white&label=contribution%20licence)](https://github.com/FerroHEALTH/FerroSYS/actions/workflows/contribution-licence.yml)
 [![Security policy](https://img.shields.io/badge/security-policy-brightgreen?logo=github)](SECURITY.md)
 
 </div>
