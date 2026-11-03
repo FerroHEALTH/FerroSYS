@@ -52,7 +52,7 @@ crates.io belongs to an unrelated project.
 | `ferrohealth-config` | the TOML file, the `PREFIX__A__B` environment overrides, the strict checks, provenance, the `config check` rendering | consoles and job binaries take it without a server | every server and console |
 | `ferrohealth-telemetry` | the console subscriber, the request log, OTLP traces and metrics, the Prometheus reader; `otlp`, `prometheus` and `axum` features | every binary wants the console; a console leaves the exporters off | every server and console |
 | `ferrohealth-health` | the readiness document (serde only, builds for `wasm32`); the indicator trait, registry and lifecycle behind the `registry` feature | the document crosses into a console's browser half and each operator-api crate | servers (registry), consoles and operator-api crates (document) |
-| `ferrohealth-server` | the HTTP middleware stack, the shutdown drain, the health routes, the healthcheck client, the CLI skeleton, the build info and banner; the console security headers behind `console` | one unit every server and console takes whole | every server and console |
+| `ferrohealth-server` | the HTTP middleware stack, the shutdown drain, the health routes, the healthcheck client, the CLI skeleton and the run path around it, the build info and banner; the console security headers behind `console` | one unit every server and console takes whole | every server and console |
 | `ferrohealth-usage-report` | the FerroPULSE envelope v2, the instance id under `state_dir`, the latency window, the `start` and `daily` reporter | its own wire contract and off switch; only servers send it | the five servers |
 
 ### Dependency direction
@@ -113,6 +113,7 @@ pub fn health::routes(health: Health) -> Router;
 pub async fn serve::serve(listener: TcpListener, app: Router, lifecycle: Lifecycle, signal: F, delay: Duration, bound: Duration) -> io::Result<Drained>;
 pub async fn healthcheck::check(address: SocketAddr, base_path: &str, timeout: Duration) -> Outcome;
 #[derive(clap::Subcommand)] pub enum Common { Serve, Config { cmd: ConfigCmd }, Healthcheck }
+impl run::Run { pub fn run<C: clap::Parser>(self, args: I, dispatch: impl FnOnce(C) -> impl Future<Output = Result<ExitCode, Failure>>) -> ExitCode; }   // the parse, the runtime, the error chain
 
 // ferrohealth-usage-report
 pub trait ProductSection: Send + Sync { type Status: Serialize; const PRODUCT: Product; fn status(&self) -> impl Future<Output = Self::Status> + Send; }

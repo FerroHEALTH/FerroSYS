@@ -35,6 +35,8 @@
 //! [`tls_client`] reads the TLS material of a product's outbound calls.
 //! [`healthcheck`] is the container probe, [`cli::Common`] and
 //! [`cli::ConfigArgs`] the subcommands and arguments every binary shares,
+//! [`run::Run`] the run path around them (the parse, the runtime and the
+//! error chain),
 //! [`build_info`] the build facts and the boot banner,
 //! and `console` (feature `console`) the browser security headers of an
 //! operator console, with `same_origin` the check of its state-changing
@@ -57,6 +59,7 @@ pub mod panic;
 pub mod problem;
 pub mod refusal;
 pub mod request_id;
+pub mod run;
 #[cfg(feature = "console")]
 pub mod same_origin;
 pub mod section;

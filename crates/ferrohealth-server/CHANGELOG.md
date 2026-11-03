@@ -10,6 +10,22 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `run::Run`, the run path a binary's `main` hands its parser and its
+  dispatch: it parses the command line (help and the version exit 0, a
+  usage error exits with clap's code), starts the multi-threaded runtime
+  with every driver on (`Run::thread_stack_size` sets its threads' stack),
+  runs the product's job on it and returns its exit code. A job that fails
+  returns a `run::Failure`, which any `Error` converts into with `?` and an
+  `anyhow::Error` or a message through `Failure::boxed`; it is written to
+  standard error as `<name>: <context>: <cause chain>` and exits 1, or the
+  code `Failure::with_code` names, such as `run::EXIT_CONFIG` (78,
+  `EX_CONFIG`). `run::chain` renders an error and every cause behind it on
+  one line from each cause's `Display` alone. A product keeps its own
+  subcommands and their bodies and drops its own parse, runtime builder and
+  chain renderer; a job run under `Run` starts no runtime of its own (#208).
+
 ## [0.4.2] - 2026-10-30
 
 ### Added
