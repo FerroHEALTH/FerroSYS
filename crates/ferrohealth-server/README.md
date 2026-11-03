@@ -43,6 +43,10 @@ runs the same stack, the same health routes and the same shutdown.
 - `cli::Common` holds the `serve`, `config check` and `healthcheck`
   subcommands every binary flattens into its own, and `cli::ConfigArgs`
   the `--config` and `--set` arguments.
+- `run::Run` is the run path around them: the command line parsed with
+  clap's exit codes, the multi-threaded runtime started, the product's job
+  run on it, and a `run::Failure` written with its whole cause chain and
+  its exit code, 1 or `run::EXIT_CONFIG`.
 - `section::ServerSection` is the `[server]` section, with the listener's
   TLS (mutual TLS, reload on `SIGHUP`, TLS 1.3 unless `min_version`
   lowers it to 1.2), the trusted proxies, the caller
