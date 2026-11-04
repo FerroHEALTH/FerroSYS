@@ -82,6 +82,38 @@ pub(crate) fn client_value(headers: &HeaderMap) -> Option<HeaderValue> {
         .cloned()
 }
 
+/// The server's id of `request`, which [`assign`] put in its extensions, or
+/// the empty id outside that middleware.
+pub(crate) fn server_of(request: &Request) -> &str {
+    request
+        .extensions()
+        .get::<RequestId>()
+        .map_or("", RequestId::id)
+}
+
+/// The two ids of a request, held past the point where the request moves to
+/// the inner service, for a body the middleware writes from its answer.
+#[derive(Debug)]
+pub(crate) struct HeldIds {
+    server: String,
+    client: Option<String>,
+}
+
+impl HeldIds {
+    /// The ids `request` carries: the server's, and the client's legal one.
+    pub(crate) fn of(request: &Request) -> Self {
+        Self {
+            server: server_of(request).to_owned(),
+            client: of_client(request.headers()).map(str::to_owned),
+        }
+    }
+
+    /// The ids as an error body names them.
+    pub(crate) fn ids(&self) -> RequestIds<'_> {
+        RequestIds::new(&self.server, self.client.as_deref())
+    }
+}
+
 /// A fresh server id, minted without an intermediate string.
 pub(crate) fn mint_id(client_named: bool) -> RequestId {
     let mut buffer = uuid::Uuid::encode_buffer();

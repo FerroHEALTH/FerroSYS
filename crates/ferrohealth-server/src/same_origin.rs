@@ -26,7 +26,6 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use ferrohealth_telemetry::request_log::RequestId;
 use http::header::{CACHE_CONTROL, ORIGIN, REFERER};
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use url::Url;
@@ -200,14 +199,12 @@ pub async fn only(check: SameOrigin, request: Request, next: Next) -> Response {
         reason = refused.reason(),
         "a request that did not come from the console's own pages was refused"
     );
-    let request_id = request
-        .extensions()
-        .get::<RequestId>()
-        .map(|id| id.id().to_owned())
-        .unwrap_or_default();
     let mut response = (check.body)(
         request.uri(),
-        RequestIds::new(&request_id, request_id::of_client(request.headers())),
+        RequestIds::new(
+            request_id::server_of(&request),
+            request_id::of_client(request.headers()),
+        ),
         StatusCode::FORBIDDEN,
         refused.reason(),
     );
