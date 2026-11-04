@@ -18,10 +18,9 @@ use std::sync::Arc;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
-use ferrohealth_telemetry::request_log::RequestId;
 use http::{StatusCode, Uri};
 
-use crate::request_id::{self, RequestIds};
+use crate::request_id::{HeldIds, RequestIds};
 
 /// The body of a panicked request: the product writes it for the request's
 /// URI and its [`RequestIds`], such as a FHIR `OperationOutcome` under its
@@ -74,17 +73,12 @@ pub fn caught(payload: Box<dyn Any + Send + 'static>) -> Response {
 /// the product's body and logs one line naming the server's request id.
 pub async fn render(body: PanicBody, request: Request, next: Next) -> Response {
     let uri = request.uri().clone();
-    let request_id = request
-        .extensions()
-        .get::<RequestId>()
-        .map(|id| id.id().to_owned())
-        .unwrap_or_default();
-    let client = request_id::of_client(request.headers()).map(str::to_owned);
+    let ids = HeldIds::of(&request);
     let response = next.run(request).await;
     if response.extensions().get::<Panicked>().is_none() {
         return response;
     }
-    answer(&body, &uri, RequestIds::new(&request_id, client.as_deref()))
+    answer(&body, &uri, ids.ids())
 }
 
 /// Logs one line naming the server's request id and answers the panicked

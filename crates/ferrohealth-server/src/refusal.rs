@@ -19,10 +19,9 @@ use std::sync::{Arc, LazyLock};
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
-use ferrohealth_telemetry::request_log::RequestId;
 use http::{StatusCode, Uri, header};
 
-use crate::request_id::{self, RequestIds};
+use crate::request_id::{HeldIds, RequestIds};
 
 /// The body of a refusal: the product writes it for the request's URI, its
 /// [`RequestIds`], the status and a reason in plain words.
@@ -116,12 +115,7 @@ pub async fn answered(request: Request, next: Next) -> Response {
 /// with `body`.
 pub async fn render(body: RefusalBody, request: Request, next: Next) -> Response {
     let uri = request.uri().clone();
-    let request_id = request
-        .extensions()
-        .get::<RequestId>()
-        .map(|id| id.id().to_owned())
-        .unwrap_or_default();
-    let client = request_id::of_client(request.headers()).map(str::to_owned);
+    let ids = HeldIds::of(&request);
     let response = next.run(request).await;
     let status = response.status();
     let reason = match reason(&response) {
@@ -131,13 +125,7 @@ pub async fn render(body: RefusalBody, request: Request, next: Next) -> Response
         None if status == StatusCode::PAYLOAD_TOO_LARGE => TOO_LARGE,
         None => return response,
     };
-    rewrite(
-        &body,
-        &uri,
-        RequestIds::new(&request_id, client.as_deref()),
-        &response,
-        reason,
-    )
+    rewrite(&body, &uri, ids.ids(), &response, reason)
 }
 
 /// The reason of a refusal [`refused`] wrote, when `response` is one.

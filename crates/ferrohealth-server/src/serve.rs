@@ -311,23 +311,17 @@ impl Connections {
         no_delay(&stream);
         // NOTE: RFC 9112 §9.5 lets a server close a connection it holds inactive;
         // the bound counts from accept so the version sniff is held to it too.
-        let first_byte = Box::pin(tokio::time::sleep(self.bounds.header_read));
-        let bounds = self.bounds;
-        let activity = Arc::new(keep_alive::Activity::default());
-        let app = self.app.clone();
-        let builder = self.builder.clone();
-        let watcher = self.graceful.watcher();
+        let accepted = Accepted {
+            app: self.app.clone(),
+            peer,
+            builder: self.builder.clone(),
+            watcher: self.graceful.watcher(),
+            bounds: self.bounds,
+            first_byte: Box::pin(tokio::time::sleep(self.bounds.header_read)),
+        };
         let Some(tls) = &self.tls else {
-            self.tasks.spawn(async move {
-                let service = connection_service(app, peer, None, Arc::clone(&activity));
-                let stream = keep_alive::Bounded::new(stream, activity, bounds, first_byte);
-                let connection = builder
-                    .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
-                    .into_owned();
-                if let Err(error) = watcher.watch(connection).await {
-                    tracing::debug!(error = %error, "a connection ended with an error");
-                }
-            });
+            self.tasks
+                .spawn(accepted.serve(stream, None, "a connection ended with an error"));
             return;
         };
         let acceptor = tokio_rustls::TlsAcceptor::from(tls.current());
@@ -352,15 +346,46 @@ impl Connections {
                         .collect(),
                 )
             });
-            let service = connection_service(app, peer, peers, Arc::clone(&activity));
-            let stream = keep_alive::Bounded::new(stream, activity, bounds, first_byte);
-            let connection = builder
-                .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
-                .into_owned();
-            if let Err(error) = watcher.watch(connection).await {
-                tracing::debug!(error = %error, "a TLS connection ended with an error");
-            }
+            accepted
+                .serve(stream, peers, "a TLS connection ended with an error")
+                .await;
         });
+    }
+}
+
+/// One accepted connection, with what serving it needs once its transport is
+/// known: the plain socket, or the stream of a finished TLS handshake.
+struct Accepted {
+    app: Router,
+    peer: std::net::SocketAddr,
+    builder: hyper_util::server::conn::auto::Builder<Streams>,
+    watcher: hyper_util::server::graceful::Watcher,
+    bounds: keep_alive::Bounds,
+    first_byte: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl Accepted {
+    /// Serves the connection on `stream`, held to the bounds from accept,
+    /// until it ends or the drain closes it; `ended` is the debug line of a
+    /// connection that ends with an error.
+    async fn serve<S>(
+        self,
+        stream: S,
+        peers: Option<crate::tls::PeerCertificates>,
+        ended: &'static str,
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let activity = Arc::new(keep_alive::Activity::default());
+        let service = connection_service(self.app, self.peer, peers, Arc::clone(&activity));
+        let stream = keep_alive::Bounded::new(stream, activity, self.bounds, self.first_byte);
+        let connection = self
+            .builder
+            .serve_connection_with_upgrades(hyper_util::rt::TokioIo::new(stream), service)
+            .into_owned();
+        if let Err(error) = self.watcher.watch(connection).await {
+            tracing::debug!(error = %error, "{ended}");
+        }
     }
 }
 

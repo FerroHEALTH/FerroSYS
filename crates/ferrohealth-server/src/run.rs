@@ -113,19 +113,22 @@ impl Run {
         D: FnOnce(C) -> F,
         F: Future<Output = Result<ExitCode, Failure>>,
     {
-        self.run_to(args, dispatch, &mut io::stderr())
+        self.run_to(C::try_parse_from(args), dispatch, &mut io::stderr())
     }
 
-    /// [`Run::run`], with the failure line written to `stderr`.
-    fn run_to<C, I, T, D, F>(self, args: I, dispatch: D, stderr: &mut dyn Write) -> ExitCode
+    /// [`Run::run`] over the parse of its command line, with the failure
+    /// line written to `stderr`.
+    fn run_to<C, D, F>(
+        self,
+        parsed: Result<C, clap::Error>,
+        dispatch: D,
+        stderr: &mut dyn Write,
+    ) -> ExitCode
     where
-        C: Parser,
-        I: IntoIterator<Item = T>,
-        T: Into<OsString> + Clone,
         D: FnOnce(C) -> F,
         F: Future<Output = Result<ExitCode, Failure>>,
     {
-        let parsed = match C::try_parse_from(args) {
+        let parsed = match parsed {
             Ok(parsed) => parsed,
             Err(error) => return usage(&error),
         };
@@ -335,7 +338,7 @@ mod tests {
     fn run(args: &[&str]) -> (ExitCode, String) {
         let mut stderr = Vec::new();
         let code = Run::new("ferrosys").run_to(
-            args.iter().copied(),
+            Cli::try_parse_from(args.iter().copied()),
             |cli: Cli| async move {
                 match cli.command {
                     Command::Ok => Ok(ExitCode::from(3)),
