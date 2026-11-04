@@ -84,16 +84,27 @@ milestone set and its crates.io name reserved, which needs the owner.
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
   version rule, the advisory exceptions, and
-  `semver.sh`, cargo-semver-checks against crates.io).
+  `semver.sh`, cargo-semver-checks against crates.io), and the two ratchets
+  of `.claude/rules/rust-style.md` that fail a rise and pass a fall:
+  `duplication.sh`, jscpd at 50 tokens over 5 lines holding the duplicated
+  lines to `duplication.count` with its baseline of block keys, and
+  `file-size.sh`, the 800-line budget with its allow-list
+  `file-size-allow.txt`.
 - `scripts/release/`: the release plan, the preflight, the milestone check
   and close, and the crates.io publish and read-back (`docs/release.md`).
 - `.github/`: CI with the single required `conclusion` job (it also runs on
   `merge_group`), the PR guard re-run, CodeQL, Scorecard, Dependabot, the
   release lane (`release.yml` with the reusable `release-crate.yml`, and the
-  manual `publish-crates.yml`, both under the `crates-io` environment), the
-  PR template and the bug, feature and task forms.
+  manual `publish-crates.yml`, both under the `crates-io` environment),
+  `ratchet-tighten.yml`, which lowers the ratchet baselines on `main` once a
+  day through one branch a maintainer opens as a pull request, the PR
+  template and the bug, feature and task forms.
 - `.claude/rules/issue-workflow.md`: the tracker loop, the issue title rule and
   the label model.
+- `.claude/rules/rust-style.md`: code is written once and the 800-line file
+  budget, each with its ratchet.
+- `.claude/hooks/rust_edit.sh`: the per-edit hook `.claude/settings.json`
+  runs on every edited `.rs` file (the file-size ratchet).
 - `.claude/rules/crates-publishing.md`: the caret requirements between the
   crates and the semver check that keeps every patch compatible.
 - `.claude/memory/`: the working memory; `MEMORY.md` is the index.

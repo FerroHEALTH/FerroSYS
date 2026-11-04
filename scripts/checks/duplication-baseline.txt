@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+# The key of every block scripts/checks/duplication.sh counts, written
+# by --update: both places of the block, each as its path and the
+# sha256 of the text of its lines, the two sorted.
+crates/ferrohealth-server/src/panic.rs@7ce92fa0972cbaed611a56612017f31d17eb1c1897175678585516dd380f2672 crates/ferrohealth-server/src/refusal.rs@ef2b0f3b7221e6976ab9159cb9a9dd5737a626ef98b072befdd801f570a4023f
+crates/ferrohealth-server/src/run.rs@3ff54aaed08a6ce7356f4436229a3f5cf039b32b07059775379cff6a349ebd80 crates/ferrohealth-server/src/run.rs@46329fe31a4c01a20cdaa576d9a78bd42fd2782af5614978c7c957a0af0990b5
+crates/ferrohealth-server/src/serve.rs@0a106276fe4321f07e4d43facd2bf61d2a153b75bb7c0518c569250bba8f279f crates/ferrohealth-server/src/serve.rs@5e4604f5cfe7461b86c9d046ad07e5a3c9e18a13aa27368fc8f2bf637a8f75d9
+crates/ferrohealth-server/src/serve.rs@5c272302838e5ec0a07e56cd285784a8ce559be2bd635444a88af1afbdd15004 crates/ferrohealth-server/src/serve/keep_alive.rs@669fe5aa5c52fbdc3548550145b2011cf57453b840598dec2d97d2d5be5cbfc1
+crates/ferrohealth-server/src/serve.rs@8bfedcaf851bedfb5c1c819683e971fca46bff8527989293116928d265de728a crates/ferrohealth-server/src/serve.rs@dbad74577e14e1bc6297904332406a9d11782eff4de144301c657b08d1a296cb
