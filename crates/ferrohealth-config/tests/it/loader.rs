@@ -118,7 +118,10 @@ fn product_defaults() -> Loader {
         .expect("the defaults serialize")
 }
 
-#[expect(clippy::panic, reason = "a test helper fails its test on a refusal of another kind")]
+#[expect(
+    clippy::panic,
+    reason = "a test helper fails its test on a refusal of another kind"
+)]
 fn refusals(error: &ConfigError) -> Vec<(Option<String>, Option<String>, Option<String>)> {
     let one = |error: &ConfigError| match error {
         ConfigError::Invalid {
