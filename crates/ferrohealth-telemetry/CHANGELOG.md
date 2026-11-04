@@ -10,6 +10,13 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-05
+
+### Changed
+
+- The request log and the telemetry split by concern into private
+  modules, with the public API and the behaviour unchanged (#218).
+
 ## [0.2.4] - 2026-10-29
 
 ### Added
@@ -151,7 +158,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.4...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.5...HEAD
+[0.2.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.4...ferrohealth-telemetry-v0.2.5
 [0.2.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.3...ferrohealth-telemetry-v0.2.4
 [0.2.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.2...ferrohealth-telemetry-v0.2.3
 [0.2.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.1...ferrohealth-telemetry-v0.2.2
