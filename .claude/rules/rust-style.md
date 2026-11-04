@@ -42,8 +42,9 @@ VernumBOEK hold under the same names.
 - **The threshold is 50 tokens over at least 5 lines**, jscpd's own
   defaults. The scan leaves out the `use` declarations, a file that opens
   with `// @generated`, a root `.gitattributes` marks generated, a file from
-  its first column-one `#[cfg(test)]` line on (the inline test module), and
-  `tests/` and `benches/`. Measured on 2026-11-04 at `bf8f674` with those
+  its first column-one `#[cfg(test)]` line on (the inline test module), a
+  test module in its own file (`<module>/tests.rs` and the files under
+  `<module>/tests/`), and `tests/` and `benches/`. Measured on 2026-11-04 at `bf8f674` with those
   exclusions, over 52 files and 22,649 lines:
 
   | Threshold | Blocks | Duplicated lines | Blocks across two files |
@@ -68,8 +69,12 @@ file holds each concern below it. A split never moves a public item to a new
 path, because that breaks the crate's API, and adds no `pub use` to keep an
 old path. A test of private internals stays an inline `#[cfg(test)] mod
 tests` in the child whose internals it reads, and a test of the public API
-moves to the crate's `tests/`. A split moves code without changing
-behaviour: the same tests pass before and after, and a defect found on the
+moves to the crate's `tests/`. A test module that reads the crate's
+internals and is too long to stay inline (one that builds through a
+`#[cfg(test)]` seam, say) becomes its own file, `<module>/tests.rs` behind
+`#[cfg(test)] mod tests;`, with one child per subject under
+`<module>/tests/`. A split moves code without changing behaviour: the
+same tests pass before and after, and a defect found on the
 way is filed, never fixed in the split.
 
 `scripts/checks/file-size.sh` enforces it in the `file-size` CI job and per
