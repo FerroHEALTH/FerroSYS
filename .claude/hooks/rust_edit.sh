@@ -5,10 +5,13 @@
 #
 # For an edited .rs file of this checkout, run the per-edit ratchets of
 # .claude/rules/rust-style.md: the file-size guard, so a listed file never
-# grows and no other file passes the budget. A finding exits 2, which feeds
-# it back as a correction. The duplication ratchet runs in CI only: a move
-# copies code before it deletes the original, so a per-edit run would fire in
-# the middle of every restructure.
+# grows and no other file passes the budget, and, for a file under
+# crates/*/src or tools/*/src, the forwarder guard, so the file carries no
+# forwarder the baseline lacks (it builds tools/forwarders in the
+# checkout's target/ on first use, a few seconds). A finding exits 2,
+# which feeds it back as a correction. The duplication ratchet runs in CI
+# only: a move copies code before it deletes the original, so a per-edit run
+# would fire in the middle of every restructure.
 #
 # No specification governs this: our own design.
 set -uo pipefail
@@ -36,4 +39,13 @@ findings="$(cd "$repo_root" && bash scripts/checks/file-size.sh --files "$relati
   printf '%s\n' "$findings" >&2
   exit 2
 }
+
+case "$relative" in
+crates/*/src/*.rs | tools/*/src/*.rs)
+  findings="$(cd "$repo_root" && bash scripts/checks/forwarders.sh --files "$relative" 2>&1)" || {
+    printf '%s\n' "$findings" >&2
+    exit 2
+  }
+  ;;
+esac
 exit 0

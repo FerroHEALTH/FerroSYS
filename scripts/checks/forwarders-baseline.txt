@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+# The key of every forwarder scripts/checks/forwarders.sh counts, written
+# by --update: the path, the owner and the call it makes. A tab and a
+# reason after a key record why that forwarder stays.
+crates/ferrohealth-server/src/problem.rs: ProblemType::problem -> Problem::of(self)
+crates/ferrohealth-server/src/refusal.rs: default_body -> Arc::clone(&DEFAULT_BODY)
+crates/ferrohealth-server/src/refusal.rs: is_default -> Arc::ptr_eq(body, &DEFAULT_BODY)
+crates/ferrohealth-server/src/same_origin.rs: SameOrigin::new -> Self::default()
+crates/ferrohealth-server/src/tls.rs: HealthcheckTls::read -> Self::read_of(section, TlsKeys::SERVER)
+crates/ferrohealth-server/src/tls.rs: server_config -> server_config_of(section, TlsKeys::SERVER)
