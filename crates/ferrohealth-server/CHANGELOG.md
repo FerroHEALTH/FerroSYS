@@ -10,6 +10,14 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-05
+
+### Changed
+
+- The serve path, the stack and the TLS setup split by concern into
+  private modules, each duplicated block to one owner, with the public
+  API and the behaviour unchanged (#213, #214, #215, #220).
+
 ## [0.4.3] - 2026-11-03
 
 ### Added
@@ -421,7 +429,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.3...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.4...HEAD
+[0.4.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.3...ferrohealth-server-v0.4.4
 [0.4.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.2...ferrohealth-server-v0.4.3
 [0.4.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.1...ferrohealth-server-v0.4.2
 [0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.4.0...ferrohealth-server-v0.4.1
