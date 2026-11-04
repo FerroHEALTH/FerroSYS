@@ -20,7 +20,7 @@ mod refusal;
 mod table;
 
 use refusal::{collected, follows_a_drop, invalid};
-use table::{fill, insert, lookup, overlay, remove, segments, take};
+use table::{dropped_path, fill, insert, lookup, overlay, remove, take};
 
 /// The loader of one product's configuration.
 ///
@@ -626,7 +626,7 @@ impl Loader {
             if follows_a_drop(&error, key.as_deref(), &dropped) {
                 match key {
                     Some(table) => {
-                        dropped.push(segments(&table, true));
+                        dropped.push(dropped_path(&table));
                         continue;
                     }
                     None => return Err(collected(errors)),
@@ -635,7 +635,7 @@ impl Loader {
             errors.push(refusal);
             match key {
                 Some(key) if errors.len() < MAX_REFUSALS => {
-                    dropped.push(segments(&key, true));
+                    dropped.push(dropped_path(&key));
                 }
                 _ => return Err(collected(errors)),
             }

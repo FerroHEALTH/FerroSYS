@@ -50,11 +50,17 @@ pub(super) fn find_key(table: &toml::de::DeTable<'_>, at: usize) -> Option<Vec<S
 }
 
 /// The segments of the dotted key `key`, an indexed segment such as
-/// `manager[1]` kept whole; with `whole_array`, a last indexed segment
-/// names its array, so dropping it drops every element and no index moves.
-pub(super) fn segments(key: &str, whole_array: bool) -> Vec<String> {
-    let mut path: Vec<String> = key.split('.').map(str::to_owned).collect();
-    if whole_array && let Some(last) = path.last_mut() {
+/// `manager[1]` kept whole.
+pub(super) fn segments(key: &str) -> Vec<String> {
+    key.split('.').map(str::to_owned).collect()
+}
+
+/// The path dropping the refused key `key` removes: its [`segments`], with a
+/// last indexed segment naming its array, so dropping it drops every element
+/// and no index moves.
+pub(super) fn dropped_path(key: &str) -> Vec<String> {
+    let mut path = segments(key);
+    if let Some(last) = path.last_mut() {
         let (name, _) = indexed(last);
         *last = name.to_owned();
     }

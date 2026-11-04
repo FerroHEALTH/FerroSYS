@@ -55,7 +55,7 @@ pub(super) fn follows_a_drop(
     else {
         return false;
     };
-    let mut path: Vec<String> = key.map(|key| segments(key, false)).unwrap_or_default();
+    let mut path: Vec<String> = key.map(segments).unwrap_or_default();
     path.push(field.to_owned());
     dropped.contains(&path)
 }
