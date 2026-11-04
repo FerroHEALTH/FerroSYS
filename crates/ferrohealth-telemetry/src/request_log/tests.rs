@@ -5,6 +5,8 @@
 //! the counter and the app every one of them shares.
 
 mod line;
+#[cfg(feature = "prometheus")]
+mod metrics;
 mod spans;
 
 use std::sync::{Arc, Mutex};
