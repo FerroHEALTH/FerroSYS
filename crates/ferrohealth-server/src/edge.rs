@@ -342,7 +342,7 @@ where
 fn answered(answer: &Answer, response: Response) -> Response {
     let reason = refusal::reason(&response).or_else(|| {
         let streamed_over = response.status() == StatusCode::PAYLOAD_TOO_LARGE
-            && !refusal::is_default(&answer.settings.refusal_body)
+            && !Arc::ptr_eq(&answer.settings.refusal_body, &refusal::DEFAULT_BODY)
             && answer
                 .over_limit
                 .as_ref()
