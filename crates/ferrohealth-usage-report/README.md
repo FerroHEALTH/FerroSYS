@@ -36,7 +36,7 @@ own `status`.
 
 ```toml
 [dependencies]
-ferrohealth-usage-report = "=0.2.0"
+ferrohealth-usage-report = "=0.2.1"
 ```
 
 Pin the version exactly, as every FerroHEALTH product does.
