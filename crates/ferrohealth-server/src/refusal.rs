@@ -38,8 +38,9 @@ where
     Arc::new(move |uri, ids, status, reason| body(uri, ids.server, status, reason))
 }
 
-/// The one default body, so the stack can tell it from a product's.
-static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
+/// The one default body, so the stack can tell it from a product's by
+/// pointer.
+pub(crate) static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
     Arc::new(|_uri, _ids, status, reason| (status, reason.to_owned()).into_response())
 });
 
@@ -51,11 +52,6 @@ static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
 #[must_use]
 pub fn default_body() -> RefusalBody {
     Arc::clone(&DEFAULT_BODY)
-}
-
-/// Whether `body` is the [`default_body`].
-pub(crate) fn is_default(body: &RefusalBody) -> bool {
-    Arc::ptr_eq(body, &DEFAULT_BODY)
 }
 
 /// Marks a response a [`RefusalBody`] rendered as answering with its own
