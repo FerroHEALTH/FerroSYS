@@ -51,6 +51,8 @@ exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-health" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-server" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-usage-report" },
+  # The forwarder ratchet's detector under tools/, never published.
+  { allow = ["BUSL-1.1"], crate = "forwarders" },
 ]
 
 [bans]

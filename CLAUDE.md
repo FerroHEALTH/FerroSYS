@@ -76,6 +76,8 @@ milestone set and its crates.io name reserved, which needs the owner.
   dependency table; each crate keeps its own `version`.
 - `crates/<crate>/`: one directory per crate, each with its own
   `CHANGELOG.md` and released by the tag `<crate>-vX.Y.Z`.
+- `tools/forwarders`: the `syn` detector of the forwarder ratchet, a
+  workspace member that publishes nothing and depends on no workspace crate.
 - `docs/architecture.md`: the design of record, the plan for the six crates.
 - `assets/brand/`: the gauge mark, the steel lockup and the "Olive & Iron" tokens.
 - `scripts/gh/`: the tracker helpers (`fields.sh` for the issue type and the
@@ -84,12 +86,13 @@ milestone set and its crates.io name reserved, which needs the owner.
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
   version rule, the advisory exceptions, and
-  `semver.sh`, cargo-semver-checks against crates.io), and the two ratchets
+  `semver.sh`, cargo-semver-checks against crates.io), and the three ratchets
   of `.claude/rules/rust-style.md` that fail a rise and pass a fall:
   `duplication.sh`, jscpd at 50 tokens over 5 lines holding the duplicated
   lines to `duplication.count` with its baseline of block keys, and
   `file-size.sh`, the 800-line budget with its allow-list
-  `file-size-allow.txt`.
+  `file-size-allow.txt`, and `forwarders.sh`, which holds the functions that
+  only forward to another to `forwarders.count` with its baseline of keys.
 - `scripts/release/`: the release plan, the preflight, the milestone check
   and close, and the crates.io publish and read-back (`docs/release.md`).
 - `.github/`: CI with the single required `conclusion` job (it also runs on
@@ -101,10 +104,10 @@ milestone set and its crates.io name reserved, which needs the owner.
   template and the bug, feature and task forms.
 - `.claude/rules/issue-workflow.md`: the tracker loop, the issue title rule and
   the label model.
-- `.claude/rules/rust-style.md`: code is written once and the 800-line file
-  budget, each with its ratchet.
+- `.claude/rules/rust-style.md`: code is written once, the 800-line file
+  budget and no function only forwards to another, each with its ratchet.
 - `.claude/hooks/rust_edit.sh`: the per-edit hook `.claude/settings.json`
-  runs on every edited `.rs` file (the file-size ratchet).
+  runs on every edited `.rs` file (the file-size and forwarder ratchets).
 - `.claude/rules/crates-publishing.md`: the caret requirements between the
   crates and the semver check that keeps every patch compatible.
 - `.claude/memory/`: the working memory; `MEMORY.md` is the index.

@@ -80,3 +80,46 @@ The list only tightens: a listed file that shrank, was split within the
 budget or is gone passes with a one-line note, your pull request leaves the
 list alone, and the `Ratchet tighten` workflow lowers or removes the entry
 on `main` (`file-size.sh --update`, which never raises or adds an entry).
+
+## No function only forwards to another
+
+- **A function exists because it decides something.** It validates,
+  branches, converts, owns a resource, or names a concept its callers
+  need. A function whose body is a single call, with its arguments passed
+  through or borrowed and at most `.await`, `?`, `Ok(..)`, `Some(..)`,
+  `.into()` or an error-only `.map_err` around it, is a forwarder. It adds a
+  name and a hop and decides nothing, so its callers call the target
+  directly, and a crate-private API breaks to get there. A forwarder that
+  fixes an argument (`self.read_of(section, TlsKeys::SERVER)`) is still one:
+  its callers pass the argument.
+- **Three kinds are not forwarders.**
+  - The methods of a trait implementation (`Display`, `From`, `Deref` and
+    the rest), which the trait requires. A binary's `main`, which the
+    language requires, and a function a specification defines, whose doc
+    comment cites its page (OpenTelemetry, W3C Trace Context or an RFC),
+    stand with them.
+  - A public function of a published `ferrohealth-*` crate, while removing
+    it would break the crate's API: it stays, recorded in the baseline with
+    that reason, until a decision takes the minor bump
+    (`crates-publishing.md`).
+  - A constructor (`new`, `with_*`, or an associated function that returns
+    `Self`) that fixes an argument.
+- **The ratchet measures it.** `tools/forwarders` parses every `.rs` file
+  under `crates/*/src/` and `tools/*/src/` with `syn`, leaving out a file
+  that opens with `// @generated`, anything under `#[cfg(test)]`, and
+  `tests/`. It reports a free function or inherent method whose body is one
+  call, to a function or to a method of `self`, whose arguments are
+  parameters, literals and constants, or references, borrows and clones of
+  those. A call that reads a field of `self`, or calls a method of a field
+  or a parameter, reaches what the caller cannot, so an accessor is never
+  reported; nor are the `#[cfg]` arms of one function.
+  `scripts/checks/forwarders.sh` runs it in the `forwarders` CI job and per
+  edit through `.claude/hooks/rust_edit.sh`, and holds the total to
+  `scripts/checks/forwarders.count`. `scripts/checks/forwarders-baseline.txt`
+  keys each counted forwarder by its path, owner and target call, with no
+  line number, and a key may carry a tab and the reason the forwarder
+  stays. A rise fails and names each new forwarder, its target and its
+  place. A fall passes with a note, and the `Ratchet tighten` workflow
+  lowers the count on `main`, as it does for the duplication ratchet.
+  `--update` never raises the count and keeps each reason while its key
+  stands.

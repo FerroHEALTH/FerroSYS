@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "tools/*"]
 
 # Each crate keeps its own `version` in its manifest, released by the tag
 # `<crate>-v<version>`; the rest of the package metadata is shared.
@@ -78,6 +78,12 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 jsonschema = { version = "0.60.1", default-features = false }
 wiremock = "0.6.5"
+# tools/forwarders: the parser of the forwarder ratchet, on the lines the
+# workspace already locks. Verified against crates.io on 2026-11-04.
+anyhow = "1.0.104"
+syn = { version = "3.0.6", default-features = false, features = ["full", "parsing", "printing"] }
+proc-macro2 = { version = "1.0.107", default-features = false, features = ["span-locations"] }
+quote = { version = "1.0.47", default-features = false }
 # The floor benchmark of ferrohealth-server, on the line FerroTERM resolves.
 # Verified against crates.io on 2026-10-27.
 criterion = { version = "0.8.2", default-features = false }

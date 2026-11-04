@@ -189,6 +189,28 @@ jobs:
       - name: The duplicated lines have not risen
         run: bash scripts/checks/duplication.sh
 
+  # The forwarder ratchet: the functions whose whole body forwards to one
+  # other call may fall and never rise (`.claude/rules/rust-style.md` §No
+  # function only forwards to another). tools/forwarders builds
+  # proc-macro2, quote and syn alone, so no build cache.
+  forwarders:
+    name: forwarders
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+      - name: Forwarder ratchet self-test
+        run: bash scripts/checks/forwarders.sh --self-test
+      - name: The forwarders have not risen
+        run: bash scripts/checks/forwarders.sh
+
   # Every TODO(#N) names an open issue.
   todo-issues:
     name: todo-issues
@@ -449,6 +471,7 @@ jobs:
       - licence-headers
       - file-size
       - duplication
+      - forwarders
       - todo-issues
       - detect
       - fmt
