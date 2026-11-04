@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+# Known breaches of the 800-line file budget: "<lines> <path> #<issue>".
+# A listed file passes while it does not grow past its recorded count;
+# the split removes the entry. scripts/checks/file-size.sh --update lowers it.
+2041 crates/ferrohealth-config/src/loader.rs #217
+1758 crates/ferrohealth-server/src/serve.rs #220
+1652 crates/ferrohealth-server/src/stack.rs #220
+917 crates/ferrohealth-server/src/tls.rs #220
+1499 crates/ferrohealth-telemetry/src/request_log.rs #218
+1184 crates/ferrohealth-telemetry/src/telemetry.rs #218
+1079 crates/ferrohealth-usage-report/src/reporter.rs #219

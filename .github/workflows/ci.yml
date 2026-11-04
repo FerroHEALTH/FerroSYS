@@ -152,6 +152,43 @@ jobs:
           persist-credentials: false
       - run: bash scripts/checks/licence-headers.sh
 
+  # The file-size ratchet: a hand-written Rust file is at most 800 lines, and a
+  # listed breach may shrink and never grow (`.claude/rules/rust-style.md`
+  # §File size).
+  file-size:
+    name: file-size
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: File-size ratchet self-test
+        run: bash scripts/checks/file-size.sh --self-test
+      - name: No file over the budget outside the list, and no listed file grew
+        run: bash scripts/checks/file-size.sh
+
+  # The duplication ratchet: the duplicated lines of the hand-written Rust may
+  # fall and never rise (`.claude/rules/rust-style.md` §Code is written once).
+  # jscpd runs from its image pinned in docs/VERSIONS.md; a fall passes with a
+  # note and the ratchet-tighten lane records it.
+  duplication:
+    name: duplication
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Duplication ratchet self-test
+        run: bash scripts/checks/duplication.sh --self-test
+      - name: The duplicated lines have not risen
+        run: bash scripts/checks/duplication.sh
+
   # Every TODO(#N) names an open issue.
   todo-issues:
     name: todo-issues
@@ -410,6 +447,8 @@ jobs:
       - changelog
       - comment-style
       - licence-headers
+      - file-size
+      - duplication
       - todo-issues
       - detect
       - fmt
