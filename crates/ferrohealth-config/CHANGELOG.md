@@ -10,6 +10,13 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-11-05
+
+### Changed
+
+- The configuration loader splits by concern into private modules,
+  with the public API and the behaviour unchanged (#216, #217).
+
 ## [0.2.8] - 2026-10-29
 
 ### Fixed
@@ -149,7 +156,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.8...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.9...HEAD
+[0.2.9]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.8...ferrohealth-config-v0.2.9
 [0.2.8]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.7...ferrohealth-config-v0.2.8
 [0.2.7]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.6...ferrohealth-config-v0.2.7
 [0.2.6]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.2.5...ferrohealth-config-v0.2.6
