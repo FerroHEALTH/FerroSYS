@@ -24,8 +24,6 @@ use http::header::{FORWARDED, HeaderName};
 use ipnet::IpNet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::section::ServerSection;
-
 /// The `X-Forwarded-For` header, which no RFC registers.
 pub const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 
@@ -119,12 +117,6 @@ impl Forwarding {
     #[must_use]
     pub const fn new(proxies: Vec<TrustedProxy>, header: ForwardedHeader) -> Self {
         Self { proxies, header }
-    }
-
-    /// The forwarding `section` configures.
-    #[must_use]
-    pub fn from_section(section: &ServerSection) -> Self {
-        Self::new(section.trusted_proxies.clone(), section.forwarded_header)
     }
 
     /// Whether `address` is a trusted proxy.

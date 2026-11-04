@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::client_address::Forwarding;
+
 /// The `[server]` section.
 ///
 /// Its `Default` is the crate's. A product states its own defaults for the
@@ -264,6 +266,16 @@ impl Default for ServerSection {
             compression: true,
             compression_min_bytes: 1024,
         }
+    }
+}
+
+// NOTE: no specification governs this: our own design; the section reads its own
+// keys, so it builds the forwarding they configure and client_address reads no section.
+impl Forwarding {
+    /// The forwarding `section` configures.
+    #[must_use]
+    pub fn from_section(section: &ServerSection) -> Self {
+        Self::new(section.trusted_proxies.clone(), section.forwarded_header)
     }
 }
 
