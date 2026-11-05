@@ -27,7 +27,8 @@ package_version() {
 
 # The version of the package $1 in a Cargo.lock read on stdin.
 locked_version() {
-  awk -v name="$1" '$0 == "name = \"" name "\"" {p=1; next}
+  local member="$1"
+  awk -v name="$member" '$0 == "name = \"" name "\"" {p=1; next}
        !done && p && /^version = /{gsub(/version = "|"/, ""); print; done=1}'
 }
 

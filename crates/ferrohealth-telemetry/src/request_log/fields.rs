@@ -276,7 +276,7 @@ impl Callsite for LineCallsite {
 type Key = (u8, Vec<&'static str>);
 
 /// The line callsites built so far.
-static CALLSITES: LazyLock<Mutex<BTreeMap<Key, &'static LineCallsite>>> =
+static CALLSITES: LazyLock<Mutex<BTreeMap<Key, &LineCallsite>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 /// Returns the callsite of the line at `level` with `fields`' names,

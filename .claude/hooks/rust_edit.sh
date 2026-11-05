@@ -27,11 +27,11 @@ case "${file_path:-}" in
 *.rs) ;;
 *) exit 0 ;;
 esac
-[ -f "$file_path" ] || exit 0
+[[ -f "$file_path" ]] || exit 0
 
 # The checkout the file belongs to measures it, a worktree included.
 repo_root="$(git -C "$(dirname "$file_path")" rev-parse --show-toplevel 2>/dev/null)" || exit 0
-[ -x "$repo_root/scripts/checks/file-size.sh" ] || exit 0
+[[ -x "$repo_root/scripts/checks/file-size.sh" ]] || exit 0
 real_file="$(cd "$(dirname "$file_path")" && pwd -P)/$(basename "$file_path")"
 relative="${real_file#"$(cd "$repo_root" && pwd -P)"/}"
 
@@ -47,5 +47,6 @@ crates/*/src/*.rs | tools/*/src/*.rs)
     exit 2
   }
   ;;
+*) ;;
 esac
 exit 0

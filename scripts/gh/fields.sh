@@ -250,7 +250,8 @@ titled() {
 # An issue number is digits only; gh's -F reads a value starting with @ as a
 # file, so anything else must never reach it.
 need_number() {
-  [[ "$1" =~ ^[0-9]+$ ]] || die "not an issue number: $1"
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "not an issue number: $value"
 }
 
 issue_id() {

@@ -49,8 +49,9 @@ readonly CRATES=(
 # The crate a release tag names: the text before its last `-v`, when that is
 # a published crate and the rest a version.
 crate_of_tag() {
-  local crate="${1%-v*}" version="${1##*-v}" known
-  [[ "$1" == *-v* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || return 1
+  local tag="$1"
+  local crate="${tag%-v*}" version="${tag##*-v}" known
+  [[ "$tag" == *-v* && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || return 1
   for known in "${CRATES[@]}"; do
     if [[ "$known" == "$crate" ]]; then
       echo "$crate"
@@ -67,18 +68,20 @@ tag_prefix() {
 
 # Refuses a name that is not a published member.
 known_crate() {
+  local wanted="$1"
   local crate
   for crate in "${CRATES[@]}"; do
-    [[ "$crate" != "$1" ]] || return 0
+    [[ "$crate" != "$wanted" ]] || return 0
   done
-  echo "::error::publish-crates: '$1' is not a published member (${CRATES[*]})" >&2
+  echo "::error::publish-crates: '$wanted' is not a published member (${CRATES[*]})" >&2
   return 1
 }
 
 # The version cargo resolves for one member.
 manifest_version() {
+  local member="$1"
   cargo metadata --format-version 1 --no-deps --locked |
-    jq -r --arg name "$1" '.packages[] | select(.name == $name) | .version'
+    jq -r --arg name "$member" '.packages[] | select(.name == $name) | .version'
 }
 
 # cargo colours the status word, so "Uploaded" is followed by a reset sequence

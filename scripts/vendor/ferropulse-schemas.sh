@@ -41,12 +41,12 @@ dest="docs/specs/ferropulse"
 schema="schemas/report-envelope.v2.json"
 
 row="$(grep -F "| $item |" docs/VERSIONS.md || true)"
-[ -n "$row" ] || die "docs/VERSIONS.md has no '$item' row"
+[[ -n "$row" ]] || die "docs/VERSIONS.md has no '$item' row"
 tick='`'
 repo="$(grep -oE "${tick}[A-Za-z0-9-]+/[A-Za-z0-9._-]+${tick}" <<< "$row" | head -n1 | tr -d "$tick")"
 sha="$(grep -oE '\b[0-9a-f]{40}\b' <<< "$row" | head -n1 || true)"
 want="$(grep -oE '\b[0-9a-f]{64}\b' <<< "$row" | head -n1 || true)"
-[ -n "$repo" ] && [ -n "$sha" ] && [ -n "$want" ] ||
+[[ -n "$repo" ]] && [[ -n "$sha" ]] && [[ -n "$want" ]] ||
   die "the '$item' row names no repository, commit or schema sha256"
 
 fetch() {
@@ -57,14 +57,15 @@ fetch() {
 
 # The files of one directory at the pin, by name.
 list() {
-  gh api "repos/$repo/contents/$1?ref=$sha" --jq '.[] | select(.type == "file") | .name'
+  local directory="$1"
+  gh api "repos/$repo/contents/$directory?ref=$sha" --jq '.[] | select(.type == "file") | .name'
 }
 
 echo "ferropulse-schemas: $repo at $sha"
 rm -rf -- "${dest:?}/schemas"
 fetch "$schema"
 got="$(shasum -a 256 "$dest/$schema" | awk '{ print $1 }')"
-[ "$got" = "$want" ] || die "$schema at $sha has sha256 $got, and docs/VERSIONS.md pins $want"
+[[ "$got" = "$want" ]] || die "$schema at $sha has sha256 $got, and docs/VERSIONS.md pins $want"
 for validity in valid invalid; do
   dir="schemas/examples/report-envelope.v2/$validity"
   while IFS= read -r name; do

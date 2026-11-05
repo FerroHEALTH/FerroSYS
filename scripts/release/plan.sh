@@ -65,11 +65,13 @@ crate_of() {
 }
 
 tag_prefix() {
-  echo "$(crate_of "$1")-"
+  local tag="$1"
+  echo "$(crate_of "$tag")-"
 }
 
 changelog_of() {
-  echo "crates/$(crate_of "$1")/CHANGELOG.md"
+  local tag="$1"
+  echo "crates/$(crate_of "$tag")/CHANGELOG.md"
 }
 
 # The version a tag names: the text after its `v`.
@@ -241,7 +243,8 @@ check_changelog_security() {
 # install line that pins CRATE exactly (`<crate> = "=X.Y.Z"` or
 # `<crate> = { version = "=X.Y.Z", ... }`), one per line.
 readme_pins() {
-  awk -v crate="$1" '
+  local crate_name="$1"
+  awk -v crate="$crate_name" '
     index($0, crate " = ") == 1 && match($0, /"=[^"]*"/) { print substr($0, RSTART + 2, RLENGTH - 3) }
   '
 }
@@ -408,14 +411,16 @@ main() {
     prev_tag "$tag"
     ;;
   crate)
+    local tag="${2:-}"
     [[ "$#" -eq 2 ]] || usage
-    valid_tag "$2"
-    crate_of "$2"
+    valid_tag "$tag"
+    crate_of "$tag"
     ;;
   changelog)
+    local tag="${2:-}"
     [[ "$#" -eq 2 ]] || usage
-    valid_tag "$2"
-    changelog_of "$2"
+    valid_tag "$tag"
+    changelog_of "$tag"
     ;;
   notes)
     local tag="${2:-}" out="${3:-}"
