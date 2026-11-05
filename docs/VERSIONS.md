@@ -11,6 +11,8 @@ beside the copy. Move a pin here, re-run the script, and commit both.
 |---|---|---|---|
 | FerroPULSE report envelope v2 | `FerroHEALTH/FerroPULSE` commit `2060978b7ab139c3cd163c8ddb0c280bcffda31a`, schema sha256 `e609f17a5bfa78c6c08bdd3a28025889e20e0fde5c72fa881e7ed47b6abc8bc7` | `docs/specs/ferropulse/` | `scripts/vendor/ferropulse-schemas.sh` |
 | OpenTelemetry semantic conventions | `open-telemetry/semantic-conventions` release `v1.44.0`, commit `e10a930844c6951757a43b849d364f7d056ac32b` | `docs/specs/otel-semconv/` | `scripts/vendor/otel-semconv.sh` |
+| IETF RFC 5280 | `https://www.rfc-editor.org/rfc/rfc5280.txt` sha256 `a2f2628c0a83b873fc4786abd921f9b2c02395954b655d190bf16b831633345d`, the X.509 certificate and CRL profile | `docs/specs/ietf-pkix/` | `scripts/vendor/ietf-pkix.sh` |
+| IETF RFC 6960 | `https://www.rfc-editor.org/rfc/rfc6960.txt` sha256 `7e63ffa1ea2ce2737d9aaf895a63776e9105ddbdfc97b8ae4029e3e825b4cdea`, the Online Certificate Status Protocol | `docs/specs/ietf-pkix/` | `scripts/vendor/ietf-pkix.sh` |
 
 ## Tools
 

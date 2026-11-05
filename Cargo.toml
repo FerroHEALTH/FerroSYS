@@ -78,6 +78,16 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 jsonschema = { version = "0.60.1", default-features = false }
 wiremock = "0.6.5"
+# ferrohealth-server feature `revocation`: the X.509 certificate and CRL
+# model with its DER codec, the RFC 6960 OCSP request and response types on
+# the 0.2 line that shares that x509-cert, and the signature and digest
+# primitives of the provider rustls builds on. Verified against crates.io on
+# 2026-11-05: x509-ocsp 0.2.1 is its newest release, on der 0.7 and x509-cert
+# 0.2, the lines FerroFED resolves.
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
+der = { version = "0.7.10", default-features = false, features = ["std", "oid"] }
+x509-cert = { version = "0.2.5", default-features = false, features = ["std"] }
+x509-ocsp = { version = "0.2.1", default-features = false }
 # tools/forwarders: the parser of the forwarder ratchet, on the lines the
 # workspace already locks. Verified against crates.io on 2026-11-04.
 anyhow = "1.0.104"
