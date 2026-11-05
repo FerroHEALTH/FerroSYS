@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+
+# SonarQube Cloud analysis beside CodeQL. Advisory: it gates no merge, and a
+# finding is fixed by hand in a normal change or recorded on the tracker with
+# its reason. The scan scope lives in sonar-project.properties.
+# SONAR_HOST_URL is not needed for SonarQube Cloud (SonarSource/
+# sonarqube-scan-action README, v8.2.1).
+name: SonarQube Cloud
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# A newer push to a pull request cancels its running analysis. On main a
+# running analysis finishes, so main is analyzed at its latest commit.
+concurrency:
+  group: sonar-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  scan:
+    name: analyze
+    # A fork or Dependabot pull request cannot read SONAR_TOKEN; the push to
+    # main after the merge analyzes the merged result.
+    if: github.event_name == 'push' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read # PR decoration reads the pull-request metadata
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: Sonar assigns issues and new-code status by blame.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The lcov file sonar.rust.lcov.reportPaths names, from the workspace
+      # tests ci.yml's nextest job runs, with every feature on.
+      - uses: ./.github/actions/setup-rust
+        with:
+          # llvm-tools-preview carries the profdata reader cargo-llvm-cov needs.
+          components: llvm-tools-preview
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Instrumented tests to lcov
+        run: |
+          set -euo pipefail
+          cargo llvm-cov nextest --workspace --all-features --locked --no-tests=pass --lcov --output-path lcov.info
+          lines="$(grep -c '^DA:' lcov.info || true)"
+          echo "lcov.info carries ${lines} line records"
+          if [[ "${lines}" == "0" ]]; then
+            echo "the coverage report is empty" >&2
+            exit 1
+          fi
+
+      # No sonar.projectVersion: each crate carries its own version, so the
+      # new-code window is the project's own setting.
+      - uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
