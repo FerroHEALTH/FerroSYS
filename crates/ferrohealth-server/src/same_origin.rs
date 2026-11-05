@@ -30,7 +30,7 @@ use http::header::{CACHE_CONTROL, ORIGIN, REFERER};
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use url::Url;
 
-use crate::refusal::{RefusalBody, default_body};
+use crate::refusal::{DEFAULT_BODY, RefusalBody};
 use crate::request_id::{self, RequestIds};
 
 /// The fetch metadata header that names where a request comes from.
@@ -99,19 +99,12 @@ impl Default for SameOrigin {
     fn default() -> Self {
         Self {
             origin: None,
-            body: default_body(),
+            body: Arc::clone(&DEFAULT_BODY),
         }
     }
 }
 
 impl SameOrigin {
-    /// A check that knows no origin of the console: only `Sec-Fetch-Site:
-    /// same-origin` passes an unsafe request, and the refusal is plain text.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The console is served at `public_url`, whose origin `Origin` and
     /// `Referer` are compared with.
     ///
@@ -233,7 +226,7 @@ mod tests {
     const CONSOLE: &str = "https://console.example.org:8443";
 
     fn check() -> SameOrigin {
-        SameOrigin::new()
+        SameOrigin::default()
             .with_origin(&Url::parse("https://console.example.org:8443/ui/").expect("a URL"))
             .expect("a tuple origin")
     }
@@ -271,7 +264,7 @@ mod tests {
         assert_eq!(Ok(()), check().check(&sent));
         assert_eq!(
             Ok(()),
-            SameOrigin::new().check(&sent),
+            SameOrigin::default().check(&sent),
             "the fetch metadata needs no configured origin"
         );
     }
@@ -309,7 +302,7 @@ mod tests {
         assert_eq!(Err(CrossOrigin::Unknown), check().check(&HeaderMap::new()));
         assert_eq!(
             Err(CrossOrigin::Unknown),
-            SameOrigin::new().check(&headers(&[("origin", CONSOLE)])),
+            SameOrigin::default().check(&headers(&[("origin", CONSOLE)])),
             "a console that knows no origin takes no Origin on trust"
         );
     }
@@ -318,7 +311,7 @@ mod tests {
     fn an_opaque_public_url_is_refused() {
         let opaque = Url::parse("data:text/plain,console").expect("a URL");
         assert!(matches!(
-            SameOrigin::new().with_origin(&opaque),
+            SameOrigin::default().with_origin(&opaque),
             Err(OpaqueOrigin { .. })
         ));
     }

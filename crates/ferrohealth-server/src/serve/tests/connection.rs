@@ -120,7 +120,9 @@ async fn a_tls_connection_that_sends_no_request_byte_is_closed_at_the_header_rea
         ..short_head_bound()
     };
     let (address, stop, served) = start_run(Router::new(), section).await;
-    let pinned = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+    let pinned =
+        crate::tls::HealthcheckTls::read_of(&certificate.section, crate::tls::TlsKeys::SERVER)
+            .expect("the pin reads");
     let stream = tokio::net::TcpStream::connect(address)
         .await
         .expect("connects");

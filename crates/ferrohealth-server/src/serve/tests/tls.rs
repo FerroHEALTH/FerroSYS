@@ -48,7 +48,9 @@ async fn a_tls_listener_serves_the_pinned_healthcheck_and_drains() {
         Duration::ZERO,
         Duration::from_secs(5),
     ));
-    let pinned = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+    let pinned =
+        crate::tls::HealthcheckTls::read_of(&certificate.section, crate::tls::TlsKeys::SERVER)
+            .expect("the pin reads");
     assert_eq!(
         Outcome::Healthy,
         crate::healthcheck::check_tls(address, "", Duration::from_secs(5), &pinned).await
@@ -58,8 +60,11 @@ async fn a_tls_listener_serves_the_pinned_healthcheck_and_drains() {
         !matches!(plain, Outcome::Healthy),
         "plain HTTP to a TLS listener is no answer: {plain:?}"
     );
-    let other = crate::tls::HealthcheckTls::read(&certificate_section_of_another())
-        .expect("another pin reads");
+    let other = crate::tls::HealthcheckTls::read_of(
+        &certificate_section_of_another(),
+        crate::tls::TlsKeys::SERVER,
+    )
+    .expect("another pin reads");
     let refused = crate::healthcheck::check_tls(address, "", Duration::from_secs(5), &other).await;
     assert!(
         matches!(refused, Outcome::Failed(ref reason) if reason.contains("TLS")),
@@ -121,7 +126,9 @@ async fn a_listener_serves_the_tls_the_product_keeps_and_reloads() {
         )
         .await
     });
-    let first = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+    let first =
+        crate::tls::HealthcheckTls::read_of(&certificate.section, crate::tls::TlsKeys::SERVER)
+            .expect("the pin reads");
     assert_eq!(
         Outcome::Healthy,
         crate::healthcheck::check_tls(address, "", Duration::from_secs(5), &first).await
@@ -135,7 +142,9 @@ async fn a_listener_serves_the_tls_the_product_keeps_and_reloads() {
     std::fs::copy(&renewed.section.key_file, &certificate.section.key_file)
         .expect("the renewed key is written");
     reloaded.reload().expect("the renewed pair reads");
-    let second = crate::tls::HealthcheckTls::read(&certificate.section).expect("the pin reads");
+    let second =
+        crate::tls::HealthcheckTls::read_of(&certificate.section, crate::tls::TlsKeys::SERVER)
+            .expect("the pin reads");
     assert_eq!(
         Outcome::Healthy,
         crate::healthcheck::check_tls(address, "", Duration::from_secs(5), &second).await,
@@ -187,7 +196,7 @@ fn a_tls_file_that_is_missing_or_holds_no_pem_is_refused() {
         ..certificate.section.clone()
     };
     assert!(matches!(
-        crate::tls::server_config(&missing),
+        crate::tls::server_config_of(&missing, crate::tls::TlsKeys::SERVER),
         Err(crate::tls::TlsError::Read { .. })
     ));
     let swapped = crate::section::TlsSection::new(
@@ -195,7 +204,7 @@ fn a_tls_file_that_is_missing_or_holds_no_pem_is_refused() {
         certificate.section.certificate_file.clone(),
     );
     assert!(matches!(
-        crate::tls::server_config(&swapped),
+        crate::tls::server_config_of(&swapped, crate::tls::TlsKeys::SERVER),
         Err(crate::tls::TlsError::Pem { .. })
     ));
 }

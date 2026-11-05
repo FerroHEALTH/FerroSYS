@@ -151,13 +151,6 @@ impl ProblemType {
     pub fn is_about_blank(&self) -> bool {
         self.uri == ABOUT_BLANK
     }
-
-    /// A problem of this type, to which the occurrence's detail and
-    /// extension members are added.
-    #[must_use]
-    pub fn problem(&self) -> Problem {
-        Problem::of(self)
-    }
 }
 
 /// A product's problem types, each under the base URI the product owns, so
@@ -509,8 +502,7 @@ mod tests {
         );
         assert_eq!(Some("aql-syntax"), syntax.slug());
         assert_eq!(Some(&syntax), types.get("aql-syntax"));
-        let problem = syntax
-            .problem()
+        let problem = Problem::of(&syntax)
             .with_detail("the query ends inside a WHERE clause")
             .with_extension("position", json!({"line": 1, "column": 42}))
             .expect("the member");
