@@ -10,6 +10,21 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `revocation::RevocationCheck` (feature `revocation`), the TLS of an
+  outbound link that checks every certificate a peer presents for
+  revocation before any data is sent. `RevocationCheck::clear` opens a
+  handshake that sends nothing, pairs each certificate with its issuer up
+  to one of the trust roots it was given, and asks the certificate's CRL
+  distribution points (RFC 5280 §6.3), then its OCSP responders (RFC
+  6960). A revoked certificate fails the check, and so does one no source
+  gives a status for: a source that cannot be reached, a stale CRL, a CRL
+  with a critical extension the check does not process, or an OCSP status
+  of `unknown`. `RevocationCheck::http_client` is a reqwest client that
+  completes a handshake only over a chain a check cleared in the last five
+  minutes (#243).
+
 ## [0.5.0] - 2026-11-05
 
 ### Added

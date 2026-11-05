@@ -60,6 +60,10 @@ runs the same stack, the same health routes and the same shutdown.
   caller, `health::Health::with_info` serves `/health/info`, and
   `tls_client` reads the TLS material of outbound calls (feature `reqwest`
   sets it on a reqwest client).
+- `revocation` (feature `revocation`) checks every certificate an outbound
+  peer presents by its CRL, then its OCSP responder, before any data is
+  sent, and hands out a reqwest client that connects only over a chain a
+  check cleared; a certificate no source gives a status for fails closed.
 - `problem` writes RFC 9457 problem details (`application/problem+json`)
   for a product's error bodies outside FHIR: a `Problem` with the RFC's
   members and extension members, the product's types defined once in a

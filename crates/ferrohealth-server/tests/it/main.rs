@@ -7,4 +7,6 @@
 // inline test module keep its context, so clippy reads them as tests.
 #![cfg(test)]
 
+#[cfg(feature = "revocation")]
+mod revocation;
 mod stack;

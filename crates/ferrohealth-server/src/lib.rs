@@ -32,7 +32,9 @@
 //! readiness, waits the drain delay and finishes the requests in flight
 //! within a bound, over TLS when `[server.tls]` is set ([`tls`]);
 //! [`serve::run_all`] serves several listeners under one signal.
-//! [`tls_client`] reads the TLS material of a product's outbound calls.
+//! [`tls_client`] reads the TLS material of a product's outbound calls,
+//! and `revocation` (feature `revocation`) checks every certificate an
+//! outbound peer presents by CRL, then OCSP, before any data is sent.
 //! [`healthcheck`] is the container probe, [`cli::Common`] and
 //! [`cli::ConfigArgs`] the subcommands and arguments every binary shares,
 //! [`run::Run`] the run path around them (the parse, the runtime and the
@@ -59,6 +61,8 @@ pub mod panic;
 pub mod problem;
 pub mod refusal;
 pub mod request_id;
+#[cfg(feature = "revocation")]
+pub mod revocation;
 pub mod run;
 #[cfg(feature = "console")]
 pub mod same_origin;
