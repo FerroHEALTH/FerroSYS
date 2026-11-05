@@ -60,12 +60,13 @@ REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" ||
 # Resolve an issue #number to its database id (the value every write endpoint
 # wants). Fails loud if the issue does not exist.
 dbid() {
-  need_int "$1"
+  local issue="$1"
+  need_int "$issue"
   local id
-  id="$(gh api "repos/$REPO/issues/$1" --jq '.id' 2>/dev/null)" ||
-    die "issue #$1 not found in $REPO"
+  id="$(gh api "repos/$REPO/issues/$issue" --jq '.id' 2>/dev/null)" ||
+    die "issue #$issue not found in $REPO"
   case "$id" in
-    '' | *[!0-9]*) die "could not resolve the database id for #$1" ;;
+    '' | *[!0-9]*) die "could not resolve the database id for #$issue" ;;
     *) ;;
   esac
   printf '%s' "$id"

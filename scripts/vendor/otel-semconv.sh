@@ -49,12 +49,12 @@ files=(
 )
 
 row="$(grep -F "| $item |" docs/VERSIONS.md || true)"
-[ -n "$row" ] || die "docs/VERSIONS.md has no '$item' row"
+[[ -n "$row" ]] || die "docs/VERSIONS.md has no '$item' row"
 tick='`'
 repo="$(grep -oE "${tick}[A-Za-z0-9-]+/[A-Za-z0-9._-]+${tick}" <<< "$row" | head -n1 | tr -d "$tick")"
 tag="$(grep -oE "${tick}v[0-9]+\.[0-9]+\.[0-9]+${tick}" <<< "$row" | head -n1 | tr -d "$tick")"
 sha="$(grep -oE '\b[0-9a-f]{40}\b' <<< "$row" | head -n1 || true)"
-[ -n "$repo" ] && [ -n "$tag" ] && [ -n "$sha" ] ||
+[[ -n "$repo" ]] && [[ -n "$tag" ]] && [[ -n "$sha" ]] ||
   die "the '$item' row names no repository, release tag or commit"
 
 echo "otel-semconv: $repo $tag at $sha"
@@ -62,7 +62,7 @@ rm -rf -- "${dest:?}/docs" "$dest/LICENSE"
 digests=""
 for path in "${files[@]}"; do
   mkdir -p "$(dirname "$dest/$path")"
-  curl --fail --silent --show-error --location \
+  curl --proto =https --fail --silent --show-error --location \
     "https://raw.githubusercontent.com/$repo/$sha/$path" -o "$dest/$path" ||
     die "$path could not be fetched at $sha"
   digest="$(shasum -a 256 "$dest/$path" | awk '{ print $1 }')"
