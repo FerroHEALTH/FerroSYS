@@ -17,7 +17,7 @@ use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
-use super::{HealthcheckTls, PeerCertificates, ReloadableTls, TlsError, provider};
+use super::{HealthcheckTls, PeerCertificates, ReloadableTls, TlsError, TlsKeys, provider};
 use crate::health::Health;
 use crate::healthcheck::{Get, GetError, Outcome, check_tls, check_url};
 use crate::section::{ClientAuth, ServerSection, TlsSection};
@@ -141,10 +141,11 @@ async fn peer(address: SocketAddr, tls: &HealthcheckTls) -> Option<String> {
 async fn a_required_client_certificate_is_verified_and_reaches_the_handler() {
     let files = Files::new();
     let address = start(&files.section(ClientAuth::Required, false)).await;
-    let with = HealthcheckTls::read(&files.section(ClientAuth::Required, true))
+    let with = HealthcheckTls::read_of(&files.section(ClientAuth::Required, true), TlsKeys::SERVER)
         .expect("the identity reads");
     let without =
-        HealthcheckTls::read(&files.section(ClientAuth::Required, false)).expect("the pin reads");
+        HealthcheckTls::read_of(&files.section(ClientAuth::Required, false), TlsKeys::SERVER)
+            .expect("the pin reads");
     assert_eq!(
         Some("1".to_owned()),
         peer(address, &with).await,
@@ -165,10 +166,11 @@ async fn a_required_client_certificate_is_verified_and_reaches_the_handler() {
 async fn an_optional_client_certificate_is_taken_when_presented() {
     let files = Files::new();
     let address = start(&files.section(ClientAuth::Optional, false)).await;
-    let with = HealthcheckTls::read(&files.section(ClientAuth::Optional, true))
+    let with = HealthcheckTls::read_of(&files.section(ClientAuth::Optional, true), TlsKeys::SERVER)
         .expect("the identity reads");
     let without =
-        HealthcheckTls::read(&files.section(ClientAuth::Optional, false)).expect("the pin reads");
+        HealthcheckTls::read_of(&files.section(ClientAuth::Optional, false), TlsKeys::SERVER)
+            .expect("the pin reads");
     assert_eq!(Some("1".to_owned()), peer(address, &with).await);
     assert_eq!(Some("0".to_owned()), peer(address, &without).await);
 }
@@ -177,7 +179,8 @@ async fn an_optional_client_certificate_is_taken_when_presented() {
 async fn without_client_auth_no_certificate_is_asked() {
     let files = Files::new();
     let address = start(&files.section(ClientAuth::None, false)).await;
-    let pin = HealthcheckTls::read(&files.section(ClientAuth::None, false)).expect("the pin reads");
+    let pin = HealthcheckTls::read_of(&files.section(ClientAuth::None, false), TlsKeys::SERVER)
+        .expect("the pin reads");
     assert_eq!(Some("0".to_owned()), peer(address, &pin).await);
     let url = format!("https://127.0.0.1:{}/health/readiness", address.port());
     assert_eq!(
@@ -197,7 +200,7 @@ async fn without_client_auth_no_certificate_is_asked() {
 async fn a_get_over_the_pinned_tls_reads_the_status_and_the_body() {
     let files = Files::new();
     let address = start(&files.section(ClientAuth::Required, false)).await;
-    let with = HealthcheckTls::read(&files.section(ClientAuth::Required, true))
+    let with = HealthcheckTls::read_of(&files.section(ClientAuth::Required, true), TlsKeys::SERVER)
         .expect("the identity reads");
     let answer = Get::new(address, "/peer", Duration::from_secs(5), 64)
         .with_tls(with.clone())
@@ -223,7 +226,8 @@ async fn a_get_over_the_pinned_tls_refuses_a_listener_with_another_certificate()
     let served = Files::new();
     let address = start(&served.section(ClientAuth::None, false)).await;
     let other = Files::new();
-    let pin = HealthcheckTls::read(&other.section(ClientAuth::None, false)).expect("the pin reads");
+    let pin = HealthcheckTls::read_of(&other.section(ClientAuth::None, false), TlsKeys::SERVER)
+        .expect("the pin reads");
     let error = Get::new(address, "/peer", Duration::from_secs(5), 64)
         .with_tls(pin.clone())
         .send()
@@ -243,7 +247,8 @@ async fn a_get_over_the_pinned_tls_refuses_a_listener_with_another_certificate()
 async fn a_get_over_the_pinned_tls_refuses_a_body_past_its_bound() {
     let files = Files::new();
     let address = start(&files.section(ClientAuth::None, false)).await;
-    let pin = HealthcheckTls::read(&files.section(ClientAuth::None, false)).expect("the pin reads");
+    let pin = HealthcheckTls::read_of(&files.section(ClientAuth::None, false), TlsKeys::SERVER)
+        .expect("the pin reads");
     let error = Get::new(address, "/health/readiness", Duration::from_secs(5), 4)
         .with_tls(pin.clone())
         .send()
@@ -269,7 +274,8 @@ async fn a_get_over_the_pinned_tls_refuses_a_body_past_its_bound() {
 #[tokio::test]
 async fn a_get_over_the_pinned_tls_gives_up_at_its_timeout() {
     let files = Files::new();
-    let pin = HealthcheckTls::read(&files.section(ClientAuth::None, false)).expect("the pin reads");
+    let pin = HealthcheckTls::read_of(&files.section(ClientAuth::None, false), TlsKeys::SERVER)
+        .expect("the pin reads");
     let silent = TcpListener::bind("127.0.0.1:0").await.expect("a port");
     let address = silent.local_addr().expect("the address");
     let held = tokio::spawn(async move {
@@ -324,7 +330,7 @@ fn the_minimum_version_decides_whether_tls_1_2_is_spoken() {
         ..files.section(ClientAuth::None, false)
     };
     assert!(
-        super::server_config(&strict).is_ok(),
+        super::server_config_of(&strict, TlsKeys::SERVER).is_ok(),
         "a 1.3-only listener builds"
     );
 }
@@ -423,7 +429,7 @@ fn a_section_built_in_code_with_a_ca_under_no_client_auth_is_refused() {
         ..files.section(ClientAuth::None, false)
     };
     assert!(matches!(
-        super::server_config(&section),
+        super::server_config_of(&section, TlsKeys::SERVER),
         Err(TlsError::ClientAuth(
             crate::section::ClientAuthError::UnusedClientCa
         ))
@@ -433,7 +439,7 @@ fn a_section_built_in_code_with_a_ca_under_no_client_auth_is_refused() {
         ..files.section(ClientAuth::Required, false)
     };
     assert!(matches!(
-        super::server_config(&section),
+        super::server_config_of(&section, TlsKeys::SERVER),
         Err(TlsError::ClientAuth(
             crate::section::ClientAuthError::NoClientCa(_)
         ))

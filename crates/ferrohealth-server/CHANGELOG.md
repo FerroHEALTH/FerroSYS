@@ -10,6 +10,29 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-05
+
+### Added
+
+- Breaking: `refusal::DEFAULT_BODY` is public, the plain-text refusal body
+  a product that names none answers with. A product takes it with
+  `Arc::clone(&refusal::DEFAULT_BODY)`, and the stack still tells it from
+  a product's own body by pointer (#231).
+
+### Removed
+
+- Breaking: five public functions that only forwarded to another call are
+  gone, and a product calls the target itself (#231):
+  - `problem::ProblemType::problem(&self)`: call
+    `problem::Problem::of(&kind)`.
+  - `refusal::default_body()`: take
+    `Arc::clone(&refusal::DEFAULT_BODY)`.
+  - `same_origin::SameOrigin::new()`: call `SameOrigin::default()`.
+  - `tls::server_config(section)`: call
+    `tls::server_config_of(section, TlsKeys::SERVER)`.
+  - `tls::HealthcheckTls::read(section)`: call
+    `HealthcheckTls::read_of(section, TlsKeys::SERVER)`.
+
 ## [0.4.4] - 2026-11-05
 
 ### Changed

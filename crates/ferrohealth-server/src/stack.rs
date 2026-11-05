@@ -3,6 +3,8 @@
 
 //! The one stack every server runs around its routes.
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::handler::Handler;
@@ -44,7 +46,7 @@ impl Default for StackPolicy {
     fn default() -> Self {
         Self {
             panic_body: panic::default_body(),
-            refusal_body: refusal::default_body(),
+            refusal_body: Arc::clone(&refusal::DEFAULT_BODY),
             request_log: RequestLog::default(),
         }
     }

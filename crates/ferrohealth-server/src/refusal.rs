@@ -38,21 +38,15 @@ where
     Arc::new(move |uri, ids, status, reason| body(uri, ids.server, status, reason))
 }
 
-/// The one default body, so the stack can tell it from a product's by
-/// pointer.
-pub(crate) static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
-    Arc::new(|_uri, _ids, status, reason| (status, reason.to_owned()).into_response())
-});
-
 /// The body a product that names none answers with: the reason as plain
-/// text.
+/// text. A product takes it with `Arc::clone(&DEFAULT_BODY)`, and the stack
+/// tells it from a product's own body by pointer.
 ///
 /// A `413` a body extractor raises keeps the extractor's own text under
 /// this body, as it did before a product's body could write it.
-#[must_use]
-pub fn default_body() -> RefusalBody {
-    Arc::clone(&DEFAULT_BODY)
-}
+pub static DEFAULT_BODY: LazyLock<RefusalBody> = LazyLock::new(|| {
+    Arc::new(|_uri, _ids, status, reason| (status, reason.to_owned()).into_response())
+});
 
 /// Marks a response a [`RefusalBody`] rendered as answering with its own
 /// status, such as a FHIR gateway's `504 Gateway Timeout` for the stack's

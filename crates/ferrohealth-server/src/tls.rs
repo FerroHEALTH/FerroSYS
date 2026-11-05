@@ -221,7 +221,8 @@ pub(crate) fn protocol_versions(
     }
 }
 
-/// Returns the listener's TLS configuration for `section`.
+/// The listener's TLS configuration from `section`, every fault naming the
+/// key of `keys`; `[server.tls]` is read with [`TlsKeys::SERVER`].
 ///
 /// # Errors
 ///
@@ -229,16 +230,6 @@ pub(crate) fn protocol_versions(
 /// be read, [`TlsError::Pem`] for one that holds no certificate or no key,
 /// [`TlsError::Config`] when the key does not match the certificate, and
 /// [`TlsError::ClientAuth`] when `client_auth` and `client_ca_file` disagree.
-pub fn server_config(section: &TlsSection) -> Result<Arc<ServerConfig>, TlsError> {
-    server_config_of(section, TlsKeys::SERVER)
-}
-
-/// The listener's TLS configuration from `section`, every fault naming the
-/// key of `keys`, as [`server_config`] reads `[server.tls]`.
-///
-/// # Errors
-///
-/// Returns every error of [`server_config`].
 pub fn server_config_of(
     section: &TlsSection,
     keys: TlsKeys,
@@ -305,7 +296,7 @@ impl ReloadableTls {
     ///
     /// # Errors
     ///
-    /// Returns every error of [`server_config`].
+    /// Returns every error of [`server_config_of`].
     pub fn new(section: &TlsSection) -> Result<Self, TlsError> {
         Self::of(section, TlsKeys::SERVER)
     }
@@ -314,7 +305,7 @@ impl ReloadableTls {
     ///
     /// # Errors
     ///
-    /// Returns every error of [`server_config`].
+    /// Returns every error of [`server_config_of`].
     pub fn of(section: &TlsSection, keys: TlsKeys) -> Result<Self, TlsError> {
         Ok(Self {
             current: RwLock::new(server_config_of(section, keys)?),
@@ -348,7 +339,7 @@ impl ReloadableTls {
     ///
     /// # Errors
     ///
-    /// Returns every error of [`server_config`]; the running configuration
+    /// Returns every error of [`server_config_of`]; the running configuration
     /// stays.
     pub fn reload(&self) -> Result<(), TlsError> {
         let fresh = server_config_of(&self.section, self.keys)?;
@@ -366,23 +357,15 @@ pub struct HealthcheckTls {
 
 impl HealthcheckTls {
     /// Reads the leaf certificate the listener serves from `section`, and
-    /// the identity the healthcheck presents when `section` names one.
+    /// the identity the healthcheck presents when `section` names one,
+    /// every fault naming the key of `keys`; `[server.tls]` is read with
+    /// [`TlsKeys::SERVER`].
     ///
     /// # Errors
     ///
     /// Returns [`TlsError::Read`] and [`TlsError::Pem`] for a certificate
     /// file that cannot be read, and [`TlsError::Config`] when rustls
     /// refuses the configuration.
-    pub fn read(section: &TlsSection) -> Result<Self, TlsError> {
-        Self::read_of(section, TlsKeys::SERVER)
-    }
-
-    /// Reads as [`HealthcheckTls::read`] does, every fault naming the key of
-    /// `keys`.
-    ///
-    /// # Errors
-    ///
-    /// Returns every error of [`HealthcheckTls::read`].
     pub fn read_of(section: &TlsSection, keys: TlsKeys) -> Result<Self, TlsError> {
         let leaf = chain(keys.certificate, &section.certificate_file)?
             .into_iter()
