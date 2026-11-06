@@ -76,6 +76,9 @@ pub(super) enum Source {
     UnreachableCrl,
     /// An OCSP responder no connection reaches.
     UnreachableOcsp,
+    /// The intermediate's OCSP responder, whose answer carries trailing
+    /// data inside the `ResponseData` of its `BasicOCSPResponse`.
+    TrailingOcsp,
     /// No source at all.
     None,
 }
@@ -196,7 +199,9 @@ impl Front {
             Source::UnreachableCrl => {
                 crl_point(&mut params, &format!("{unreachable}/intermediate.crl"));
             }
-            Source::Ocsp => ocsp_point(&mut params, &format!("{base}/ocsp")),
+            Source::Ocsp | Source::TrailingOcsp => {
+                ocsp_point(&mut params, &format!("{base}/ocsp"));
+            }
             Source::UnreachableOcsp => ocsp_point(&mut params, &format!("{unreachable}/ocsp")),
             Source::None => {}
         }
@@ -235,11 +240,13 @@ impl Front {
         let responder = Responder {
             subject: Certificate::from_der(pki.intermediate.certificate.der())
                 .expect("the intermediate decodes")
-                .tbs_certificate
-                .subject,
+                .tbs_certificate()
+                .subject()
+                .clone(),
             issuer: pki.intermediate.issuer,
             known,
             revoked,
+            trailing: source == Source::TrailingOcsp,
         };
         Mock::given(method("POST"))
             .and(path("/ocsp"))
@@ -443,6 +450,8 @@ struct Responder {
     issuer: Issuer<'static, KeyPair>,
     known: BTreeSet<u64>,
     revoked: BTreeSet<u64>,
+    /// Whether the answer carries trailing data inside its `ResponseData`.
+    trailing: bool,
 }
 
 impl Respond for Responder {
@@ -507,6 +516,9 @@ impl Responder {
             .key()
             .sign(&data.to_der().ok()?)
             .expect("the answer signs");
+        if self.trailing {
+            return trailing_answer(&data, &signature);
+        }
         let basic = BasicOcspResponse {
             tbs_response_data: data,
             signature_algorithm: AlgorithmIdentifierOwned {
@@ -518,6 +530,62 @@ impl Responder {
         };
         OcspResponse::successful(basic).ok()?.to_der().ok()
     }
+}
+
+/// The DER of a successful answer whose `ResponseData` carries a `NULL`
+/// after its last field, inside the `BasicOCSPResponse` the `response`
+/// OCTET STRING holds (RFC 6960 §4.2.1): nested trailing data, which DER
+/// decoding refuses.
+fn trailing_answer(data: &ResponseData, signature: &[u8]) -> Option<Vec<u8>> {
+    let data = data.to_der().ok()?;
+    let mut fields = contents(&data)?.to_vec();
+    fields.extend_from_slice(&[0x05, 0x00]);
+    let algorithm = AlgorithmIdentifierOwned {
+        oid: ECDSA_WITH_SHA256,
+        parameters: None,
+    }
+    .to_der()
+    .ok()?;
+    let signature = BitString::from_bytes(signature).ok()?.to_der().ok()?;
+    let basic = tlv(0x30, &[tlv(0x30, &fields), algorithm, signature].concat());
+    let basic_oid = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.1.1")
+        .to_der()
+        .ok()?;
+    let bytes = tlv(0x30, &[basic_oid, tlv(0x04, &basic)].concat());
+    let successful = [0x0a, 0x01, 0x00];
+    Some(tlv(0x30, &[&successful[..], &tlv(0xa0, &bytes)].concat()))
+}
+
+/// The DER of a value with `tag` and `body`, its length in the short or
+/// the long form (X.690 §8.1.3).
+fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+    let short = u8::try_from(body.len())
+        .ok()
+        .filter(|length| *length <= 0x7f);
+    let length = short.map_or_else(
+        || {
+            let significant: Vec<u8> = body
+                .len()
+                .to_be_bytes()
+                .into_iter()
+                .skip_while(|byte| *byte == 0)
+                .collect();
+            let count = u8::try_from(significant.len()).expect("a length of at most 8 bytes");
+            [vec![0x80 | count], significant].concat()
+        },
+        |length| vec![length],
+    );
+    [vec![tag], length, body.to_vec()].concat()
+}
+
+/// The contents of the DER value `der`, without its tag and length.
+fn contents(der: &[u8]) -> Option<&[u8]> {
+    let first = *der.get(1)?;
+    let skip = match first {
+        0..=0x7f => 2,
+        long => 2 + usize::from(long & 0x7f),
+    };
+    der.get(skip..)
 }
 
 /// The serial number whose big-endian bytes are `bytes`, when it fits a

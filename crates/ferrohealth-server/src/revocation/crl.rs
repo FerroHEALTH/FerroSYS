@@ -22,8 +22,8 @@ pub(super) const SKEW: u64 = 60;
 pub(super) fn standing(list: &[u8], link: &Link<'_>, now: u64) -> Result<Standing, StatusError> {
     let list = CertificateList::from_der(list).map_err(StatusError::Decode)?;
     let tbs = &list.tbs_cert_list;
-    let issuer = &link.issuer.tbs_certificate;
-    if !same_name(&tbs.issuer, &issuer.subject) || !signs_crls(link)? {
+    let issuer = link.issuer.tbs_certificate();
+    if !same_name(&tbs.issuer, issuer.subject()) || !signs_crls(link)? {
         return Err(StatusError::WrongIssuer);
     }
     if tbs.signature != list.signature_algorithm {
@@ -35,7 +35,7 @@ pub(super) fn standing(list: &[u8], link: &Link<'_>, now: u64) -> Result<Standin
         .as_bytes()
         .ok_or(StatusError::Signature(SignatureError::Invalid))?;
     signature::verify(
-        &issuer.subject_public_key_info,
+        issuer.subject_public_key_info(),
         &list.signature_algorithm,
         &signed,
         signature,
@@ -65,7 +65,7 @@ pub(super) fn standing(list: &[u8], link: &Link<'_>, now: u64) -> Result<Standin
     if critical {
         return Err(StatusError::Unprocessable);
     }
-    let serial = &link.subject.tbs_certificate.serial_number;
+    let serial = link.subject.tbs_certificate().serial_number();
     let revoked = tbs
         .revoked_certificates
         .iter()
@@ -81,7 +81,13 @@ pub(super) fn standing(list: &[u8], link: &Link<'_>, now: u64) -> Result<Standin
 /// Whether `link`'s issuer may sign CRLs: a key usage, when it states one,
 /// carries `cRLSign` (RFC 5280 §4.2.1.3).
 fn signs_crls(link: &Link<'_>) -> Result<bool, StatusError> {
-    for extension in link.issuer.tbs_certificate.extensions.iter().flatten() {
+    for extension in link
+        .issuer
+        .tbs_certificate()
+        .extensions()
+        .into_iter()
+        .flatten()
+    {
         if extension.extn_id == KeyUsage::OID {
             let usage =
                 KeyUsage::from_der(extension.extn_value.as_bytes()).map_err(StatusError::Decode)?;

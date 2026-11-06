@@ -10,6 +10,24 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-06
+
+### Changed
+
+- Breaking: the `revocation` feature builds on `der` 0.8, `x509-cert` 0.3
+  and `x509-ocsp` 0.3 (`0.3.0-rc.0`, the only release on that line), so a
+  product locks one copy of each beside FerroFED's. The `der::Error` that
+  `RevocationSetupError::RootDer`, `RevocationError::Certificate`,
+  `StatusError::Decode` and `SignatureError::Encoding` carry is now der 0.8's.
+  A product that matches on its kind names der 0.8's `ErrorKind`. The
+  check gains der 0.8's parsing: a cap of 64 nested messages, a
+  `SEQUENCE` required by `Document::decode`, and no stack overflow on
+  nested BER indefinite lengths. An OCSP answer with trailing data inside
+  a nested value still fails closed as `StatusError::Decode` (#251).
+  `tokio-postgres-rustls` 0.14.0, its newest release, still requires
+  `x509-cert` 0.2, so a product that uses it keeps a second `x509-cert`
+  and `der` line until that crate moves.
+
 ## [0.5.1] - 2026-11-05
 
 ### Added

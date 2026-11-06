@@ -34,15 +34,15 @@ pub(super) fn verify_certificate(
     issuer: &Certificate,
 ) -> Result<(), SignatureError> {
     let signed = subject
-        .tbs_certificate
+        .tbs_certificate()
         .to_der()
         .map_err(SignatureError::Encoding)?;
     verify(
-        &issuer.tbs_certificate.subject_public_key_info,
-        &subject.signature_algorithm,
+        issuer.tbs_certificate().subject_public_key_info(),
+        subject.signature_algorithm(),
         &signed,
         subject
-            .signature
+            .signature()
             .as_bytes()
             .ok_or(SignatureError::Invalid)?,
     )

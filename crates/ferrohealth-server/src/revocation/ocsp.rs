@@ -49,10 +49,10 @@ pub(super) struct Asked {
 impl Asked {
     /// The request about `link`'s certificate.
     pub(super) fn new(link: &Link<'_>) -> Result<Self, StatusError> {
-        let issuer = &link.issuer.tbs_certificate;
-        let name = issuer.subject.to_der().map_err(StatusError::Decode)?;
+        let issuer = link.issuer.tbs_certificate();
+        let name = issuer.subject().to_der().map_err(StatusError::Decode)?;
         let key = issuer
-            .subject_public_key_info
+            .subject_public_key_info()
             .subject_public_key
             .as_bytes()
             .ok_or(StatusError::WrongIssuer)?;
@@ -64,7 +64,7 @@ impl Asked {
             },
             issuer_name_hash: hash(&name).map_err(StatusError::Decode)?,
             issuer_key_hash: hash(key).map_err(StatusError::Decode)?,
-            serial_number: link.subject.tbs_certificate.serial_number.clone(),
+            serial_number: link.subject.tbs_certificate().serial_number().clone(),
         };
         let request = OcspRequest {
             tbs_request: TbsRequest {
@@ -115,7 +115,7 @@ impl Asked {
             .as_bytes()
             .ok_or(StatusError::Signature(SignatureError::Invalid))?;
         signature::verify(
-            &signer.tbs_certificate.subject_public_key_info,
+            signer.tbs_certificate().subject_public_key_info(),
             &basic.signature_algorithm,
             &tbs,
             signature,
@@ -179,11 +179,11 @@ fn signer<'a>(
 /// Whether `responder` names `certificate`, by its subject or by the SHA-1
 /// of its key (RFC 6960 §4.2.1, `KeyHash`).
 fn names(responder: &ResponderId, certificate: &Certificate) -> bool {
-    let tbs = &certificate.tbs_certificate;
+    let tbs = certificate.tbs_certificate();
     match responder {
-        ResponderId::ByName(name) => same_name(name, &tbs.subject),
+        ResponderId::ByName(name) => same_name(name, tbs.subject()),
         ResponderId::ByKey(hash) => tbs
-            .subject_public_key_info
+            .subject_public_key_info()
             .subject_public_key
             .as_bytes()
             .is_some_and(|key| {
@@ -195,15 +195,15 @@ fn names(responder: &ResponderId, certificate: &Certificate) -> bool {
 /// Whether `candidate` is a responder `issuer` authorised: issued and
 /// signed by it, valid at `now`, with `id-kp-OCSPSigning`.
 fn delegated(candidate: &Certificate, issuer: &Certificate, now: u64) -> bool {
-    let tbs = &candidate.tbs_certificate;
-    let validity = &tbs.validity;
+    let tbs = candidate.tbs_certificate();
+    let validity = tbs.validity();
     let valid = validity.not_before.to_unix_duration().as_secs() <= now.saturating_add(SKEW)
         && now < validity.not_after.to_unix_duration().as_secs();
     // NOTE: RFC 6960 §4.2.2.2: a responder certificate that does not verify is no
     // authorised responder, so the answer falls to NoResponder.
-    let signed = same_name(&tbs.issuer, &issuer.tbs_certificate.subject)
+    let signed = same_name(tbs.issuer(), issuer.tbs_certificate().subject())
         && signature::verify_certificate(candidate, issuer).is_ok();
-    let signing = tbs.extensions.iter().flatten().any(|extension| {
+    let signing = tbs.extensions().into_iter().flatten().any(|extension| {
         extension.extn_id == ExtendedKeyUsage::OID
             && ExtendedKeyUsage::from_der(extension.extn_value.as_bytes())
                 .is_ok_and(|usage| usage.0.contains(&OCSP_SIGNING))
