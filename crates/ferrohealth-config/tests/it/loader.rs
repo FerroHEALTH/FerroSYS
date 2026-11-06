@@ -3,6 +3,7 @@
 
 //! The loader: the fixtures every test of it shares.
 
+mod arrays;
 mod refusals;
 mod sources;
 
@@ -23,12 +24,30 @@ struct Config {
     telemetry: Telemetry,
     cdr: Option<Cdr>,
     pixm: Option<Pixm>,
+    auth: Option<Auth>,
 }
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct Pixm {
     manager: Vec<Manager>,
+}
+
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct Auth {
+    issuer: Vec<Issuer>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct Issuer {
+    url: String,
+    audience: Option<String>,
+    #[serde(default)]
+    timeout_secs: u64,
+    client_secret: Option<Secret>,
+    client_secret_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]

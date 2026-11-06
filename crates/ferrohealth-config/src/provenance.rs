@@ -3,7 +3,6 @@
 
 //! Where each key of a loaded configuration came from.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -82,15 +81,18 @@ impl Provenance {
     /// Returns where the value of the dotted key `key` came from.
     ///
     /// A key inside an array of tables, such as `pixm.manager[1].method`,
-    /// came from where its array came from.
+    /// came from where its element came from, set by its index, or else
+    /// from where its array came from. An array of tables came from the
+    /// strongest layer that set it or one of its elements.
     #[must_use]
     pub fn source(&self, key: &str) -> Source {
-        let key = unindexed(key);
-        if covers(&self.sets, &key) {
+        let elements = format!("{key}[");
+        let an_element = |set: &String| set.starts_with(&elements);
+        if covers(&self.sets, key) || self.sets.iter().any(an_element) {
             Source::Set
-        } else if self.variable(&key).is_some() {
+        } else if self.variable(key).is_some() || self.environment.keys().any(an_element) {
             Source::Environment
-        } else if covers(&self.file_keys, &key) {
+        } else if covers(&self.file_keys, key) {
             Source::File
         } else {
             Source::Default
@@ -153,9 +155,9 @@ impl Provenance {
     /// table or an array of tables above it, when one did.
     #[must_use]
     pub fn variable(&self, key: &str) -> Option<&str> {
-        let key = unindexed(key);
-        above(&key)
-            .find_map(|candidate| self.environment.get(candidate))
+        above(key)
+            .iter()
+            .find_map(|candidate| self.environment.get(*candidate))
             .map(String::as_str)
     }
 }
@@ -165,22 +167,14 @@ impl Provenance {
     /// dotted key `key`, for a refusal of `key` itself, such as an unknown
     /// section a `<PREFIX>__SECTION__KEY` override created.
     pub(crate) fn variable_below(&self, key: &str) -> Option<&str> {
-        let prefix = format!("{}.", unindexed(key));
         self.environment
             .iter()
-            .find(|(set, _)| set.starts_with(&prefix))
+            .find(|(set, _)| {
+                set.strip_prefix(key)
+                    .is_some_and(|rest| rest.starts_with(['.', '[']))
+            })
             .map(|(_, variable)| variable.as_str())
     }
-}
-
-/// Returns the dotted key `key` with the index of every element of an array
-/// of tables left out: `pixm.manager[1].method` is `pixm.manager.method`.
-fn unindexed(key: &str) -> Cow<'_, str> {
-    if !key.contains('[') {
-        return Cow::Borrowed(key);
-    }
-    let segments: Vec<&str> = key.split('.').map(|segment| indexed(segment).0).collect();
-    Cow::Owned(segments.join("."))
 }
 
 /// The name and the index of a segment of a dotted key such as
@@ -193,14 +187,27 @@ pub(crate) fn indexed(segment: &str) -> (&str, Option<usize>) {
         .unwrap_or((segment, None))
 }
 
-/// Returns `key` and every dotted key above it, the key itself first.
-fn above(key: &str) -> impl Iterator<Item = &str> {
-    std::iter::once(key).chain(key.rmatch_indices('.').filter_map(|(at, _)| key.get(..at)))
+/// Returns `key` and every dotted key above it, the key itself first: an
+/// element of an array of tables, then its array, as `pixm.manager[1]` and
+/// `pixm.manager`.
+fn above(key: &str) -> Vec<&str> {
+    let mut keys = Vec::new();
+    let mut rest = Some(key);
+    while let Some(current) = rest {
+        keys.push(current);
+        let (name, index) = indexed(current);
+        rest = if index.is_some() {
+            Some(name)
+        } else {
+            current.rsplit_once('.').map(|(parent, _)| parent)
+        };
+    }
+    keys
 }
 
 /// Returns whether `keys` holds `key` or a key above it.
 fn covers(keys: &BTreeSet<String>, key: &str) -> bool {
-    above(key).any(|candidate| keys.contains(candidate))
+    above(key).iter().any(|candidate| keys.contains(*candidate))
 }
 
 /// Adds to `out` the dotted key of every value under `table` that is not a
