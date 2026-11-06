@@ -1,42 +1,50 @@
 // SPDX-FileCopyrightText: Cadasto B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The committed baseline, `perf/baseline.toml`: the load metrics a run is
-//! compared against, their tolerances and the A/A noise floor.
+//! The committed baseline, `perf/baseline.toml`: per CPU model, the load
+//! metrics a run is compared against, their tolerances and the A/A noise
+//! floor.
 //!
-//! The file names its `schema`. A reader migrates every older schema to the
-//! current one before it reads the values, so a schema bump never makes a
-//! committed baseline unreadable; a newer schema is refused by name.
-//! Updating is a ratchet: on the same plan each metric moves only to the
-//! better of the baseline and the run, so a run never loosens the baseline,
-//! and a raise is a hand edit in a change that says why. The tolerances are
-//! the product's and survive every update. No specification governs the
-//! format: our own design.
+//! Shared CI runners mix CPU generations, and a latency or a CPU time is
+//! comparable only on a like CPU, so the file holds one `[[baseline]]`
+//! entry per CPU model, keyed by the model string of the host fingerprint.
+//! A run is judged against the entry for its own model, and `--update`
+//! writes or tightens that entry alone. The file names its `schema`. A
+//! reader migrates every older schema to the current one before it reads
+//! the values, so a schema bump never makes a committed baseline
+//! unreadable; a newer schema is refused by name. Updating is a ratchet: on
+//! the same plan each metric moves only to the better of the entry and the
+//! run, so a run never loosens it, and a raise is a hand edit in a change
+//! that says why. The tolerances are the product's and survive every
+//! update. No specification governs the format: our own design.
 //!
 //! ```toml
-//! schema = 1
-//! tool = "0.1.0"
-//! written = "2026-11-06T10:00:00Z"
+//! schema = 2
 //!
-//! [plan]
+//! [[baseline]]
+//! tool = "0.2.0"
+//! written = "2026-11-07T10:00:00Z"
+//!
+//! [baseline.plan]
 //! rate = 50.0
 //! warmup_secs = 10
 //! duration_secs = 60
 //! requests = 2
 //! groups = ["create", "metadata"]
 //!
-//! [host]
+//! [baseline.host]
 //! arch = "x86_64"
 //! os = "linux"
+//! cpu_model = "AMD EPYC 7763 64-Core Processor"
 //!
-//! [tolerance]
+//! [baseline.tolerance]
 //! latency = 0.25
 //!
-//! [metrics]
+//! [baseline.metrics]
 //! throughput_rps = 49.9
 //! "metadata.p95_ms" = 4.1
 //!
-//! [noise]
+//! [baseline.noise]
 //! "metadata.p95_ms" = 1.08
 //! ```
 
@@ -51,21 +59,30 @@ use crate::metric::{Kind, Metric};
 use crate::report::PlanIdentity;
 
 /// The schema this version writes.
-pub const SCHEMA: i64 = 1;
+pub const SCHEMA: i64 = 2;
 
-/// A baseline.
+/// The baseline file: one entry per CPU model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Baselines {
+    /// The schema, [`SCHEMA`].
+    pub schema: i64,
+    /// The entries, one per CPU model, in the order of their model.
+    #[serde(default, rename = "baseline")]
+    pub entries: Vec<Baseline>,
+}
+
+/// The baseline of one CPU model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Baseline {
-    /// The schema, [`SCHEMA`].
-    pub schema: i64,
     /// The version of `ferrohealth-perf` that wrote it.
     pub tool: String,
     /// When it was written, RFC 3339 in UTC.
     pub written: String,
     /// The plan it was measured with.
     pub plan: PlanIdentity,
-    /// The host it was measured on.
+    /// The host it was measured on, whose CPU model keys the entry.
     pub host: Fingerprint,
     /// The tolerance of each kind, as a fraction.
     #[serde(default)]
@@ -148,13 +165,22 @@ pub enum BaselineError {
     Serialize(#[source] toml::ser::Error),
 }
 
-impl Baseline {
-    /// Reads the baseline at `path`; `None` when there is no file.
+/// The name a message gives the CPU model `model`.
+#[must_use]
+pub fn model_name(model: Option<&str>) -> String {
+    model.map_or_else(
+        || "with no model name (the host disclosed none)".to_owned(),
+        |name| format!("`{name}`"),
+    )
+}
+
+impl Baselines {
+    /// Reads the baseline file at `path`; `None` when there is no file.
     ///
     /// # Errors
     ///
     /// [`BaselineError::Io`] when the file exists and cannot be read, and
-    /// every error of [`Baseline::parse`].
+    /// every error of [`Baselines::parse`].
     pub fn read(path: &Path) -> Result<Option<Self>, BaselineError> {
         match std::fs::read_to_string(path) {
             Ok(text) => Self::parse(&text).map(Some),
@@ -166,14 +192,15 @@ impl Baseline {
         }
     }
 
-    /// Parses a baseline, migrating an older schema first.
+    /// Parses a baseline file, migrating an older schema first.
     ///
     /// # Errors
     ///
-    /// [`BaselineError::Parse`] for text that is not TOML or not a baseline,
-    /// [`BaselineError::NoSchema`] and [`BaselineError::Schema`] for a
+    /// [`BaselineError::Parse`] for text that is not TOML or not a baseline
+    /// file, [`BaselineError::NoSchema`] and [`BaselineError::Schema`] for a
     /// missing or newer schema, and [`BaselineError::Invalid`] for a
-    /// negative or non-finite value or a noise floor below one.
+    /// negative or non-finite value, a noise floor below one, or two entries
+    /// of one CPU model.
     pub fn parse(text: &str) -> Result<Self, BaselineError> {
         let table: toml::Table = toml::from_str(text).map_err(BaselineError::Parse)?;
         let schema = table
@@ -181,9 +208,92 @@ impl Baseline {
             .and_then(toml::Value::as_integer)
             .ok_or(BaselineError::NoSchema)?;
         let table = migrate(schema, table)?;
-        let baseline: Self = table.try_into().map_err(BaselineError::Parse)?;
-        baseline.check()?;
-        Ok(baseline)
+        let file: Self = table.try_into().map_err(BaselineError::Parse)?;
+        let mut models = std::collections::BTreeSet::new();
+        for entry in &file.entries {
+            entry.check()?;
+            let model = entry.model();
+            if !models.insert(model) {
+                return Err(BaselineError::Invalid(format!(
+                    "two entries for the CPU model {}",
+                    model_name(model)
+                )));
+            }
+        }
+        Ok(file)
+    }
+
+    /// The entry for the CPU model `model`.
+    #[must_use]
+    pub fn entry(&self, model: Option<&str>) -> Option<&Baseline> {
+        self.entries.iter().find(|entry| entry.model() == model)
+    }
+
+    /// The models the file holds an entry for, by name.
+    #[must_use]
+    pub fn models(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| model_name(entry.model()))
+            .collect()
+    }
+
+    /// The file with `entry` in place of the entry of its CPU model, or
+    /// added when it has none; every other entry is kept as it was.
+    #[must_use]
+    pub fn with(mut self, entry: Baseline) -> Self {
+        self.schema = SCHEMA;
+        match self
+            .entries
+            .iter_mut()
+            .find(|old| old.model() == entry.model())
+        {
+            Some(old) => *old = entry,
+            None => self.entries.push(entry),
+        }
+        self.entries.sort_by(|a, b| a.model().cmp(&b.model()));
+        self
+    }
+
+    /// The file as TOML.
+    ///
+    /// # Errors
+    ///
+    /// [`BaselineError::Serialize`] if it does not serialize.
+    pub fn to_toml(&self) -> Result<String, BaselineError> {
+        let body = toml::to_string(self).map_err(BaselineError::Serialize)?;
+        Ok(format!(
+            "# The performance baseline of ferrohealth-perf, one [[baseline]] per CPU model.\n\
+             # `ferrohealth-perf run --update` writes or lowers the entry of the runner's\n\
+             # model; a raise is a hand edit in a change that says why.\n{body}"
+        ))
+    }
+
+    /// Writes the file to `path`, through a rename.
+    ///
+    /// # Errors
+    ///
+    /// [`BaselineError::Serialize`] or [`BaselineError::Io`].
+    pub fn write(&self, path: &Path) -> Result<(), BaselineError> {
+        let text = self.to_toml()?;
+        let io = |source| BaselineError::Io {
+            path: path.display().to_string(),
+            source,
+        };
+        if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(io)?;
+        }
+        let partial = path.with_extension("toml.partial");
+        std::fs::write(&partial, text).map_err(io)?;
+        std::fs::rename(&partial, path).map_err(io)
+    }
+}
+
+impl Baseline {
+    /// The CPU model the entry was measured on, its key.
+    #[must_use]
+    pub fn model(&self) -> Option<&str> {
+        self.host.cpu_model.as_deref()
     }
 
     fn check(&self) -> Result<(), BaselineError> {
@@ -223,45 +333,24 @@ impl Baseline {
         }
         Ok(())
     }
-
-    /// The baseline as TOML.
-    ///
-    /// # Errors
-    ///
-    /// [`BaselineError::Serialize`] if it does not serialize.
-    pub fn to_toml(&self) -> Result<String, BaselineError> {
-        let body = toml::to_string(self).map_err(BaselineError::Serialize)?;
-        Ok(format!(
-            "# The performance baseline of ferrohealth-perf. `ferrohealth-perf run --update`\n\
-             # lowers it; a raise is a hand edit in a change that says why.\n{body}"
-        ))
-    }
-
-    /// Writes the baseline to `path`, through a rename.
-    ///
-    /// # Errors
-    ///
-    /// [`BaselineError::Serialize`] or [`BaselineError::Io`].
-    pub fn write(&self, path: &Path) -> Result<(), BaselineError> {
-        let text = self.to_toml()?;
-        let io = |source| BaselineError::Io {
-            path: path.display().to_string(),
-            source,
-        };
-        if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
-            std::fs::create_dir_all(dir).map_err(io)?;
-        }
-        let partial = path.with_extension("toml.partial");
-        std::fs::write(&partial, text).map_err(io)?;
-        std::fs::rename(&partial, path).map_err(io)
-    }
 }
 
-/// Brings a baseline of `schema` to [`SCHEMA`]. Schema 1 is the first, so
-/// today every older schema is unknown; a bump adds its step here.
-fn migrate(schema: i64, table: toml::Table) -> Result<toml::Table, BaselineError> {
+/// Brings a baseline file of `schema` to [`SCHEMA`]. Schema 1 held one
+/// baseline at the top level, which becomes the one entry, keyed by the
+/// CPU model its host names.
+fn migrate(schema: i64, mut table: toml::Table) -> Result<toml::Table, BaselineError> {
     match schema {
         SCHEMA => Ok(table),
+        1 => {
+            table.remove("schema");
+            let mut file = toml::Table::new();
+            file.insert("schema".to_owned(), toml::Value::Integer(SCHEMA));
+            file.insert(
+                "baseline".to_owned(),
+                toml::Value::Array(vec![toml::Value::Table(table)]),
+            );
+            Ok(file)
+        }
         other => Err(BaselineError::Schema(other)),
     }
 }
@@ -303,7 +392,8 @@ pub struct Update<'a> {
     pub written: &'a str,
 }
 
-/// The baseline an update writes, and what it did to each metric.
+/// The entry an update writes for the run's CPU model, and what it did to
+/// each metric; `old` is the entry of that model, if the file holds one.
 ///
 /// With no old baseline, or one of another plan, the run's metrics become
 /// the baseline. On the same plan each metric moves to the better of the
@@ -315,7 +405,6 @@ pub fn updated(old: Option<&Baseline>, update: &Update<'_>) -> (Baseline, Vec<Ch
     let fresh = |changes| {
         (
             Baseline {
-                schema: SCHEMA,
                 tool: update.tool.to_owned(),
                 written: update.written.to_owned(),
                 plan: update.plan.clone(),

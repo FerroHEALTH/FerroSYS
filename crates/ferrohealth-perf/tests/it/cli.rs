@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use ferrohealth_perf::baseline::Baseline;
+use ferrohealth_perf::baseline::{Baseline, Baselines};
 use ferrohealth_perf::metric::Metric;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -88,8 +88,14 @@ async fn update_then_compare_then_a_regression_then_a_refused_update() {
         text(&written.stdout),
         text(&written.stderr)
     );
-    let stored = Baseline::read(&baseline).unwrap().unwrap();
+    let file = Baselines::read(&baseline).unwrap().unwrap();
+    assert_eq!(1, file.entries.len(), "one entry, the runner's model");
+    let stored = file.entries.first().unwrap().clone();
     assert!(!stored.noise.is_empty(), "the A/A floor is stored");
+    let only = |entry: Baseline| Baselines {
+        schema: file.schema,
+        entries: vec![entry],
+    };
     let latest = reports.join("latest.json");
     assert!(latest.is_file());
     let dated = std::fs::read_dir(&reports)
@@ -127,7 +133,7 @@ async fn update_then_compare_then_a_regression_then_a_refused_update() {
     let p50 = Metric::try_from("ok.p50_ms".to_owned()).unwrap();
     strict.metrics.insert(p50, 1.0);
     strict.noise.clear();
-    strict.write(&baseline).unwrap();
+    only(strict.clone()).write(&baseline).unwrap();
     let regressed = perf(&["compare", "--report", report, "--baseline", base], &step);
     assert_eq!(
         Some(1),
@@ -145,12 +151,27 @@ async fn update_then_compare_then_a_regression_then_a_refused_update() {
     let refused = run(true);
     assert_eq!(Some(1), refused.status.code(), "{}", text(&refused.stdout));
     assert!(text(&refused.stdout).contains("--update was refused"));
-    assert_eq!(Some(strict.clone()), Baseline::read(&baseline).unwrap());
+    assert_eq!(
+        Some(only(strict.clone())),
+        Baselines::read(&baseline).unwrap()
+    );
+
+    // A file with no entry for the runner's model cannot judge the report.
+    let mut elsewhere = strict.clone();
+    elsewhere.host.cpu_model = Some("A CPU no runner has".to_owned());
+    only(elsewhere).write(&baseline).unwrap();
+    let unknown = perf(&["compare", "--report", report, "--baseline", base], &step);
+    assert_eq!(Some(2), unknown.status.code(), "{}", text(&unknown.stdout));
+    assert!(
+        text(&unknown.stdout).contains("no entry for the CPU model"),
+        "{}",
+        text(&unknown.stdout)
+    );
 
     // A baseline of another plan cannot judge the report.
     let mut other = strict;
     other.plan.rate = 1.0;
-    other.write(&baseline).unwrap();
+    only(other).write(&baseline).unwrap();
     let mismatched = perf(&["compare", "--report", report, "--baseline", base], &step);
     assert_eq!(
         Some(2),

@@ -10,6 +10,26 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
+### Changed
+
+- Breaking: `perf/baseline.toml` holds one `[[baseline]]` entry per CPU
+  model, keyed by the model string of the host fingerprint, because shared
+  CI runners mix CPU generations and a load metric is comparable only on a
+  like CPU (#258). `run` and `compare` judge the load phase against the
+  entry for the runner's model. A model with no entry cannot be judged and
+  exits 2, naming the model, the models the file holds and how to add the
+  entry; the idle limits and the failed requests still judge that run, and
+  a breach still exits 1. `--update` writes or tightens the entry for the
+  runner's model alone and leaves every other entry as it was. The file
+  moves to schema 2, and a schema-1 file is read as one entry of the model
+  its host names, so a committed baseline keeps working. In the library,
+  `baseline::Baselines` is the file with `read`, `parse`, `entry`, `with`
+  and `write`; `Baseline` is one entry and loses `schema`, `read`, `parse`,
+  `to_toml` and `write`; `compare::judge_file` judges against a file, and
+  `run::conclude` takes the file.
+
 ## [0.1.1] - 2026-11-06
 
 ### Fixed

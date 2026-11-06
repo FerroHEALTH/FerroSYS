@@ -5,8 +5,9 @@
 //! `--update` a second load phase for the A/A noise floor; then the
 //! judgement, the report files and the baseline.
 //!
-//! `--update` writes the baseline only from a run that passes: a breach or
-//! a run that cannot be judged leaves the file as it was. No specification
+//! `--update` writes the baseline entry of the runner's CPU model only from
+//! a run that passes, and leaves every other entry as it was: a breach or a
+//! run that cannot be judged leaves the file as it was. No specification
 //! governs the run: our own design.
 
 use std::path::{Path, PathBuf};
@@ -19,8 +20,8 @@ use thiserror::Error;
 use tokio::time::{Instant, sleep, sleep_until};
 use url::Url;
 
-use crate::baseline::{self, Baseline, BaselineError, Change, Update};
-use crate::compare::{Outcome, Verdict, judge};
+use crate::baseline::{self, BaselineError, Baselines, Change, Update};
+use crate::compare::{Outcome, Verdict, judge_file};
 use crate::database::{DatabaseError, Transactions, WITNESS_INTERVAL};
 use crate::fingerprint::Fingerprint;
 use crate::load::{self, LoadError};
@@ -298,7 +299,7 @@ async fn load_phase(
 /// cannot be read, a load phase that fails, or a report or baseline that
 /// cannot be written.
 pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
-    let old = Baseline::read(&options.baseline)?;
+    let old = Baselines::read(&options.baseline)?;
     let base = Url::parse(options.base_url.expose())
         .map_err(|source| RunError::BaseUrl(options.base_url.redacted(), source))?;
     let client = reqwest::Client::builder()
@@ -361,10 +362,10 @@ pub fn identity(plan: &Plan) -> PlanIdentity {
 /// written or a histogram does not decode.
 pub fn conclude(
     report: Report,
-    old: Option<&Baseline>,
+    old: Option<&Baselines>,
     options: &RunOptions,
 ) -> Result<RunResult, RunError> {
-    let verdict = judge(&report, old, options.update)?;
+    let verdict = judge_file(&report, old, options.update)?;
     let report_path = report.write(&options.out_dir, &stamp())?;
     let mut text = summary::markdown(&report, &verdict);
     let mut changes = None;
@@ -376,8 +377,9 @@ pub fn conclude(
                 None => std::collections::BTreeMap::new(),
             };
             let written = now();
+            let entry = old.and_then(|file| file.entry(report.host.cpu_model.as_deref()));
             let (baseline, done) = baseline::updated(
-                old,
+                entry,
                 &Update {
                     metrics: &metrics,
                     noise,
@@ -387,8 +389,13 @@ pub fn conclude(
                     written: &written,
                 },
             );
-            baseline.write(&options.baseline)?;
-            text.push_str(&changes_markdown(&options.baseline, &done));
+            let file = old.cloned().unwrap_or(Baselines {
+                schema: baseline::SCHEMA,
+                entries: Vec::new(),
+            });
+            let model = baseline::model_name(baseline.model());
+            file.with(baseline).write(&options.baseline)?;
+            text.push_str(&changes_markdown(&options.baseline, &model, &done));
             changes = Some(done);
         } else {
             text.push_str("### Baseline\n\n--update was refused: only a run that passes writes the baseline.\n");
@@ -403,8 +410,11 @@ pub fn conclude(
     })
 }
 
-fn changes_markdown(path: &Path, changes: &[Change]) -> String {
-    let mut text = format!("### Baseline\n\nWritten to `{}`:\n\n", path.display());
+fn changes_markdown(path: &Path, model: &str, changes: &[Change]) -> String {
+    let mut text = format!(
+        "### Baseline\n\nThe entry for the CPU model {model}, written to `{}`:\n\n",
+        path.display()
+    );
     for change in changes {
         let item = match change {
             Change::Added(metric, value) => format!("{metric} added at {value:.3}"),
@@ -419,4 +429,73 @@ fn changes_markdown(path: &Path, changes: &[Change]) -> String {
         text.push('\n');
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::baseline::Baseline;
+    use crate::report::fixture;
+
+    fn options(dir: &Path) -> RunOptions {
+        RunOptions {
+            plan: Plan::parse(
+                "[[requests]]\ngroup = \"read\"\nmethod = \"GET\"\npath = \"/\"\nstatus = 200\n",
+            )
+            .unwrap(),
+            target: Target::Pid(1),
+            base_url: SecretUrl::new("http://127.0.0.1:8080".to_owned()),
+            database_url: None,
+            baseline: dir.join("perf/baseline.toml"),
+            out_dir: dir.join("reports"),
+            update: true,
+        }
+    }
+
+    fn on_model(latency_ms: u64, model: &str) -> Report {
+        let mut report = fixture::report();
+        report.host.cpu_model = Some(model.to_owned());
+        report.load = fixture::load(latency_ms, 250);
+        report.calibration = Some(fixture::load(latency_ms, 250));
+        report
+    }
+
+    #[test]
+    fn an_update_writes_the_entry_of_the_runners_model_and_keeps_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = options(dir.path());
+        conclude(on_model(20, "EPYC 7763"), None, &options).unwrap();
+        let first = Baselines::read(&options.baseline).unwrap().unwrap();
+        let slow = first.entry(Some("EPYC 7763")).unwrap().clone();
+
+        let result = conclude(on_model(10, "EPYC 9V45"), Some(&first), &options).unwrap();
+        assert!(
+            result
+                .summary
+                .contains("The entry for the CPU model `EPYC 9V45`"),
+            "{}",
+            result.summary
+        );
+        let both = Baselines::read(&options.baseline).unwrap().unwrap();
+        assert_eq!(2, both.entries.len());
+        assert_eq!(Some(&slow), both.entry(Some("EPYC 7763")), "untouched");
+
+        // A faster run of the slow model tightens its entry alone.
+        let fast = both.entry(Some("EPYC 9V45")).unwrap().clone();
+        conclude(on_model(15, "EPYC 7763"), Some(&both), &options).unwrap();
+        let after = Baselines::read(&options.baseline).unwrap().unwrap();
+        assert_eq!(Some(&fast), after.entry(Some("EPYC 9V45")), "untouched");
+        let p50 = |entry: &Baseline| {
+            entry
+                .metrics
+                .iter()
+                .find(|(metric, _)| metric.to_string() == "read.p50_ms")
+                .map(|(_, value)| *value)
+                .unwrap()
+        };
+        assert!(
+            p50(after.entry(Some("EPYC 7763")).unwrap()) < p50(&slow),
+            "the slow model's entry tightened"
+        );
+    }
 }
