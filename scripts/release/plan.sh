@@ -39,7 +39,7 @@
 # logged-in gh locally). Exit 2 on a usage error.
 set -euo pipefail
 
-readonly TAG_RE='^ferrohealth-(secret|config|telemetry|health|server|usage-report)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+readonly TAG_RE='^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 # The support period in years from the release date: the minimum of
 # Regulation (EU) 2024/2847 Art 13(8), as SECURITY.md states it.
 readonly SUPPORT_YEARS=5
@@ -208,8 +208,15 @@ check_changelog_structure() { bash scripts/checks/changelog-structure.sh "$CHANG
 
 # The crate's public API against its newest version on crates.io: a break
 # needs a minor bump (https://doc.rust-lang.org/cargo/reference/semver.html),
-# which keeps the caret requirements between FerroSYS crates safe.
-check_semver() { bash scripts/checks/semver.sh "$CRATE"; }
+# which keeps the caret requirements between FerroSYS crates safe. A first
+# release, with no tag of its crate below it, has no version to compare.
+check_semver() {
+  if ! git ls-remote --tags --refs origin | sed 's#.*refs/tags/##' | order_prev "$TAG" | grep -q .; then
+    echo "the first release of $CRATE has no version on crates.io to compare against"
+    return 0
+  fi
+  bash scripts/checks/semver.sh "$CRATE"
+}
 
 # The cut refreshes the link references: [Unreleased] compares from the tag
 # being cut and the cut version has a link of its own (Keep a Changelog 1.1.0
@@ -240,12 +247,14 @@ check_changelog_security() {
 }
 
 # readme_pins CRATE: reads a README on stdin and prints the version of every
-# install line that pins CRATE exactly (`<crate> = "=X.Y.Z"` or
-# `<crate> = { version = "=X.Y.Z", ... }`), one per line.
+# install line that pins CRATE exactly (`<crate> = "=X.Y.Z"`,
+# `<crate> = { version = "=X.Y.Z", ... }`, or, for a binary,
+# `cargo install <crate> --version =X.Y.Z`), one per line.
 readme_pins() {
   local crate_name="$1"
   awk -v crate="$crate_name" '
-    index($0, crate " = ") == 1 && match($0, /"=[^"]*"/) { print substr($0, RSTART + 2, RLENGTH - 3) }
+    index($0, crate " = ") == 1 && match($0, /"=[^"]*"/) { print substr($0, RSTART + 2, RLENGTH - 3); next }
+    index($0, "cargo install " crate " ") > 0 && match($0, /--version =[^ ]+/) { print substr($0, RSTART + 11, RLENGTH - 11) }
   '
 }
 
@@ -369,6 +378,7 @@ self_test() {
   expect "a hyphenated crate name" "$got" "ferrohealth-usage-report-v0.1.0"
   expect "the crate of a secret tag" "$(crate_of ${secret}0.1.0)" "ferrohealth-secret"
   expect "the crate of a usage-report pre-release" "$(crate_of ferrohealth-usage-report-v0.1.0-rc.1)" "ferrohealth-usage-report"
+  expect "the crate of a perf tag" "$(crate_of ferrohealth-perf-v0.1.0)" "ferrohealth-perf"
   expect "the version of a pre-release" "$(version_of ferrohealth-server-v0.1.0-rc.1)" "0.1.0-rc.1"
   expect "the changelog of a tag" "$(changelog_of ferrohealth-health-v0.1.0)" "crates/ferrohealth-health/CHANGELOG.md"
   expect "a plain date" "$(support_end 2026-10-23)" "October 2031"
@@ -382,6 +392,8 @@ self_test() {
   expect "a plain install line" "$got" "0.2.0"
   got="$(printf '%s\n' 'ferrohealth-telemetry = { version = "=0.1.0", features = ["axum"] }' | readme_pins ferrohealth-telemetry)"
   expect "an install line with features" "$got" "0.1.0"
+  got="$(printf '%s\n' 'cargo install ferrohealth-perf --version =0.1.0 --locked' 'cargo install other --version =9.9.9' | readme_pins ferrohealth-perf)"
+  expect "a binary's install line" "$got" "0.1.0"
   got="$(printf '%s\n' 'ferrohealth-secret = "=0.2.0"' 'ferrohealth-config = "=0.1.0"' | readme_pins ferrohealth-config)"
   expect "another crate's line is not this crate's" "$got" "0.1.0"
   got="$(printf '%s\n' 'Pin ferrohealth-health = "=9.9.9" in prose.' 'ferrohealth-health = "0.1"' | readme_pins ferrohealth-health)"

@@ -10,3 +10,11 @@ becomes available under the Apache License, Version 2.0 on its Change Date.
 The specifications this software implements are published by their own bodies
 under their own terms, and vendored material keeps its upstream terms, recorded
 beside it.
+
+ferrohealth-perf follows the design of the performance instruments of
+Veredictum (https://github.com/Vernum-Projecten/Veredictum, Copyright 2026
+Vernum Projecten B.V. and the Veredictum contributors, Apache License 2.0):
+the open-loop arrival schedule with its coordinated-omission correction, the
+rank intervals and minimum samples of its quantiles, the steadiness check,
+the host fingerprint and the A/A noise floor. The code here is written anew;
+no Veredictum file is copied.

@@ -50,7 +50,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$CRATE" in
-            ferrohealth-secret | ferrohealth-config | ferrohealth-telemetry | ferrohealth-health | ferrohealth-server | ferrohealth-usage-report) ;;
+            ferrohealth-secret | ferrohealth-config | ferrohealth-telemetry | ferrohealth-health | ferrohealth-server | ferrohealth-usage-report | ferrohealth-perf) ;;
             *) echo "::error::'$CRATE' is not a published member" >&2; exit 1 ;;
           esac
           cargo package -p "$CRATE" --locked

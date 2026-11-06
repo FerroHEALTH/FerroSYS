@@ -27,4 +27,6 @@ FerroAUTH and FerroAUDIT, and its lockup is drawn in the parent's steel.
 **How to apply:** never describe FerroSYS as a service that servers report to
 or are configured from, and never promise one. Each crate has its own version line and `<crate>-vX.Y.Z` tag, and
 every release rolls out to every product at once. No crate is built before
-its crates.io name is reserved, which needs the owner.
+its crates.io name is reserved, which needs the owner. The seventh crate,
+`ferrohealth-perf` (#249), is a CI tool that runs beside a product and that
+no product links.

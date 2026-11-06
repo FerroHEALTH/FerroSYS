@@ -44,6 +44,7 @@ readonly CRATES=(
   ferrohealth-telemetry
   ferrohealth-server
   ferrohealth-usage-report
+  ferrohealth-perf
 )
 
 # The crate a release tag names: the text before its last `-v`, when that is
@@ -207,7 +208,8 @@ self_test() {
   expect "a tag without a release is refused" 1 "no GitHub release" -- tag ferrohealth-secret-v1.2.0 1.2.0 ferrohealth-secret-v
   expect "a draft release is refused" 1 "is a draft" -- tag ferrohealth-secret-v1.1.0 1.1.0 ferrohealth-secret-v
   expect "a usage-report tag of another version is refused" 1 "whose tag is ferrohealth-usage-report-v0.2.0" -- tag ferrohealth-usage-report-v0.1.0 0.2.0 ferrohealth-usage-report-v
-  if [[ "$(crate_of_tag ferrohealth-usage-report-v0.1.0)" != ferrohealth-usage-report || "$(crate_of_tag ferrohealth-secret-v0.7.0)" != ferrohealth-secret ]] ||
+  if [[ "$(crate_of_tag ferrohealth-usage-report-v0.1.0)" != ferrohealth-usage-report || "$(crate_of_tag ferrohealth-secret-v0.7.0)" != ferrohealth-secret ||
+    "$(crate_of_tag ferrohealth-perf-v0.1.0)" != ferrohealth-perf ]] ||
     crate_of_tag main > /dev/null || crate_of_tag v0.6.0 > /dev/null || crate_of_tag ferrohealth-smart-v0.7.0 > /dev/null || crate_of_tag ferrohealth-secret-vX > /dev/null; then
     echo "FAIL: the crate of a tag" >&2
     fails=$((fails + 1))

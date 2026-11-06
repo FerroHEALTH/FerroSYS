@@ -12,7 +12,8 @@
 # request over the workspace, and the release plan over the crate a tag
 # releases.
 #
-#   semver.sh [<crate>...]   check the named crates, or every crate
+#   semver.sh [<crate>...]   check the named crates, or every crate past
+#                            0.0.0
 #   semver.sh --pin          print the cargo-semver-checks version pinned in
 #                            docs/VERSIONS.md, which CI installs
 #
@@ -43,9 +44,20 @@ if [[ "$installed" != "cargo-semver-checks $pin" ]]; then
   exit 2
 fi
 
+# A crate at 0.0.0 has no release on crates.io to compare against: it holds
+# its name or waits for its first release, so it is left out.
 args=()
 if [[ "$#" -eq 0 ]]; then
-  args=(--workspace)
+  for manifest in "$root"/crates/*/Cargo.toml; do
+    crate="$(basename "$(dirname "$manifest")")"
+    version="$(awk '/^\[package\]/{p=1; next} /^\[/{p=0}
+      p && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; exit}' "$manifest")"
+    if [[ "$version" == "0.0.0" ]]; then
+      echo "semver: $crate is at 0.0.0, with no release to compare against"
+      continue
+    fi
+    args+=(--package "$crate")
+  done
 else
   for crate in "$@"; do args+=(--package "$crate"); done
 fi

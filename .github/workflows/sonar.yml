@@ -33,6 +33,21 @@ jobs:
     permissions:
       contents: read
       pull-requests: read # PR decoration reads the pull-request metadata
+    # The PostgreSQL of the ferrohealth-perf cases, as in ci.yml's nextest job.
+    services:
+      postgres:
+        image: postgres:18.6@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      FERROHEALTH_PERF_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
