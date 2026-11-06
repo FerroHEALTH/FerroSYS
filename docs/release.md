@@ -11,8 +11,8 @@ under `crates/` releases on its own version line:
 | `<crate>` | `<crate>-vX.Y.Z` | `[package]` of `crates/<crate>/Cargo.toml` | `crates/<crate>/CHANGELOG.md` |
 
 The crates are `ferrohealth-secret`, `ferrohealth-config`,
-`ferrohealth-telemetry`, `ferrohealth-health`, `ferrohealth-server` and
-`ferrohealth-usage-report` (`docs/architecture.md`). A crate holds its name
+`ferrohealth-telemetry`, `ferrohealth-health`, `ferrohealth-server`,
+`ferrohealth-usage-report` and `ferrohealth-perf` (`docs/architecture.md`). A crate holds its name
 at 0.0.0 until its first release.
 
 A release is the signed tag on the merge commit of the release pull request
@@ -109,7 +109,7 @@ tracker, and the pinned `cargo-semver-checks` installed
 |---|---|
 | The milestone titled as the tag holds no open item | `scripts/release/milestone.sh check` |
 | The crate's version names the tag's version | `plan.sh` |
-| The crate's public API breaks nothing its version does not allow, against its newest version on crates.io (`cargo-semver-checks` at the version `docs/VERSIONS.md` pins) | `scripts/checks/semver.sh` |
+| The crate's public API breaks nothing its version does not allow, against its newest version on crates.io (`cargo-semver-checks` at the version `docs/VERSIONS.md` pins); a crate's first release has nothing there and passes, and the pull-request check leaves out a crate at 0.0.0 | `scripts/checks/semver.sh` |
 | Every section of the changelog holds Keep a Changelog types, each once | `scripts/checks/changelog-structure.sh` |
 | `[Unreleased]` compares from the tag, and the cut version has its link | `plan.sh` |
 | The crate's `README.md` install line pins the version being released (a pre-release is exempt) | `plan.sh` |

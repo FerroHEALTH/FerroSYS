@@ -14,6 +14,15 @@ beside the copy. Move a pin here, re-run the script, and commit both.
 | IETF RFC 5280 | `https://www.rfc-editor.org/rfc/rfc5280.txt` sha256 `a2f2628c0a83b873fc4786abd921f9b2c02395954b655d190bf16b831633345d`, the X.509 certificate and CRL profile | `docs/specs/ietf-pkix/` | `scripts/vendor/ietf-pkix.sh` |
 | IETF RFC 6960 | `https://www.rfc-editor.org/rfc/rfc6960.txt` sha256 `7e63ffa1ea2ce2737d9aaf895a63776e9105ddbdfc97b8ae4029e3e825b4cdea`, the Online Certificate Status Protocol | `docs/specs/ietf-pkix/` | `scripts/vendor/ietf-pkix.sh` |
 
+## Test images
+
+The images a CI job starts beside the tests, pinned by tag and by the index
+digest the registry answered on the day of the pin.
+
+| Image | Pin | Used by |
+|---|---|---|
+| PostgreSQL | `postgres:18.6@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583` (2026-11-06) | the `services` of the `nextest` job in `.github/workflows/ci.yml`, for the `pg_stat_database` cases of `ferrohealth-perf` |
+
 ## Tools
 
 The tools a check runs at a pinned version. CI installs each through

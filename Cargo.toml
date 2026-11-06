@@ -88,6 +88,13 @@ aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-
 der = { version = "0.7.10", default-features = false, features = ["std", "oid"] }
 x509-cert = { version = "0.2.5", default-features = false, features = ["std"] }
 x509-ocsp = { version = "0.2.1", default-features = false }
+# ferrohealth-perf: the latency histograms with their V2 encoding, the
+# base64 wrapper of that encoding on the line hdrhistogram resolves, and the
+# PostgreSQL client that reads pg_stat_database. Verified against crates.io
+# on 2026-11-06.
+hdrhistogram = { version = "7.6.0", default-features = false, features = ["serialization"] }
+base64 = "0.22.1"
+tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime"] }
 # tools/forwarders: the parser of the forwarder ratchet, on the lines the
 # workspace already locks. Verified against crates.io on 2026-11-04.
 anyhow = "1.0.104"

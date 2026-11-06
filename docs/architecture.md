@@ -55,6 +55,20 @@ crates.io belongs to an unrelated project.
 | `ferrohealth-server` | the HTTP middleware stack, the shutdown drain, the health routes, the healthcheck client, the CLI skeleton and the run path around it, the build info and banner; the console security headers behind `console` | one unit every server and console takes whole | every server and console |
 | `ferrohealth-usage-report` | the FerroPULSE envelope v2, the instance id under `state_dir`, the latency window, the `start` and `daily` reporter | its own wire contract and off switch; only servers send it | the five servers |
 
+### The performance gate
+
+`ferrohealth-perf` is the one crate that runs beside a product, not inside
+it: a CLI a product's CI job runs against the server and the PostgreSQL it
+starts (#249). An idle phase holds the server's CPU time and the database's
+transactions per second to absolute limits; an open-loop load phase compares
+latency per request group, throughput, peak memory, CPU per request and
+transactions per request with the product's committed `perf/baseline.toml`.
+It takes `ferrohealth-secret` for its URLs and no other FerroSYS crate, and
+no product links it. Its open-loop schedule, the rank intervals of its
+quantiles, its steadiness check, its host fingerprint and its A/A noise floor
+follow Veredictum's `perf` (Apache-2.0), re-implemented here and credited in
+`NOTICE`.
+
 ### Dependency direction
 
 ```
@@ -255,3 +269,4 @@ product uses either, and the readiness document is our own design.
 | 2026-10-26 | The console OIDC sign-in and session store go to FerroAUTH | owner |
 | 2026-10-26 | FerroEHR's management surface stays in FerroEHR for now | owner |
 | 2026-10-26 | The lockup is drawn in the parent's steel, as for every shared library | owner |
+| 2026-11-06 | `ferrohealth-perf`, the performance gate, is built here, borrowing from Veredictum; its crate label is `perf-gate` | #249 |

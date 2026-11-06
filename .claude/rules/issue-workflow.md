@@ -117,8 +117,9 @@ Labels carry what the platform has no field for. Bootstrap them with
   `chore`, `refactor`, `perf`, `test`, `ci`. A `Bug` and a `Feature` carry
   none, because the type already names the commit type.
 - **Crate, on every issue, at least ONE:** `secret`, `config`, `telemetry`,
-  `health`, `server`, `usage-report`, naming the `ferrohealth-*` crate the
-  work lands in.
+  `health`, `server`, `usage-report`, `perf-gate`, naming the
+  `ferrohealth-*` crate the work lands in. The `ferrohealth-perf` crate's
+  label is `perf-gate`, because `perf` is the work-kind label.
 - **Specification, where one applies:** `spec:OpenTelemetry` (the
   OpenTelemetry specification and W3C Trace Context) and `spec:TLS` (TLS 1.3
   and certificate handling). Add one when a crate starts to implement

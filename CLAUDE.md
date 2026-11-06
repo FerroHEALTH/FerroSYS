@@ -20,11 +20,13 @@ package here takes it.
 
 ## State of the repository
 
-The six crates of `docs/architecture.md` exist under `crates/` and are on
-crates.io, each released on its own version line by its own tag
+The six library crates of `docs/architecture.md` exist under `crates/` and
+are on crates.io, each released on its own version line by its own tag
 (`docs/release.md`): `ferrohealth-secret`, `ferrohealth-config`,
 `ferrohealth-telemetry`, `ferrohealth-health`, `ferrohealth-server` and
-`ferrohealth-usage-report`. Each crate's `Cargo.toml` and `CHANGELOG.md`
+`ferrohealth-usage-report`. Beside them, `ferrohealth-perf` is the
+performance gate a product's CI job runs against its server (#249), a CLI
+on its own version line that no product links. Each crate's `Cargo.toml` and `CHANGELOG.md`
 name its version and what it shipped. Planned work lives on the milestones,
 one per crate release, never as a prose promise in the README; describe
 only what exists. A new crate is added only after its issue is filed, its
@@ -78,7 +80,8 @@ milestone set and its crates.io name reserved, which needs the owner.
   `CHANGELOG.md` and released by the tag `<crate>-vX.Y.Z`.
 - `tools/forwarders`: the `syn` detector of the forwarder ratchet, a
   workspace member that publishes nothing and depends on no workspace crate.
-- `docs/architecture.md`: the design of record, the plan for the six crates.
+- `docs/architecture.md`: the design of record, the plan for the six crates
+  and the performance gate.
 - `assets/brand/`: the gauge mark, the steel lockup and the "Olive & Iron" tokens.
 - `scripts/gh/`: the tracker helpers (`fields.sh` for the issue type and the
   `Priority` and `Effort` fields, `labels.sh`, `rel.sh` for sub-issue and
