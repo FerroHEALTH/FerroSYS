@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use super::*;
-use crate::baseline::{Update, updated};
+use crate::baseline::{Baselines, Update, updated};
 use crate::report::fixture;
 
 fn baseline_of(report: &Report) -> Baseline {
@@ -232,4 +232,80 @@ fn another_host_is_a_warning() {
         "{:?}",
         verdict.warnings
     );
+}
+
+fn on_model(mut report: Report, model: &str) -> Report {
+    report.host.cpu_model = Some(model.to_owned());
+    report
+}
+
+fn file_of(entries: Vec<Baseline>) -> Baselines {
+    entries.into_iter().fold(
+        Baselines {
+            schema: crate::baseline::SCHEMA,
+            entries: Vec::new(),
+        },
+        Baselines::with,
+    )
+}
+
+#[test]
+fn a_run_is_judged_against_the_entry_of_its_cpu_model() {
+    let fast = on_model(fixture::report(), "EPYC 9V45");
+    let mut slow = on_model(fixture::report(), "EPYC 7763");
+    slow.load = fixture::load(20, 250);
+    let file = file_of(vec![baseline_of(&fast), baseline_of(&slow)]);
+    // The slow model is twice the fast one's latency, and passes on its own entry.
+    let verdict = judge_file(&slow, Some(&file), false).unwrap();
+    assert_eq!(Outcome::Pass, verdict.outcome, "{verdict:?}");
+    // Against the fast entry the same run would breach.
+    let against_fast = judge(&slow, file.entry(Some("EPYC 9V45")), false).unwrap();
+    assert_eq!(Outcome::Fail, against_fast.outcome);
+}
+
+#[test]
+fn a_model_with_no_entry_cannot_be_judged_and_is_named() {
+    let known = on_model(fixture::report(), "EPYC 9V45");
+    let file = file_of(vec![baseline_of(&known)]);
+    let unknown = on_model(fixture::report(), "EPYC 7763");
+    let verdict = judge_file(&unknown, Some(&file), false).unwrap();
+    assert_eq!(Outcome::Invalid, verdict.outcome);
+    assert_eq!(2, verdict.outcome.code());
+    let problem = &verdict.problems[0];
+    assert!(
+        problem.contains("no entry for the CPU model `EPYC 7763`"),
+        "{problem}"
+    );
+    assert!(problem.contains("it holds `EPYC 9V45`"), "{problem}");
+    assert!(problem.contains("--update"), "{problem}");
+    assert!(
+        verdict.checks.iter().all(|c| c.name.starts_with("idle.")),
+        "no load metric is judged: {:?}",
+        verdict.checks
+    );
+    assert_eq!(
+        Outcome::Pass,
+        judge_file(&unknown, Some(&file), true).unwrap().outcome,
+        "an update writes the model's entry"
+    );
+}
+
+#[test]
+fn the_idle_limits_judge_a_model_with_no_entry() {
+    let known = on_model(fixture::report(), "EPYC 9V45");
+    let file = file_of(vec![baseline_of(&known)]);
+    let mut busy = on_model(fixture::report(), "EPYC 7763");
+    busy.idle.transactions_per_second = Some(8_000.0);
+    let verdict = judge_file(&busy, Some(&file), false).unwrap();
+    assert_eq!(
+        Outcome::Fail,
+        verdict.outcome,
+        "a breach outranks the missing entry"
+    );
+    assert_eq!(
+        "idle.transactions_per_second",
+        verdict.breaches().next().unwrap().name
+    );
+    let none = judge_file(&busy, None, false).unwrap();
+    assert_eq!(Outcome::Fail, none.outcome, "and so does a missing file");
 }

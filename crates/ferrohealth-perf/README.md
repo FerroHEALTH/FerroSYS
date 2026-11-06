@@ -55,27 +55,29 @@ Pin the version exactly, as every FerroHEALTH product does.
 ```sh
 ferrohealth-perf run --pid "$SERVER_PID" --base-url http://127.0.0.1:8080 \
   --database-url "$DATABASE_URL"
-ferrohealth-perf run ... --update      # write or lower the baseline
+ferrohealth-perf run ... --update      # write or lower this CPU model's entry
 ferrohealth-perf compare --report target/perf/latest.json
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--plan` | `perf/plan.toml` | the limits, the load and the request set |
-| `--baseline` | `perf/baseline.toml` | the committed baseline |
+| `--baseline` | `perf/baseline.toml` | the committed baseline, one entry per CPU model |
 | `--pid`, `--cgroup`, `--container` | one is required | the server's process, cgroup or container |
 | `--cgroup-root` | `/sys/fs/cgroup` | where `--container` looks |
 | `--base-url` | required | the server's base URL |
 | `--database-url` | `FERROHEALTH_PERF_DATABASE_URL` | the database whose transactions are counted |
 | `--out-dir` | `target/perf` | where the JSON reports go |
 | `--summary` | none | a file the Markdown summary is also written to |
-| `--update` | off | write the baseline from a run that passes |
+| `--update` | off | write the entry of the runner's CPU model from a run that passes |
 
 Exit codes: **0** the run passed, **1** a limit or tolerance was breached
 or a request was answered other than expected, **2** the run cannot be
-judged (no baseline, a baseline of another plan, a metric the baseline
-holds and the run lacks, a lagging generator, an unsteady window) or a
-harness error. Every credential in a URL is redacted in the output.
+judged (no baseline, no entry for the runner's CPU model, a baseline of
+another plan, a metric the baseline holds and the run lacks, a lagging
+generator, an unsteady window) or a harness error. The idle limits judge
+every run, so a busy server fails with 1 even where the load phase cannot
+be judged. Every credential in a URL is redacted in the output.
 
 ## The plan, `perf/plan.toml`
 
@@ -118,37 +120,51 @@ it.
 
 ## The baseline, `perf/baseline.toml`
 
-`--update` writes it: one load phase is judged like any run, a second one
-measures the A/A noise floor, and only a run that passes is written. On the
-same plan each metric moves only to the better of the baseline and the run,
-so the baseline is a ratchet; a raise is a hand edit in a change that says
-why. A plan with another rate, window or request set writes it afresh.
+Shared CI runners mix CPU generations: on GitHub's hosted ubuntu runners
+the same commit measured 25 to 45 % slower on an AMD EPYC 7763 than on an
+EPYC 9V45. A latency or a CPU time is comparable only on a like CPU, so the
+file holds one `[[baseline]]` entry per CPU model, keyed by the
+`cpu_model` of the host fingerprint (`model name` in `/proc/cpuinfo`). A
+run is judged against the entry for its own model. A model with no entry
+cannot be judged: the run exits 2, naming the model and the models the file
+holds, and the idle limits still judge it.
+
+`--update` writes the entry of the runner's model: one load phase is judged
+like any run, a second one measures the A/A noise floor, and only a run
+that passes is written. Every other entry is left as it was. On the same
+plan each metric of the entry moves only to the better of the entry and the
+run, so the entry is a ratchet; a raise is a hand edit in a change that
+says why. A plan with another rate, window or request set writes the entry
+afresh.
 
 ```toml
-schema = 1
-tool = "0.1.0"
-written = "2026-11-06T10:00:00Z"
+schema = 2
 
-[plan]          # the plan it was measured with
+[[baseline]]
+tool = "0.2.0"
+written = "2026-11-07T10:00:00Z"
+
+[baseline.plan]          # the plan it was measured with
 rate = 50.0
 warmup_secs = 10
 duration_secs = 60
 requests = 2
 groups = ["create", "metadata"]
 
-[host]          # the host fingerprint; a different host is a warning
+[baseline.host]          # the host fingerprint; cpu_model keys the entry
 arch = "x86_64"
 os = "linux"
 available_parallelism = 4
+cpu_model = "AMD EPYC 7763 64-Core Processor"
 
-[tolerance]     # the product's, kept by every update
+[baseline.tolerance]     # the product's, kept by every update
 latency = 0.25
 throughput = 0.2
 memory = 0.2
 cpu = 0.25
 transactions = 0.1
 
-[metrics]
+[baseline.metrics]
 throughput_rps = 49.9
 peak_memory_bytes = 104857600.0
 cpu_per_request_ms = 0.8
@@ -157,13 +173,17 @@ transactions_per_request = 2.0
 "metadata.p95_ms" = 4.1
 "metadata.p99_ms" = 7.3
 
-[noise]         # the A/A floor, a ratio per metric
+[baseline.noise]         # the A/A floor, a ratio per metric
 "metadata.p95_ms" = 1.08
+
+[[baseline]]             # the next model, with its own values
+# ...
 ```
 
-A metric fails when it is worse than the baseline by more than the larger
-of its tolerance and its noise floor. The `schema` key lets a later version
-migrate an older file before it reads it.
+A metric fails when it is worse than its entry by more than the larger of
+its tolerance and its noise floor. The `schema` key lets a later version
+migrate an older file before it reads it: a schema-1 file, the single
+baseline of 0.1, is read as one entry of the model its host names.
 
 ## The report
 
@@ -210,9 +230,12 @@ perf:
 
 For a server in a container, pass `--container "$(docker inspect -f
 '{{.Id}}' <name>)"` in place of `--pid`. Commit `perf/plan.toml` first. To
-write or lower the baseline, run the job once with `--update` on the runner
-the gate runs on, take `perf/baseline.toml` from the uploaded artifact, and
-commit it in its own change.
+write or lower an entry, run the job with `--update` on the runner pool the
+gate runs on, take `perf/baseline.toml` from the uploaded artifact, and
+commit it; the file holds the committed entries and the run's own. Commit
+an entry for every CPU model the pool serves: re-run the job until each
+model has its entry. A pool that later brings a new model fails with exit 2 and
+names it, and that model's entry is added the same way.
 
 ## Licence
 

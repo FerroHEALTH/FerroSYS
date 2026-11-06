@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The judgement of a run: the idle limits, the failed requests, and every
-//! load metric against the baseline.
+//! load metric against the baseline entry of the runner's CPU model.
 //!
 //! A metric breaches when it is worse than the baseline by more than the
 //! larger of its tolerance and its A/A noise floor (Kalibera and Jones,
 //! "Rigorous Benchmarking in Reasonable Time", ISMM 2013, on measuring the
 //! noise before judging a difference); the floor follows Veredictum's
 //! `perf_result::compare` (Apache-2.0, credited in `NOTICE`). A run that
-//! cannot be judged (no baseline, another plan, a metric the baseline holds
+//! cannot be judged (no baseline, no entry for the runner's CPU model,
+//! another plan, a metric the baseline holds
 //! and the run lacks, a generator that fell behind, an unsteady window) is
 //! invalid. The exit code is 0 for a pass, 1 for a breach and 2 for an
 //! invalid run or a harness error; a breach outranks an invalid run.
@@ -18,9 +19,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::baseline::Baseline;
+use crate::baseline::{Baseline, Baselines, model_name};
 use crate::metric::Metric;
 use crate::report::{Report, ReportError, STEADY};
+
+/// The problem of a run judged with no baseline.
+const NO_BASELINE: &str = "there is no baseline; write one with --update";
 
 /// The outcome of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,7 +148,7 @@ pub fn judge(
     let metrics = crate::metric::of(load)?;
     match baseline {
         None if writing => {}
-        None => problems.push("there is no baseline; write one with --update".to_owned()),
+        None => problems.push(NO_BASELINE.to_owned()),
         Some(base) if base.plan != report.plan => {
             if writing {
                 warnings.push(
@@ -183,6 +187,48 @@ pub fn judge(
         problems,
         warnings,
     })
+}
+
+/// Judges `report` against the entry of `baselines` for the CPU model of
+/// the report's host.
+///
+/// The idle limits and the failures judge every run. With no file, or no
+/// entry for the model, the load metrics are not judged, and the run is
+/// invalid unless `writing` says the entry is being written from it; the
+/// problem names the model and how to add its entry.
+///
+/// # Errors
+///
+/// [`ReportError::Histogram`] when a histogram of the report does not
+/// decode.
+pub fn judge_file(
+    report: &Report,
+    baselines: Option<&Baselines>,
+    writing: bool,
+) -> Result<Verdict, ReportError> {
+    let model = report.host.cpu_model.as_deref();
+    let entry = baselines.and_then(|file| file.entry(model));
+    let mut verdict = judge(report, entry, writing)?;
+    let Some(file) = baselines.filter(|_| entry.is_none()) else {
+        return Ok(verdict);
+    };
+    let held = file.models();
+    let held = if held.is_empty() {
+        "none".to_owned()
+    } else {
+        held.join(", ")
+    };
+    let missing = format!(
+        "the baseline holds no entry for the CPU model {} (it holds {held}); \
+         run once with --update on a runner of that model and commit the entry",
+        model_name(model)
+    );
+    for problem in &mut verdict.problems {
+        if problem == NO_BASELINE {
+            problem.clone_from(&missing);
+        }
+    }
+    Ok(verdict)
 }
 
 fn ratio(value: Option<f64>) -> String {

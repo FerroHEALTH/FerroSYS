@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use ferrohealth_perf::baseline::Baseline;
-use ferrohealth_perf::compare::judge;
+use ferrohealth_perf::baseline::Baselines;
+use ferrohealth_perf::compare::judge_file;
 use ferrohealth_perf::plan::Plan;
 use ferrohealth_perf::process::{Target, container_cgroup};
 use ferrohealth_perf::report::Report;
@@ -50,7 +50,7 @@ enum Command {
 
 #[derive(Debug, Args)]
 struct Output {
-    /// The baseline file.
+    /// The baseline file, one entry per CPU model.
     #[arg(long, value_name = "PATH", default_value = "perf/baseline.toml")]
     baseline: PathBuf,
     /// A file the Markdown summary is also written to.
@@ -90,8 +90,8 @@ struct RunArgs {
     /// The directory the JSON reports are written to.
     #[arg(long, value_name = "DIR", default_value = "target/perf")]
     out_dir: PathBuf,
-    /// Writes the baseline from a run that passes, after a second load
-    /// phase for the A/A noise floor.
+    /// Writes the baseline entry of the runner's CPU model from a run that
+    /// passes, after a second load phase for the A/A noise floor.
     #[arg(long)]
     update: bool,
     #[command(flatten)]
@@ -160,8 +160,8 @@ fn run_command(args: RunArgs) -> Result<u8, Box<dyn Error>> {
 
 fn compare_command(args: &CompareArgs) -> Result<u8, Box<dyn Error>> {
     let report = Report::read(&args.report)?;
-    let baseline = Baseline::read(&args.output.baseline)?;
-    let verdict = judge(&report, baseline.as_ref(), false)?;
+    let baseline = Baselines::read(&args.output.baseline)?;
+    let verdict = judge_file(&report, baseline.as_ref(), false)?;
     publish(
         &summary::markdown(&report, &verdict),
         args.output.summary.as_deref(),

@@ -99,69 +99,162 @@ fn an_update_on_another_plan_rewrites() {
     assert_eq!(vec![Change::Rewritten], changes);
 }
 
+fn host_of(model: &str) -> Fingerprint {
+    Fingerprint {
+        cpu_model: Some(model.to_owned()),
+        ..host()
+    }
+}
+
+fn file_of(entries: Vec<Baseline>) -> Baselines {
+    entries.into_iter().fold(
+        Baselines {
+            schema: SCHEMA,
+            entries: Vec::new(),
+        },
+        Baselines::with,
+    )
+}
+
 #[test]
-fn a_baseline_round_trips_through_its_file() {
-    let (plan, host, run) = (plan(), host(), metrics(4.0, 50.0));
-    let (baseline, _) = updated(None, &update(&run, &plan, &host));
+fn a_baseline_file_round_trips_through_its_file() {
+    let (plan, run) = (plan(), metrics(4.0, 50.0));
+    let (fast, _) = updated(None, &update(&run, &plan, &host_of("EPYC 9V45")));
+    let (slow, _) = updated(None, &update(&run, &plan, &host_of("EPYC 7763")));
+    let file = file_of(vec![fast, slow]);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("perf/baseline.toml");
-    baseline.write(&path).unwrap();
+    file.write(&path).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("\"read.p95_ms\" = 4.0"), "{text}");
     assert!(text.starts_with("# The performance baseline"), "{text}");
-    assert_eq!(Some(baseline), Baseline::read(&path).unwrap());
+    assert_eq!(
+        2,
+        text.lines().filter(|l| *l == "[[baseline]]").count(),
+        "{text}"
+    );
+    assert!(
+        text.find("EPYC 7763").unwrap() < text.find("EPYC 9V45").unwrap(),
+        "the entries are in the order of their model: {text}"
+    );
+    assert_eq!(Some(file), Baselines::read(&path).unwrap());
     assert_eq!(
         None,
-        Baseline::read(&dir.path().join("absent.toml")).unwrap()
+        Baselines::read(&dir.path().join("absent.toml")).unwrap()
     );
 }
 
 #[test]
-fn the_module_example_parses() {
+fn the_entry_of_a_model_is_found_and_another_model_has_none() {
+    let (plan, run) = (plan(), metrics(4.0, 50.0));
+    let (entry, _) = updated(None, &update(&run, &plan, &host_of("EPYC 9V45")));
+    let file = file_of(vec![entry.clone()]);
+    assert_eq!(Some(&entry), file.entry(Some("EPYC 9V45")));
+    assert_eq!(None, file.entry(Some("EPYC 7763")));
+    assert_eq!(None, file.entry(None), "a host with no model name");
+    assert_eq!(vec!["`EPYC 9V45`".to_owned()], file.models());
+}
+
+#[test]
+fn an_entry_replaces_only_the_entry_of_its_model() {
+    let plan = plan();
+    let (fast, _) = updated(
+        None,
+        &update(&metrics(4.0, 50.0), &plan, &host_of("EPYC 9V45")),
+    );
+    let (slow, _) = updated(
+        None,
+        &update(&metrics(6.0, 50.0), &plan, &host_of("EPYC 7763")),
+    );
+    let file = file_of(vec![fast, slow.clone()]);
+    let run = metrics(3.0, 50.0);
+    let (tighter, _) = updated(
+        file.entry(Some("EPYC 9V45")),
+        &update(&run, &plan, &host_of("EPYC 9V45")),
+    );
+    let file = file.with(tighter);
+    assert_eq!(2, file.entries.len());
+    assert_eq!(
+        Some(&3.0),
+        file.entry(Some("EPYC 9V45")).unwrap().metrics.get(&p95())
+    );
+    assert_eq!(Some(&slow), file.entry(Some("EPYC 7763")), "untouched");
+}
+
+#[test]
+fn a_schema_1_file_migrates_into_one_entry_of_its_model() {
     let text = "schema = 1\ntool = \"0.1.0\"\nwritten = \"2026-11-06T10:00:00Z\"\n\
                 [plan]\nrate = 50.0\nwarmup_secs = 10\nduration_secs = 60\nrequests = 2\n\
                 groups = [\"create\", \"metadata\"]\n[host]\narch = \"x86_64\"\nos = \"linux\"\n\
+                cpu_model = \"AMD EPYC 9V45 96-Core Processor\"\n\
                 [tolerance]\nlatency = 0.25\n[metrics]\nthroughput_rps = 49.9\n\
                 \"metadata.p95_ms\" = 4.1\n[noise]\n\"metadata.p95_ms\" = 1.08\n";
-    let baseline = Baseline::parse(text).unwrap();
-    assert_eq!(2, baseline.metrics.len());
+    let file = Baselines::parse(text).unwrap();
+    assert_eq!(SCHEMA, file.schema);
+    assert_eq!(1, file.entries.len());
+    let entry = file.entry(Some("AMD EPYC 9V45 96-Core Processor")).unwrap();
+    assert_eq!(2, entry.metrics.len());
+    assert_eq!("0.1.0", entry.tool);
     assert!(
-        (baseline.tolerance.memory - 0.20).abs() < f64::EPSILON,
+        (entry.tolerance.memory - 0.20).abs() < f64::EPSILON,
         "a default"
     );
+    let again = Baselines::parse(&file.to_toml().unwrap()).unwrap();
+    assert_eq!(file, again, "the migrated file is written as schema 2");
+}
+
+#[test]
+fn the_module_example_parses() {
+    let text = "schema = 2\n[[baseline]]\ntool = \"0.2.0\"\nwritten = \"2026-11-07T10:00:00Z\"\n\
+                [baseline.plan]\nrate = 50.0\nwarmup_secs = 10\nduration_secs = 60\nrequests = 2\n\
+                groups = [\"create\", \"metadata\"]\n[baseline.host]\narch = \"x86_64\"\n\
+                os = \"linux\"\ncpu_model = \"AMD EPYC 7763 64-Core Processor\"\n\
+                [baseline.tolerance]\nlatency = 0.25\n[baseline.metrics]\nthroughput_rps = 49.9\n\
+                \"metadata.p95_ms\" = 4.1\n[baseline.noise]\n\"metadata.p95_ms\" = 1.08\n";
+    let file = Baselines::parse(text).unwrap();
+    assert_eq!(2, file.entries.first().unwrap().metrics.len());
 }
 
 #[test]
 fn a_newer_or_missing_schema_is_refused() {
     assert!(matches!(
-        Baseline::parse("schema = 2\n"),
-        Err(BaselineError::Schema(2))
+        Baselines::parse("schema = 3\n"),
+        Err(BaselineError::Schema(3))
     ));
     assert!(matches!(
-        Baseline::parse("tool = \"x\"\n"),
+        Baselines::parse("tool = \"x\"\n"),
         Err(BaselineError::NoSchema)
     ));
     assert!(matches!(
-        Baseline::parse("schema = \"1\"\n"),
+        Baselines::parse("schema = \"1\"\n"),
         Err(BaselineError::NoSchema)
     ));
 }
 
 #[test]
-fn a_bad_value_is_refused() {
-    let (plan, host, run) = (plan(), host(), metrics(4.0, 50.0));
-    let (baseline, _) = updated(None, &update(&run, &plan, &host));
-    let text = baseline.to_toml().unwrap();
+fn a_bad_value_or_a_model_named_twice_is_refused() {
+    let (plan, run) = (plan(), metrics(4.0, 50.0));
+    let (entry, _) = updated(None, &update(&run, &plan, &host_of("EPYC 7763")));
+    let text = file_of(vec![entry]).to_toml().unwrap();
     for (from, to) in [
         ("\"read.p95_ms\" = 1.05", "\"read.p95_ms\" = 0.5"),
         ("throughput_rps = 50.0", "throughput_rps = -1.0"),
         ("throughput = 0.2", "throughput = 1.0"),
-        ("schema = 1", "schema = 1\nextra = 1"),
+        ("schema = 2", "schema = 2\nextra = 1"),
     ] {
         assert!(text.contains(from), "{from} in {text}");
         let bad = text.replacen(from, to, 1);
-        assert!(Baseline::parse(&bad).is_err(), "{to} is refused");
+        assert!(Baselines::parse(&bad).is_err(), "{to} is refused");
     }
+    let body = text.split_once("\n[[baseline]]").unwrap().1;
+    let twice = format!("{text}\n[[baseline]]{body}");
+    let refused = Baselines::parse(&twice).unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("two entries for the CPU model `EPYC 7763`"),
+        "{refused}"
+    );
 }
 
 #[test]
