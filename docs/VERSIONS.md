@@ -21,7 +21,7 @@ digest the registry answered on the day of the pin.
 
 | Image | Pin | Used by |
 |---|---|---|
-| PostgreSQL | `postgres:18.6@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583` (2026-11-06) | the `services` of the `nextest` job in `.github/workflows/ci.yml`, for the `pg_stat_database` cases of `ferrohealth-perf` |
+| PostgreSQL | `postgres:18.6@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583` (2026-11-06) | the `services` of the `nextest` job in `.github/workflows/ci.yml` and the `analyze` job in `.github/workflows/sonar.yml`, for the `pg_stat_database` cases of `ferrohealth-perf` |
 
 ## Tools
 

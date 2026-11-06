@@ -15,7 +15,10 @@ busier under load than the baseline the product committed.
    a percentage of one core, and the database's committed and rolled-back
    transactions per second (`pg_stat_database` `xact_commit` plus
    `xact_rollback`) are held to absolute limits, 2 % and 5/s by default. The
-   memory at the start and the end is reported.
+   memory at the start and the end is reported. PostgreSQL reports a
+   backend's transactions together with its other pending statistics, so a
+   loop that polls a table, such as an outbox sender, is counted within a
+   second; a loop of bare `SELECT 1` touches no relation and is not.
 2. **Load phase.** The request set is sent open-loop at a fixed rate, after
    a warm-up. Each latency is timed from the instant the request was due,
    so a stalled server raises the latency of every request it held back. A

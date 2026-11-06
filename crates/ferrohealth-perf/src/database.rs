@@ -8,8 +8,13 @@
 //! names (PostgreSQL 18, "The Cumulative Statistics System",
 //! `pg_stat_database`). A backend reports its counts when it goes idle, at
 //! most once a second while busy and within ten seconds once idle, so a
-//! phase waits for its settle time before its last reading. Each reading is
-//! one transaction of its own, so the tool adds at most two to a phase.
+//! phase waits for its settle time before its last reading. A backend
+//! reports its transaction count only with statistics it has pending, so a
+//! transaction that reads or writes no relation (`SELECT 1`) is counted
+//! only when that backend next touches one; a loop that polls a table, such
+//! as an outbox sender, is counted within a second (PostgreSQL 18 source,
+//! `pgstat.c` `pgstat_report_stat`). Each reading is one transaction of its
+//! own, so the tool adds at most two to a phase.
 //!
 //! The connection is plain: the database is the one the CI job starts
 //! beside the server.

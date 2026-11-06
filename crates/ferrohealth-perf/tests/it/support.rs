@@ -7,8 +7,8 @@
 //! A planted process is this test binary run again with one test selected,
 //! [`crate::plant::planted_process`], and `FERROHEALTH_PERF_PLANT` naming
 //! what it does: `quiet` sleeps, `spin` burns one core, and `commit`
-//! commits transactions against `FERROHEALTH_PERF_PLANT_DATABASE` in a
-//! loop. Each is killed when its guard drops, so a test stops only the
+//! polls an empty outbox table against `FERROHEALTH_PERF_PLANT_DATABASE`
+//! in a loop, one transaction per poll. Each is killed when its guard drops, so a test stops only the
 //! process it started.
 
 use std::process::{Child, Command, Stdio};

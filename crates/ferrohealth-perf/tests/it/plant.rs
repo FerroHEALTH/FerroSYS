@@ -43,8 +43,20 @@ fn planted_process() {
                     .await
                     .unwrap();
                 drop(tokio::spawn(connection));
+                client
+                    .batch_execute("CREATE TABLE IF NOT EXISTS outbox (id bigint PRIMARY KEY)")
+                    .await
+                    .unwrap();
+                // The FerroPIX #490 shape: an outbox sender that polls an empty
+                // table in its own transaction, again and again.
                 loop {
-                    client.execute("SELECT 1", &[]).await.unwrap();
+                    client
+                        .execute(
+                            "SELECT id FROM outbox ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED",
+                            &[],
+                        )
+                        .await
+                        .unwrap();
                 }
             });
         }
