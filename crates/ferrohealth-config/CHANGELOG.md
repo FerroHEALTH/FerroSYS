@@ -10,6 +10,23 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- An array of tables, such as `[[auth.issuer]]`, is set from the
+  environment by element index: `<PREFIX>__AUTH__ISSUER__0__URL` sets
+  `url` of the first element, and `--set auth.issuer.0.url=…` or
+  `--set auth.issuer[0].url=…` does the same. An index overrides the
+  file's element key by key and the next index past the end adds one, so a
+  deployment configured only through the environment can declare its
+  issuers. An index with a leading zero, one that skips an element and one
+  under a key that holds no array of tables are refused as
+  `ConfigError::OverrideIndex`, `ConfigError::OverrideGap` and
+  `ConfigError::OverrideArray`; every element keeps
+  `deny_unknown_fields` and its `<key>_file` secrets (#246).
+- `Provenance::source` and `Provenance::variable` read a key set by element
+  index as set there, and an array of tables as set by the strongest layer
+  that set it or one of its elements (#246).
+
 ## [0.2.9] - 2026-11-05
 
 ### Changed

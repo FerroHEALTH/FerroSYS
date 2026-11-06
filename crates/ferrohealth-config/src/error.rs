@@ -99,6 +99,42 @@ pub enum ConfigError {
         /// The dotted key that holds a value.
         key: String,
     },
+    /// An override holds a segment that cannot be an element index: an
+    /// index is a decimal number without a leading zero, standing after the
+    /// key of an array of tables.
+    #[error(
+        "{name} cannot take `{segment}` as an element index; write an index as a decimal number without a leading zero, after the key of an array of tables"
+    )]
+    OverrideIndex {
+        /// The variable, or the `--set` argument.
+        name: String,
+        /// The segment at fault.
+        segment: String,
+    },
+    /// An override addresses an element of a key that holds no array of
+    /// tables.
+    #[error("{name} addresses an element of `{key}`, which is no array of tables")]
+    OverrideArray {
+        /// The variable, or the `--set` argument.
+        name: String,
+        /// The dotted key that holds no array of tables, an element named by
+        /// its index (`server.origins[0]`).
+        key: String,
+    },
+    /// The overrides set an element of an array of tables past its end and
+    /// leave an element before it unset.
+    #[error(
+        "{name} skips element {missing} of `{key}`; number the elements of an array of tables from 0 without a gap"
+    )]
+    OverrideGap {
+        /// The variable, or the `--set` argument, that set an element past
+        /// the gap.
+        name: String,
+        /// The dotted key of the array.
+        key: String,
+        /// The first index no source sets.
+        missing: usize,
+    },
     /// A variable under the prefix is neither an override, an alias nor a
     /// name the product reserved.
     #[error("{name} is no configuration variable{}", Suggestion(suggestion.as_deref()))]

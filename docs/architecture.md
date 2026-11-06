@@ -158,7 +158,11 @@ are our own design.
   `deny_unknown_fields`, every secret with a `_file` sibling, and FerroEHR's
   strict checks (the did-you-mean suggestion; an unknown `PREFIX__` override
   is refused, and any other name under the prefix is left alone because
-  product prefixes nest). Every server and console has `config check`.
+  product prefixes nest). An array of tables is set by element index,
+  `PREFIX__A__B__0__C` for `c` of the first `[[a.b]]`, over the file's
+  elements key by key; the indices number the elements from 0 without a
+  gap, and a skipped or ambiguous index is refused. Every server and
+  console has `config check`.
 - **Metrics.** One OpenTelemetry meter provider in every product, read by
   Prometheus on `/metrics` and, when configured, pushed over OTLP.
 - **Shutdown.** On `SIGTERM` or `SIGINT` readiness turns `503`, a configured

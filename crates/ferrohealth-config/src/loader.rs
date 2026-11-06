@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::error::{ConfigError, mask_values, position};
-use crate::overrides::{Override, Placement, retype};
+use crate::overrides::{Growth, Override, Placement, placements, retype};
 use crate::provenance::Provenance;
 
 mod environment;
@@ -567,14 +567,21 @@ impl Loader {
             let key = self.renamed(&item.key());
             set_by.insert(key, item.name().to_owned());
         }
-        let set_keys = sets.iter().map(|(key, _)| self.renamed(key)).collect();
+        // NOTE: no specification governs this: our own design; the sets apply last,
+        // so they are the last overrides, each key in the form a refusal names.
+        let set_keys = overrides
+            .iter()
+            .rev()
+            .take(sets.len())
+            .map(|item| self.renamed(&item.key()))
+            .collect();
         let provenance = Provenance::new(
             path.map(Path::to_path_buf),
             text.is_some().then_some(&file),
             set_by,
             set_keys,
         );
-        let mut placements = BTreeMap::new();
+        let mut placements = placements(&overrides);
         let mut dropped: Vec<Vec<String>> = Vec::new();
         let mut errors: Vec<ConfigError> = Vec::new();
         // Each pass places one more override, or drops one more refused key or
@@ -582,12 +589,15 @@ impl Loader {
         // per override and per key.
         loop {
             let mut table = file.clone();
+            let mut growth = Growth::default();
             for (index, item) in overrides.iter().enumerate() {
                 item.apply(
                     &mut table,
                     placements.get(&index).copied().unwrap_or(Placement::Text),
+                    &mut growth,
                 )?;
             }
+            growth.check()?;
             let deprecations = self.apply_renames(&mut table)?;
             for path in &dropped {
                 remove(&mut table, path);
@@ -659,17 +669,18 @@ impl Loader {
             .iter()
             .filter(|a| a.below)
             .filter_map(alias)
-            .collect();
+            .collect::<Result<_, _>>()?;
         for (name, raw) in environment {
             if let Some(item) = Override::parse(&self.prefix, name, raw)? {
                 overrides.push(item);
             }
         }
-        overrides.extend(self.aliases.iter().filter(|a| !a.below).filter_map(alias));
-        overrides.extend(
-            sets.iter()
-                .map(|(key, raw)| Override::new(&format!("--set {key}"), key, raw)),
-        );
+        for item in self.aliases.iter().filter(|a| !a.below).filter_map(alias) {
+            overrides.push(item?);
+        }
+        for (key, raw) in sets {
+            overrides.push(Override::new(&format!("--set {key}"), key, raw)?);
+        }
         Ok(overrides)
     }
 

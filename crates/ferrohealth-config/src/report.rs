@@ -72,7 +72,10 @@ pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> Result<String, ConfigEr
             continue;
         };
         let source = provenance.source(&key);
-        lines.push(match (source, provenance.variable(&key)) {
+        let variable = provenance
+            .variable(&key)
+            .or_else(|| provenance.variable_below(&key));
+        lines.push(match (source, variable) {
             (Source::Environment | Source::Set, Some(variable)) => {
                 format!("{key} = {value}  # {source}: {variable}")
             }

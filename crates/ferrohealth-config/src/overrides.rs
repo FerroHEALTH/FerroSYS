@@ -16,13 +16,19 @@ use std::ops::Range;
 
 use crate::error::ConfigError;
 
+mod growth;
+mod path;
+
+pub(crate) use growth::Growth;
+use path::{Segment, of_key, of_variable, render};
+
 /// One variable that sets one key.
 #[derive(Debug)]
 pub(crate) struct Override {
     /// The variable name, for a refusal and the provenance.
     name: String,
-    /// The lower-case key segments, the section first.
-    path: Vec<String>,
+    /// The segments of the key, the section first.
+    path: Vec<Segment>,
     /// The text the variable carries.
     raw: String,
     /// The text read as a TOML value that is not a string, when it reads so.
@@ -41,15 +47,21 @@ pub(crate) enum Placement {
 }
 
 impl Override {
-    /// Returns the override of the variable `name` that sets the dotted key
-    /// `key` to `raw`.
-    pub(crate) fn new(name: &str, key: &str, raw: &str) -> Self {
-        Self {
+    /// Returns the override of the source `name` that sets the dotted key
+    /// `key` to `raw`; an element index is a segment of its own
+    /// (`issuer.0.url`) or follows its key in brackets (`issuer[0].url`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::OverrideIndex`] for an index that is ambiguous
+    /// or follows no key.
+    pub(crate) fn new(name: &str, key: &str, raw: &str) -> Result<Self, ConfigError> {
+        Ok(Self {
             name: name.to_owned(),
-            path: key.split('.').map(str::to_owned).collect(),
+            path: of_key(name, key)?,
             raw: raw.to_owned(),
             typed: typed_value(raw),
-        }
+        })
     }
 
     /// Returns the override `name` makes under `prefix` (the prefix followed
@@ -58,30 +70,25 @@ impl Override {
     /// # Errors
     ///
     /// Returns [`ConfigError::OverrideName`] for a name that addresses no
-    /// section and key.
+    /// section and key, and [`ConfigError::OverrideIndex`] for an element
+    /// index that is ambiguous or follows no key.
     pub(crate) fn parse(prefix: &str, name: &str, raw: &str) -> Result<Option<Self>, ConfigError> {
         let separator = format!("{prefix}__");
         let Some(rest) = name.strip_prefix(&separator) else {
             return Ok(None);
         };
-        let path: Vec<String> = rest.split("__").map(str::to_ascii_lowercase).collect();
-        if path.iter().any(String::is_empty) {
-            return Err(ConfigError::OverrideName {
-                name: name.to_owned(),
-                prefix: prefix.to_owned(),
-            });
-        }
         Ok(Some(Self {
             name: name.to_owned(),
-            path,
+            path: of_variable(name, prefix, rest)?,
             raw: raw.to_owned(),
             typed: typed_value(raw),
         }))
     }
 
-    /// Returns the dotted key the override sets.
+    /// Returns the dotted key the override sets, an element of an array of
+    /// tables named by its index (`auth.issuer[0].url`).
     pub(crate) fn key(&self) -> String {
-        self.path.join(".")
+        render(&self.path)
     }
 
     /// Returns the variable name.
@@ -89,39 +96,88 @@ impl Override {
         &self.name
     }
 
-    /// Places the override onto `table` as `placement` says.
+    /// Places the override onto `table` as `placement` says, recording in
+    /// `growth` the elements it adds to an array of tables.
     ///
     /// # Errors
     ///
     /// Returns [`ConfigError::OverrideShape`] when a parent segment holds a
-    /// value that is not a section.
+    /// value that is not a section, and [`ConfigError::OverrideArray`] when
+    /// an index addresses a key that holds no array of tables.
     pub(crate) fn apply(
         &self,
         table: &mut toml::Table,
         placement: Placement,
+        growth: &mut Growth,
     ) -> Result<(), ConfigError> {
-        let Some((key, parents)) = self.path.split_last() else {
-            return Err(ConfigError::OverrideName {
-                name: self.name.clone(),
-                prefix: String::new(),
-            });
-        };
+        let value = self.value(placement);
         let mut cursor = table;
-        let mut walked = Vec::new();
-        for parent in parents {
-            walked.push(parent.as_str());
-            let entry = cursor
-                .entry(parent.clone())
-                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-            let toml::Value::Table(next) = entry else {
-                return Err(ConfigError::OverrideShape {
+        let mut walked: Vec<Segment> = Vec::new();
+        let mut segments = self.path.iter().peekable();
+        while let Some(segment) = segments.next() {
+            let Segment::Key(key) = segment else {
+                return Err(ConfigError::OverrideIndex {
                     name: self.name.clone(),
-                    key: walked.join("."),
+                    segment: render(std::slice::from_ref(segment)),
                 });
             };
-            cursor = next;
+            walked.push(segment.clone());
+            let Some(&next) = segments.peek() else {
+                growth.replaced(&render(&walked));
+                cursor.insert(key.clone(), value);
+                return Ok(());
+            };
+            let entry = cursor.entry(key.clone()).or_insert_with(|| match next {
+                Segment::Key(_) => toml::Value::Table(toml::Table::new()),
+                Segment::Index(_) => toml::Value::Array(Vec::new()),
+            });
+            cursor = match (next, entry) {
+                (Segment::Key(_), toml::Value::Table(inner)) => inner,
+                (Segment::Key(_), _) => {
+                    return Err(ConfigError::OverrideShape {
+                        name: self.name.clone(),
+                        key: render(&walked),
+                    });
+                }
+                (&Segment::Index(index), toml::Value::Array(elements)) => {
+                    growth.reach(&render(&walked), elements, index, &self.name);
+                    walked.push(Segment::Index(index));
+                    let _index = segments.next();
+                    let element = elements.get_mut(index);
+                    if segments.peek().is_none() {
+                        growth.replaced(&render(&walked));
+                        if let Some(element) = element {
+                            *element = value;
+                        }
+                        return Ok(());
+                    }
+                    match element {
+                        Some(toml::Value::Table(inner)) => inner,
+                        _ => {
+                            return Err(ConfigError::OverrideArray {
+                                name: self.name.clone(),
+                                key: render(&walked),
+                            });
+                        }
+                    }
+                }
+                (Segment::Index(_), _) => {
+                    return Err(ConfigError::OverrideArray {
+                        name: self.name.clone(),
+                        key: render(&walked),
+                    });
+                }
+            };
         }
-        let value = match (placement, &self.typed) {
+        Err(ConfigError::OverrideName {
+            name: self.name.clone(),
+            prefix: String::new(),
+        })
+    }
+
+    /// The value the override places as `placement` says.
+    fn value(&self, placement: Placement) -> toml::Value {
+        match (placement, &self.typed) {
             (Placement::Typed, Some(value)) => value.clone(),
             (Placement::List, _) => toml::Value::Array(
                 self.raw
@@ -132,10 +188,32 @@ impl Override {
                     .collect(),
             ),
             _ => toml::Value::String(self.raw.clone()),
-        };
-        cursor.insert(key.clone(), value);
-        Ok(())
+        }
     }
+}
+
+/// Returns how each override is placed before the tree reads it: typed
+/// where its text reads as a table or an array that another override sets
+/// a key or an element inside, as text everywhere else.
+pub(crate) fn placements(overrides: &[Override]) -> BTreeMap<usize, Placement> {
+    // NOTE: no specification governs this: our own design. An override inside
+    // a value another sets whole patches that value, so the value is placed typed.
+    overrides
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            matches!(
+                item.typed,
+                Some(toml::Value::Table(_) | toml::Value::Array(_))
+            )
+        })
+        .filter(|(_, item)| {
+            overrides.iter().any(|other| {
+                other.path.len() > item.path.len() && other.path.starts_with(&item.path)
+            })
+        })
+        .map(|(index, _)| (index, Placement::Typed))
+        .collect()
 }
 
 /// Returns the override the tree refused as a string, and how to place it
@@ -174,11 +252,16 @@ pub(crate) fn retype(
 }
 
 /// Returns the span of the value `path` addresses in `document`.
-fn value_span(document: &toml::de::DeTable<'_>, path: &[String]) -> Option<Range<usize>> {
-    let (first, rest) = path.split_first()?;
+fn value_span(document: &toml::de::DeTable<'_>, path: &[Segment]) -> Option<Range<usize>> {
+    let (Segment::Key(first), rest) = path.split_first()? else {
+        return None;
+    };
     let mut value = document.get(first.as_str())?;
     for segment in rest {
-        value = value.get_ref().get(segment.as_str())?;
+        value = match segment {
+            Segment::Key(key) => value.get_ref().get(key.as_str())?,
+            Segment::Index(index) => value.get_ref().get(*index)?,
+        };
     }
     Some(value.span())
 }
@@ -196,7 +279,7 @@ fn typed_value(raw: &str) -> Option<toml::Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Override, Placement, typed_value};
+    use super::{Growth, Override, Placement, typed_value};
     use crate::error::ConfigError;
 
     #[test]
@@ -247,9 +330,10 @@ mod tests {
     fn an_override_under_a_value_is_refused_naming_the_value() {
         let mut table: toml::Table =
             toml::from_str("[server]\nlisten = \"127.0.0.1:1\"\n").expect("toml");
-        let item = Override::new("FERROSYS__SERVER__LISTEN__PORT", "server.listen.port", "1");
+        let item = Override::new("FERROSYS__SERVER__LISTEN__PORT", "server.listen.port", "1")
+            .expect("the key parses");
         let error = item
-            .apply(&mut table, Placement::Text)
+            .apply(&mut table, Placement::Text, &mut Growth::default())
             .expect_err("listen is a value");
         assert!(
             matches!(&error, ConfigError::OverrideShape { key, .. } if key == "server.listen"),
@@ -261,7 +345,8 @@ mod tests {
     fn a_list_placement_splits_on_commas_and_trims() {
         let mut table = toml::Table::new();
         Override::new("FERROSYS__AUTH__AUDIENCE", "auth.audience", " a, b ,,c ")
-            .apply(&mut table, Placement::List)
+            .expect("the key parses")
+            .apply(&mut table, Placement::List, &mut Growth::default())
             .expect("the list is placed");
         let audience = table
             .get("auth")

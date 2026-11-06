@@ -15,6 +15,16 @@ console reads its configuration the same way, so an operator learns it once.
   sets `[section] key` and a product's aliases (such as `RUST_LOG`) set the
   keys they name. An override is placed as text, and typed only where the
   tree wants a number, a boolean or an array.
+- An array of tables, such as `[[auth.issuer]]`, is set by element index:
+  `<PREFIX>__AUTH__ISSUER__0__URL` sets `url` of the first element, and
+  `--set auth.issuer.0.url=…` or `--set auth.issuer[0].url=…` does the
+  same. An index overrides the file's element key by key, and the next
+  index past the end adds one. The indices number the elements from 0
+  without a gap; a skipped element (`ConfigError::OverrideGap`), an index
+  with a leading zero (`ConfigError::OverrideIndex`) and an index under a
+  key that holds no array of tables (`ConfigError::OverrideArray`) are
+  refused. An element is read as strictly as the file, `<key>_file`
+  secrets included.
 - `Loader::fallback_composed` sets a key from several variables at once,
   and `libpq::url` is the composer of a database URL from PostgreSQL's
   client environment (`PGHOST`, `PGUSER`, `PGPASSWORD` and the rest), the set
