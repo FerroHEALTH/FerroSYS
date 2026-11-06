@@ -10,6 +10,16 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- The idle phase also counts the transactions that touch no relation, such
+  as a loop of `SELECT 1`, which `pg_stat_database` leaves uncounted while
+  their backend lives (#252). It samples the database's other client
+  backends in `pg_stat_activity` every 50 ms on a connection of its own,
+  and the idle transactions per second are the larger of that count and
+  the `pg_stat_database` one. Reading the server's backends takes its
+  role, a superuser or `pg_read_all_stats`.
+
 ## [0.1.0] - 2026-11-06
 
 ### Added

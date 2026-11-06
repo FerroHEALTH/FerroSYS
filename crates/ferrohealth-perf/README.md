@@ -12,13 +12,24 @@ busier under load than the baseline the product committed.
 ## What it measures
 
 1. **Idle phase** (60 s by default, no requests). The server's CPU time, as
-   a percentage of one core, and the database's committed and rolled-back
-   transactions per second (`pg_stat_database` `xact_commit` plus
-   `xact_rollback`) are held to absolute limits, 2 % and 5/s by default. The
-   memory at the start and the end is reported. PostgreSQL reports a
-   backend's transactions together with its other pending statistics, so a
-   loop that polls a table, such as an outbox sender, is counted within a
-   second; a loop of bare `SELECT 1` touches no relation and is not.
+   a percentage of one core, and the database's transactions per second
+   are held to absolute limits, 2 % and 5/s by default. The memory at the
+   start and the end is reported. The transactions per second are the
+   larger of two counts over the window, each of which can miss
+   transactions but never counts one that did not happen:
+   - the committed and rolled-back transactions of `pg_stat_database`
+     (`xact_commit` plus `xact_rollback`). PostgreSQL reports a backend's
+     transactions together with its other pending statistics, so a loop
+     that polls a table, such as an outbox sender, is counted within a
+     second, and a loop of transactions that touch no relation, such as a
+     bare `SELECT 1`, is not counted while its backend lives;
+   - the transactions the database's other client backends are seen to
+     start in `pg_stat_activity` (`xact_start` and `query_start`), sampled
+     every 50 ms. This count includes the transactions that touch no
+     relation, at most one per backend per sample, so a `SELECT 1` loop
+     shows as about 20/s per backend. Reading the server's backends takes
+     its role, a superuser or `pg_read_all_stats`; for any other role
+     PostgreSQL hides their times, and only the first count remains.
 2. **Load phase.** The request set is sent open-loop at a fixed rate, after
    a warm-up. Each latency is timed from the instant the request was due,
    so a stalled server raises the latency of every request it held back. A

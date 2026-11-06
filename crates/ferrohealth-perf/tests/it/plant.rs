@@ -60,6 +60,24 @@ fn planted_process() {
                 }
             });
         }
+        "select" => {
+            let url = std::env::var(PLANT_DATABASE).unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let (client, connection) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+                    .await
+                    .unwrap();
+                drop(tokio::spawn(connection));
+                // A loop of transactions that touch no relation, which
+                // pg_stat_database leaves uncounted while the backend lives (#252).
+                loop {
+                    client.simple_query("SELECT 1").await.unwrap();
+                }
+            });
+        }
         other => panic!("no plant {other}"),
     }
 }
@@ -111,6 +129,26 @@ async fn a_process_that_commits_in_a_loop_while_idle_fails() {
         result.summary.contains("| idle.transactions_per_second |"),
         "{}",
         result.summary
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_process_that_selects_1_in_a_loop_while_idle_fails() {
+    let Some(admin) = support::database_url() else {
+        return;
+    };
+    let database = support::fresh_database(&admin).await;
+    let busy = Planted::start("select", Some(&database));
+    let result = measure(Target::Pid(busy.pid()), Some(database), false).await;
+    assert_eq!(Outcome::Fail, result.verdict.outcome, "{}", result.summary);
+    let breach = result
+        .verdict
+        .breaches()
+        .find(|check| check.name == "idle.transactions_per_second")
+        .unwrap_or_else(|| panic!("the idle transactions breach: {}", result.summary));
+    assert!(
+        breach.measured > 10.0,
+        "one witnessed per 50 ms sample: {breach:?}"
     );
 }
 

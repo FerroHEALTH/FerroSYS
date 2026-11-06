@@ -6,10 +6,11 @@
 //!
 //! A planted process is this test binary run again with one test selected,
 //! [`crate::plant::planted_process`], and `FERROHEALTH_PERF_PLANT` naming
-//! what it does: `quiet` sleeps, `spin` burns one core, and `commit`
-//! polls an empty outbox table against `FERROHEALTH_PERF_PLANT_DATABASE`
-//! in a loop, one transaction per poll. Each is killed when its guard drops, so a test stops only the
-//! process it started.
+//! what it does: `quiet` sleeps, `spin` burns one core, `commit` polls an
+//! empty outbox table against `FERROHEALTH_PERF_PLANT_DATABASE` in a loop,
+//! one transaction per poll, and `select` runs `SELECT 1` there in a loop.
+//! Each is killed when its guard drops, so a test stops only the process it
+//! started.
 
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -28,7 +29,8 @@ pub(crate) const DATABASE: &str = "FERROHEALTH_PERF_TEST_DATABASE_URL";
 pub(crate) struct Planted(Child);
 
 impl Planted {
-    /// Starts a planted process doing `what`, with `database` for `commit`.
+    /// Starts a planted process doing `what`, with `database` for `commit`
+    /// and `select`.
     pub(crate) fn start(what: &str, database: Option<&str>) -> Self {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command

@@ -21,7 +21,7 @@ use url::Url;
 
 use crate::baseline::{self, Baseline, BaselineError, Change, Update};
 use crate::compare::{Outcome, Verdict, judge};
-use crate::database::{DatabaseError, Transactions};
+use crate::database::{DatabaseError, Transactions, WITNESS_INTERVAL};
 use crate::fingerprint::Fingerprint;
 use crate::load::{self, LoadError};
 use crate::metric;
@@ -140,6 +140,16 @@ impl Instruments {
             None => Ok(None),
         }
     }
+
+    /// Waits `duration`, watching the database's activity when there is
+    /// one, and returns the transactions it witnessed.
+    async fn watch(&self, duration: Duration) -> Result<Option<u64>, RunError> {
+        if let Some(database) = &self.database {
+            return Ok(Some(database.witness(duration, WITNESS_INTERVAL).await?));
+        }
+        sleep(duration).await;
+        Ok(None)
+    }
 }
 
 /// The change in the transaction count from `before` to `after`.
@@ -164,17 +174,20 @@ async fn idle_phase(plan: &Plan, instruments: &Instruments) -> Result<IdleReport
     let first = instruments.sample().await?;
     let before = instruments.transactions().await?;
     let started = Instant::now();
-    sleep(Duration::from_secs(idle.duration_secs)).await;
+    let witnessed = instruments
+        .watch(Duration::from_secs(idle.duration_secs))
+        .await?;
     let last = instruments.sample().await?;
     let after = instruments.transactions().await?;
+    // NOTE: both counts are lower bounds (crate::database), so the larger holds.
+    let counted = delta(before, after)?.map(|count| count.max(witnessed.unwrap_or(0)));
     let elapsed = started.elapsed().as_secs_f64();
     let per_second = |value: f64| value / elapsed;
     Ok(IdleReport {
         duration_secs: elapsed,
         cpu_percent: cpu_between(first, last).map(|cpu| per_second(cpu.as_secs_f64()) * 100.0),
         max_cpu_percent: idle.max_cpu_percent,
-        transactions_per_second: delta(before, after)?
-            .map(|count| per_second(crate::quantile::exact_f64(count))),
+        transactions_per_second: counted.map(|count| per_second(crate::quantile::exact_f64(count))),
         max_transactions_per_second: idle.max_transactions_per_second,
         memory_start_bytes: first.memory_bytes,
         memory_end_bytes: last.memory_bytes,
