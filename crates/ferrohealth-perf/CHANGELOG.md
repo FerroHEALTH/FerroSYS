@@ -10,6 +10,8 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-06
+
 ### Added
 
 - The `ferrohealth-perf` binary, the performance gate a product's CI job
@@ -33,3 +35,6 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   `latest.json` through a rename, the Markdown summary for
   `$GITHUB_STEP_SUMMARY`, and the host fingerprint with a warning when it
   differs from the baseline's (#249).
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-perf-v0.1.0
