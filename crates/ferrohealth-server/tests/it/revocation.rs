@@ -166,6 +166,25 @@ async fn a_crl_with_a_critical_extension_it_does_not_process_fails_closed() {
     assert_eq!(0, front.requests(), "nothing was sent");
 }
 
+// NOTE: X.690 §8.1.1, a DER value is exactly its tag, length and contents, so an
+// OCSP answer with data after the last field of a nested SEQUENCE does not decode.
+#[tokio::test]
+async fn an_ocsp_answer_with_nested_trailing_data_fails_closed() {
+    let front = Front::start(Source::TrailingOcsp, Standing::Good).await;
+    let checked = check(&front).clear(&ping(&front), WITHIN).await;
+    assert!(
+        matches!(
+            &checked,
+            Err(RevocationError::Unavailable {
+                depth: 0,
+                source: StatusError::Decode(error)
+            }) if matches!(error.kind(), der::ErrorKind::TrailingData { .. })
+        ),
+        "an answer with nested trailing data gives no status: {checked:?}"
+    );
+    assert_eq!(0, front.requests(), "nothing was sent");
+}
+
 #[tokio::test]
 async fn an_unreachable_crl_fails_closed() {
     let front = Front::start(Source::UnreachableCrl, Standing::Good).await;

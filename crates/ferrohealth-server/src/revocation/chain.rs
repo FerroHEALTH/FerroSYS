@@ -87,8 +87,8 @@ fn issued(subject: &Certificate, issuer: &Certificate) -> bool {
     // NOTE: RFC 5280 §6.1: a candidate whose name or key does not fit is not the
     // issuer; the chain fails as NoIssuer when none fits.
     same_name(
-        &subject.tbs_certificate.issuer,
-        &issuer.tbs_certificate.subject,
+        subject.tbs_certificate().issuer(),
+        issuer.tbs_certificate().subject(),
     ) && signature::verify_certificate(subject, issuer).is_ok()
 }
 
@@ -105,7 +105,12 @@ pub(super) fn same_name(a: &Name, b: &Name) -> bool {
 pub(super) fn sources(certificate: &Certificate) -> Result<Vec<StatusSource>, der::Error> {
     let mut crls = Vec::new();
     let mut responders = Vec::new();
-    for extension in certificate.tbs_certificate.extensions.iter().flatten() {
+    for extension in certificate
+        .tbs_certificate()
+        .extensions()
+        .into_iter()
+        .flatten()
+    {
         let value = extension.extn_value.as_bytes();
         if extension.extn_id == CrlDistributionPoints::OID {
             for point in CrlDistributionPoints::from_der(value)?.0 {
