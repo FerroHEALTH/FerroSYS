@@ -114,6 +114,8 @@ max_lag_ms = 10                    # the generator's lag p99 limit
 sample_ms = 100                    # how often memory is sampled
 settle_secs = 11                   # wait after it, before the transaction count
 stall_ratio = 10.0                 # p99 over this times p50 on every route marks a stall
+# client_identity_file = "perf/client.pem"  # a certificate chain and its key, for mTLS
+# trust_roots_file = "perf/ca.pem"          # roots that verify an https target
 
 [[requests]]
 group = "metadata"
@@ -131,6 +133,28 @@ headers = { content-type = "application/fhir+json" }
 ```
 
 Every key but `requests` has the default shown; an unknown key is refused.
+
+### Sender-constrained tokens
+
+A route whose token is bound to its sender takes one of the two bindings of
+RFC 9700 §2.2, and the load phase presents either:
+
+- `[load] client_identity_file`: a PEM file holding a certificate chain and
+  its private key, presented on every TLS connection to the target, for a
+  certificate-bound token (RFC 8705 §3). `[load] trust_roots_file` holds the
+  roots that verify an `https` target, beside the platform's.
+- `dpop_key_file` on a request: a P-256 private key in PKCS#8 PEM. Every send
+  of that request carries a fresh `DPoP` proof (RFC 9449 §4.2) with a new
+  `jti`, `htm` and `htu` from the request, `iat` now, and `ath` over the
+  bearer token of its `authorization` header, which goes out under the
+  `DPoP` scheme. The proof is signed before the request's intended instant,
+  so a route's latency is the server's. A `401` asking for a `DPoP-Nonce`
+  counts as a failed request.
+
+The token itself stays the product's: mint it bound to the identity's
+thumbprint (`cnf."x5t#S256"`) or to the key (`cnf.jkt`). A relative path is
+read from the working directory, and a file that cannot be read or parsed
+refuses the plan before any phase runs.
 Arrival `i` sends request `i` modulo the set, so repeat an entry to weight
 it.
 

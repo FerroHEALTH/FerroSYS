@@ -35,7 +35,7 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use http::{HeaderName, HeaderValue, Method, StatusCode};
@@ -116,6 +116,14 @@ pub struct LoadSettings {
     /// The ratio of p99 to p50 above which every request group at once
     /// marks a stalled runner, refused as unsteady; above one.
     pub stall_ratio: f64,
+    /// A PEM file of a certificate chain and its private key, presented on
+    /// every TLS connection to the target (RFC 8705 §3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_identity_file: Option<PathBuf>,
+    /// A PEM file of the roots that verify an `https` target, beside the
+    /// platform's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_roots_file: Option<PathBuf>,
 }
 
 impl Default for LoadSettings {
@@ -132,6 +140,8 @@ impl Default for LoadSettings {
             settle_secs: 11,
             // NOTE: no specification governs this: our own design; a healthy run's p99 was 1.5 to 3 times its p50, a stalled 9V74 runner's 20 to 60 times.
             stall_ratio: 10.0,
+            client_identity_file: None,
+            trust_roots_file: None,
         }
     }
 }
@@ -169,6 +179,11 @@ pub struct Request {
     /// Header fields sent with it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// A P-256 private key in PKCS#8 PEM that signs a fresh `DPoP` proof
+    /// for every send of this request (RFC 9449 §4); its bearer token, if
+    /// any, goes out under the `DPoP` scheme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpop_key_file: Option<PathBuf>,
 }
 
 /// A plan file that cannot be read or is refused.
@@ -195,6 +210,9 @@ pub enum PlanError {
     /// A value the plan holds is refused.
     #[error("the plan is refused: {0}")]
     Invalid(String),
+    /// A credential file the plan names cannot be used.
+    #[error("the plan is refused: a credential file cannot be used")]
+    Credential(#[from] crate::credentials::CredentialError),
 }
 
 impl Plan {
@@ -204,20 +222,23 @@ impl Plan {
     ///
     /// [`PlanError::Read`] when the file cannot be read, [`PlanError::Parse`]
     /// when it is not a plan, and [`PlanError::Invalid`] for a value
-    /// [`Plan::parse`] refuses.
+    /// [`Plan::parse`] refuses, and [`PlanError::Credential`] for a credential
+    /// file that cannot be read or parsed.
     pub fn read(path: &Path) -> Result<Self, PlanError> {
         let shown = path.display().to_string();
         let text = std::fs::read_to_string(path).map_err(|source| PlanError::Read {
             path: shown.clone(),
             source,
         })?;
-        Self::parse(&text).map_err(|error| match error {
+        let plan = Self::parse(&text).map_err(|error| match error {
             PlanError::Parse { source, .. } => PlanError::Parse {
                 path: shown,
                 source,
             },
             other => other,
-        })
+        })?;
+        crate::credentials::Credentials::load(&plan)?;
+        Ok(plan)
     }
 
     /// Parses and checks a plan.

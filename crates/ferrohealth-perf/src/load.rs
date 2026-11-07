@@ -29,6 +29,7 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until, timeout, timeout_at};
 use url::Url;
 
+use crate::credentials::Credentials;
 use crate::histogram;
 use crate::plan::{LoadSettings, Plan, Request};
 use crate::quantile::exact_f64;
@@ -80,6 +81,38 @@ pub enum LoadError {
     /// The schedule does not fit in a run.
     #[error("the schedule of {0} arrivals is too long")]
     Schedule(u64),
+    /// A `DPoP` proof could not be signed.
+    #[error(transparent)]
+    Proof(crate::credentials::CredentialError),
+}
+
+/// A fresh `DPoP` proof for request `position` of the plan sent to `url`,
+/// when the request names a key.
+fn sign(
+    credentials: &Credentials,
+    position: usize,
+    request: &Request,
+    url: &Url,
+) -> Result<Option<String>, LoadError> {
+    credentials
+        .dpop(position)
+        .map(|key| key.proof(request.method.as_str(), url, bearer(request)))
+        .transpose()
+        .map_err(LoadError::Proof)
+}
+
+/// The bearer token of `request`'s `Authorization` header, if it has one.
+fn bearer(request: &Request) -> Option<&str> {
+    request
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        .and_then(|(_, value)| {
+            let (scheme, token) = value.split_once(' ')?;
+            scheme
+                .eq_ignore_ascii_case("bearer")
+                .then_some(token.trim())
+        })
 }
 
 #[derive(Debug)]
@@ -155,6 +188,7 @@ pub async fn drive(
     plan: &Plan,
     base: &Url,
     client: &Client,
+    credentials: &Credentials,
     start: Instant,
 ) -> Result<LoadOutcome, LoadError> {
     let load = &plan.load;
@@ -184,13 +218,18 @@ pub async fn drive(
     let mut tasks = JoinSet::new();
     let mut sent: u64 = 0;
     let mut saturated = false;
-    let mut order = plan.requests.iter().zip(urls.iter()).cycle();
+    let mut order = plan.requests.iter().zip(urls.iter()).enumerate().cycle();
     for index in 0..planned {
         let offset = Duration::try_from_secs_f64(exact_f64(index) / load.rate)
             .map_err(|_too_long| LoadError::Schedule(planned))?;
         let intended = start
             .checked_add(offset)
             .ok_or(LoadError::Schedule(planned))?;
+        let Some((position, (request, url))) = order.next() else {
+            break;
+        };
+        // NOTE: RFC 9449 §4.2: a proof is fresh per request; it is signed before the intended instant, outside the timed window.
+        let proof = sign(credentials, position, request, url)?;
         sleep_until(intended).await;
         let permit = if let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() {
             permit
@@ -206,9 +245,6 @@ pub async fn drive(
         if window != Window::Warmup {
             histogram::record(&mut lag, Instant::now().saturating_duration_since(intended));
         }
-        let Some((request, url)) = order.next() else {
-            break;
-        };
         let call = Call {
             client: client.clone(),
             request: request.clone(),
@@ -216,6 +252,7 @@ pub async fn drive(
             intended,
             window,
             request_timeout,
+            proof,
         };
         shared
             .lock()
@@ -282,6 +319,7 @@ struct Call {
     intended: Instant,
     window: Window,
     request_timeout: Duration,
+    proof: Option<String>,
 }
 
 impl Call {
@@ -321,7 +359,16 @@ impl Call {
             .request(method, self.url.clone())
             .timeout(self.request_timeout);
         for (name, value) in &self.request.headers {
-            builder = builder.header(name, value);
+            match (&self.proof, bearer(&self.request)) {
+                // NOTE: RFC 9449 §7.1: a DPoP-bound token goes out under the DPoP scheme.
+                (Some(_), Some(token)) if name.eq_ignore_ascii_case("authorization") => {
+                    builder = builder.header(name, format!("DPoP {token}"));
+                }
+                _ => builder = builder.header(name, value),
+            }
+        }
+        if let Some(proof) = &self.proof {
+            builder = builder.header("dpop", proof);
         }
         if let Some(body) = &self.request.body {
             builder = builder.body(body.clone());
@@ -384,6 +431,7 @@ mod tests {
             status: 200,
             body: None,
             headers: BTreeMap::new(),
+            dpop_key_file: None,
         };
         let base = Url::parse("http://127.0.0.1:8080/api/").unwrap();
         assert_eq!(
