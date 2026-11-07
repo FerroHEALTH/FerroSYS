@@ -149,10 +149,20 @@ fn the_entry_of_a_model_is_found_and_another_model_has_none() {
     let (plan, run) = (plan(), metrics(4.0, 50.0));
     let (entry, _) = updated(None, &update(&run, &plan, &host_of("EPYC 9V45")));
     let file = file_of(vec![entry.clone()]);
-    assert_eq!(Some(&entry), file.entry(Some("EPYC 9V45")));
-    assert_eq!(None, file.entry(Some("EPYC 7763")));
-    assert_eq!(None, file.entry(None), "a host with no model name");
-    assert_eq!(vec!["`EPYC 9V45`".to_owned()], file.models());
+    assert_eq!(
+        Some(&entry),
+        file.entry(Shape::new(Some("EPYC 9V45"), None))
+    );
+    assert_eq!(None, file.entry(Shape::new(Some("EPYC 7763"), None)));
+    assert_eq!(
+        None,
+        file.entry(Shape::new(None, None)),
+        "a host with no model name"
+    );
+    assert_eq!(
+        vec!["`EPYC 9V45` with no memory size".to_owned()],
+        file.models()
+    );
 }
 
 #[test]
@@ -169,16 +179,23 @@ fn an_entry_replaces_only_the_entry_of_its_model() {
     let file = file_of(vec![fast, slow.clone()]);
     let run = metrics(3.0, 50.0);
     let (tighter, _) = updated(
-        file.entry(Some("EPYC 9V45")),
+        file.entry(Shape::new(Some("EPYC 9V45"), None)),
         &update(&run, &plan, &host_of("EPYC 9V45")),
     );
     let file = file.with(tighter);
     assert_eq!(2, file.entries.len());
     assert_eq!(
         Some(&3.0),
-        file.entry(Some("EPYC 9V45")).unwrap().metrics.get(&p95())
+        file.entry(Shape::new(Some("EPYC 9V45"), None))
+            .unwrap()
+            .metrics
+            .get(&p95())
     );
-    assert_eq!(Some(&slow), file.entry(Some("EPYC 7763")), "untouched");
+    assert_eq!(
+        Some(&slow),
+        file.entry(Shape::new(Some("EPYC 7763"), None)),
+        "untouched"
+    );
 }
 
 #[test]
@@ -192,7 +209,9 @@ fn a_schema_1_file_migrates_into_one_entry_of_its_model() {
     let file = Baselines::parse(text).unwrap();
     assert_eq!(SCHEMA, file.schema);
     assert_eq!(1, file.entries.len());
-    let entry = file.entry(Some("AMD EPYC 9V45 96-Core Processor")).unwrap();
+    let entry = file
+        .entry(Shape::new(Some("AMD EPYC 9V45 96-Core Processor"), None))
+        .unwrap();
     assert_eq!(2, entry.metrics.len());
     assert_eq!("0.1.0", entry.tool);
     assert!(
@@ -213,7 +232,9 @@ fn a_schema_2_file_keeps_its_entries_marked_for_re_measurement() {
                 [baseline.metrics]\nthroughput_rps = 49.9\n\"metadata.p95_ms\" = 4.1\n";
     let file = Baselines::parse(text).unwrap();
     assert_eq!(SCHEMA, file.schema);
-    let entry = file.entry(Some("AMD EPYC 7763 64-Core Processor")).unwrap();
+    let entry = file
+        .entry(Shape::new(Some("AMD EPYC 7763 64-Core Processor"), None))
+        .unwrap();
     assert!(entry.remeasure);
     assert_eq!(2, entry.metrics.len(), "the values are kept");
     let written = file.to_toml().unwrap();
@@ -290,7 +311,7 @@ fn a_bad_value_or_a_model_named_twice_is_refused() {
     assert!(
         refused
             .to_string()
-            .contains("two entries for the CPU model `EPYC 7763`"),
+            .contains("two entries for the host `EPYC 7763` with no memory size"),
         "{refused}"
     );
 }
@@ -342,4 +363,106 @@ fn the_ratchet_tightens_only_on_a_better_median() {
     let (medians, _) = across(&better);
     let (tightened, _) = updated(Some(&old), &update(&medians, &plan, &host));
     assert_eq!(Some(&4.1), tightened.metrics.get(&p95()));
+}
+
+fn job(p95_ms: f64, model: &str, floor: f64) -> Baselines {
+    let (plan, run, host) = (plan(), metrics(p95_ms, 50.0), host_of(model));
+    let mut job_update = update(&run, &plan, &host);
+    job_update.noise = BTreeMap::from([(p95(), floor)]);
+    let (entry, _) = updated(None, &job_update);
+    file_of(vec![entry])
+}
+
+#[test]
+fn a_merge_takes_the_median_and_the_spread_between_jobs() {
+    let other = job(9.0, "EPYC 9V45", 1.1);
+    let committed = file_of(vec![
+        job(4.0, "EPYC 7763", 1.05).entries.remove(0),
+        other.entries.first().unwrap().clone(),
+    ]);
+    let jobs = [job(5.0, "EPYC 7763", 1.08), job(6.0, "EPYC 7763", 1.02)];
+    let (file, merged) = merge(Some(committed), &jobs, "0.4.0", "2026-11-07T12:00:00Z").unwrap();
+    assert_eq!(
+        vec![Merged {
+            model: "`EPYC 7763` with no memory size".to_owned(),
+            jobs: 3
+        }],
+        merged
+    );
+    let entry = file.entry(Shape::new(Some("EPYC 7763"), None)).unwrap();
+    assert_eq!(
+        Some(&5.0),
+        entry.metrics.get(&p95()),
+        "the median of 4, 5 and 6"
+    );
+    assert!(
+        (entry.noise.get(&p95()).unwrap() - 1.2).abs() < 1e-9,
+        "the spread between jobs, 6 over 5, past every job's own floor: {:?}",
+        entry.noise
+    );
+    assert_eq!(
+        other.entries.first(),
+        file.entry(Shape::new(Some("EPYC 9V45"), None)),
+        "another model is untouched"
+    );
+}
+
+#[test]
+fn a_merge_keeps_a_job_floor_wider_than_the_spread() {
+    let jobs = [job(5.0, "EPYC 7763", 1.5), job(5.1, "EPYC 7763", 1.0)];
+    let (file, _) = merge(None, &jobs, "0.4.0", "2026-11-07T12:00:00Z").unwrap();
+    let entry = file.entry(Shape::new(Some("EPYC 7763"), None)).unwrap();
+    assert!((entry.noise.get(&p95()).unwrap() - 1.5).abs() < 1e-9);
+}
+
+#[test]
+fn a_merge_refuses_entries_of_one_model_from_different_plans() {
+    let mut other = job(5.0, "EPYC 7763", 1.0);
+    other.entries.first_mut().unwrap().plan.rate = 10.0;
+    let jobs = [job(5.0, "EPYC 7763", 1.0), other];
+    let refused = merge(None, &jobs, "0.4.0", "2026-11-07T12:00:00Z").unwrap_err();
+    assert!(refused.to_string().contains("different plans"), "{refused}");
+}
+
+#[test]
+fn hosts_of_one_cpu_model_and_another_memory_size_never_share_an_entry() {
+    let plan = plan();
+    let small = Fingerprint {
+        total_memory_bytes: Some(8 << 30),
+        ..host_of("AMD EPYC 9V45 96-Core Processor")
+    };
+    let large = Fingerprint {
+        total_memory_bytes: Some(16 << 30),
+        ..small.clone()
+    };
+    let (on_small, _) = updated(None, &update(&metrics(4.0, 50.0), &plan, &small));
+    let (on_large, _) = updated(None, &update(&metrics(6.0, 50.0), &plan, &large));
+    let file = file_of(vec![on_small.clone(), on_large.clone()]);
+    assert_eq!(2, file.entries.len(), "one entry per shape");
+    assert_eq!(Some(&on_small), file.entry(Shape::of(&small)));
+    assert_eq!(Some(&on_large), file.entry(Shape::of(&large)));
+    let other = Fingerprint {
+        total_memory_bytes: Some(32 << 30),
+        ..small.clone()
+    };
+    assert_eq!(
+        None,
+        file.entry(Shape::of(&other)),
+        "a third size has no entry"
+    );
+    assert_eq!(
+        "`AMD EPYC 9V45 96-Core Processor` with 8192 MiB of memory",
+        Shape::of(&small).to_string()
+    );
+    // An update on the large host leaves the small host's entry alone.
+    let (tighter, _) = updated(
+        file.entry(Shape::of(&large)),
+        &update(&metrics(5.0, 50.0), &plan, &large),
+    );
+    let file = file.with(tighter);
+    assert_eq!(Some(&on_small), file.entry(Shape::of(&small)));
+    assert_eq!(
+        Some(&5.0),
+        file.entry(Shape::of(&large)).unwrap().metrics.get(&p95())
+    );
 }

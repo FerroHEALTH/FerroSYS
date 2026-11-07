@@ -39,6 +39,16 @@ busier under load than the baseline the product committed.
    the peak memory, the CPU time per request and the transactions per
    request. The second half of the window must match the first within 0.8
    to 1.25 on p50 and p95, or the run is not steady and cannot be judged.
+   A phase where every route's p99 is over `stall_ratio` (10 by default)
+   times its p50 at once marks a stalled runner: it is reported, never
+   judged, and the run exits 2.
+3. **Confirmation.** When a load metric breaches its entry, the tool runs
+   the load phase again, each time after its own warm-up, up to two more
+   times, and fails the metric only when it breaches in most of the runs
+   (two of three). A one-off stall or a noisy runner clears on a fresh run,
+   and a real regression repeats in every run. The report keeps every run
+   under `confirmations`, and the check names in how many runs it
+   breached.
 
 CPU and memory come from `/proc/<pid>` (`--pid`) or from a cgroup v2
 directory (`--cgroup`, or `--container` with a container id). The Docker
@@ -55,28 +65,32 @@ Pin the version exactly, as every FerroHEALTH product does.
 ```sh
 ferrohealth-perf run --pid "$SERVER_PID" --base-url http://127.0.0.1:8080 \
   --database-url "$DATABASE_URL"
-ferrohealth-perf run ... --update      # write or lower this CPU model's entry
+ferrohealth-perf run ... --update      # write or lower this host shape's entry
 ferrohealth-perf compare --report target/perf/latest.json
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--plan` | `perf/plan.toml` | the limits, the load and the request set |
-| `--baseline` | `perf/baseline.toml` | the committed baseline, one entry per CPU model |
+| `--baseline` | `perf/baseline.toml` | the committed baseline, one entry per host shape |
 | `--pid`, `--cgroup`, `--container` | one is required | the server's process, cgroup or container |
 | `--cgroup-root` | `/sys/fs/cgroup` | where `--container` looks |
 | `--base-url` | required | the server's base URL |
 | `--database-url` | `FERROHEALTH_PERF_DATABASE_URL` | the database whose transactions are counted |
 | `--out-dir` | `target/perf` | where the JSON reports go |
 | `--summary` | none | a file the Markdown summary is also written to |
-| `--update` | off | write the entry of the runner's CPU model from a run that passes |
+| `--update` | off | write the entry of the runner's host shape from a run that passes |
 | `--runs` | `5` | the load phases `--update` measures, at least 2 |
+
+`ferrohealth-perf merge --baseline perf/baseline.toml JOB...` merges the
+baseline files several `--update` jobs wrote into the committed one and
+contacts no server (see [Merging jobs](#merging-jobs)).
 
 Exit codes: **0** the run passed, **1** a limit or tolerance was breached
 or a request was answered other than expected, **2** the run cannot be
-judged (no baseline, no entry for the runner's CPU model, a baseline of
+judged (no baseline, no entry for the runner's host shape, a baseline of
 another plan, a metric the baseline holds and the run lacks, a lagging
-generator, an unsteady window) or a harness error. The idle limits judge
+generator, an unsteady window, a stalled runner) or a harness error. The idle limits judge
 every run, so a busy server fails with 1 even where the load phase cannot
 be judged. Every credential in a URL is redacted in the output.
 
@@ -99,6 +113,7 @@ timeout_ms = 10000
 max_lag_ms = 10                    # the generator's lag p99 limit
 sample_ms = 100                    # how often memory is sampled
 settle_secs = 11                   # wait after it, before the transaction count
+stall_ratio = 10.0                 # p99 over this times p50 on every route marks a stall
 
 [[requests]]
 group = "metadata"
@@ -121,16 +136,18 @@ it.
 
 ## The baseline, `perf/baseline.toml`
 
-Shared CI runners mix CPU generations: on GitHub's hosted ubuntu runners
-the same commit measured 25 to 45 % slower on an AMD EPYC 7763 than on an
-EPYC 9V45. A latency or a CPU time is comparable only on a like CPU, so the
-file holds one `[[baseline]]` entry per CPU model, keyed by the
-`cpu_model` of the host fingerprint (`model name` in `/proc/cpuinfo`). A
-run is judged against the entry for its own model. A model with no entry
-cannot be judged: the run exits 2, naming the model and the models the file
-holds, and the idle limits still judge it.
+Shared CI runners mix host shapes: on GitHub's hosted ubuntu runners the
+same commit measured 25 to 45 % slower on an AMD EPYC 7763 than on an EPYC
+9V45, and about 35 % slower on one EPYC 9V45 than on another with a
+different memory size. A latency or a CPU time is comparable only on a like
+host, so the file holds one `[[baseline]]` entry per host shape, keyed by
+the `cpu_model` and the `total_memory_bytes` of the host fingerprint
+(`model name` in `/proc/cpuinfo`, `MemTotal` in `/proc/meminfo`). A run is
+judged against the entry for its own shape. A shape with no entry cannot be
+judged: the run exits 2, naming the shape and the shapes the file holds,
+and the idle limits still judge it.
 
-`--update` writes the entry of the runner's model from `--runs` load phases
+`--update` writes the entry of the runner's shape from `--runs` load phases
 (5 by default), each after its own warm-up. The first is judged like any
 run, and only a run that passes is written. Each metric of the entry is the
 median of the phases, and its noise floor is how far the worst phase strayed
@@ -196,6 +213,24 @@ of schema 2 or older was measured within one run, so it is kept marked
 `remeasure = true`: it judges no load phase, the run exits 2 asking for an
 update, and the next `--update` on that model measures it afresh.
 
+### Merging jobs
+
+The phases of one update all run on one virtual machine, and machines of one
+shape still differ from each other. To fold that spread into the floor, run
+the update in several jobs, take each job's `perf/baseline.toml` from its
+artifact, and merge them:
+
+```sh
+ferrohealth-perf merge --baseline perf/baseline.toml job-1.toml job-2.toml job-3.toml
+```
+
+For each host shape the jobs hold an entry of, the merged entry takes per
+metric the median over the jobs and the committed entry, and as its noise
+floor the larger of their spread and the largest floor any of them
+recorded. The tolerances of the committed entry are kept, every other entry
+is left as it was, and entries of one shape measured with different plans
+are refused. A merge is a reviewed change to the committed file.
+
 ## The report
 
 Each run writes `report-<UTC time>.json` into `--out-dir` and replaces
@@ -244,9 +279,10 @@ For a server in a container, pass `--container "$(docker inspect -f
 write or lower an entry, run the job with `--update` on the runner pool the
 gate runs on, take `perf/baseline.toml` from the uploaded artifact, and
 commit it; the file holds the committed entries and the run's own. Commit
-an entry for every CPU model the pool serves: re-run the job until each
-model has its entry. A pool that later brings a new model fails with exit 2 and
-names it, and that model's entry is added the same way.
+an entry for every host shape the pool serves: re-run the job until each
+shape has its entry, and merge the jobs of one shape (see [Merging
+jobs](#merging-jobs)). A pool that later brings a new shape fails with exit
+2 and names it, and that shape's entry is added the same way.
 
 ## Licence
 

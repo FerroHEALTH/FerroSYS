@@ -5,9 +5,10 @@
 //! judgement, the report files and, with `--update`, the baseline.
 //!
 //! An update measures further load phases, each after its own warm-up, and
-//! writes the entry from their medians and spread.
+//! writes the entry from their medians and spread. A run that breaches a
+//! load metric runs up to two fresh load phases to confirm it.
 //!
-//! `--update` writes the baseline entry of the runner's CPU model only from
+//! `--update` writes the baseline entry of the runner's host shape only from
 //! a run that passes, and leaves every other entry as it was: a breach or a
 //! run that cannot be judged leaves the file as it was. No specification
 //! governs the run: our own design.
@@ -290,6 +291,7 @@ async fn load_phase(
         saturated: outcome.saturated,
         lag_p99_ms: quantile(&outcome.lag, QuantileName::P99).value_ms(),
         max_lag_ms: load.max_lag_ms,
+        stall_ratio: Some(load.stall_ratio),
         peak_memory_bytes: peak,
         cpu_ms: cpu_between(first, last).map(|cpu| cpu.as_secs_f64() * 1_000.0),
         transactions: delta(before, after)?,
@@ -331,7 +333,7 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
             calibration.push(load_phase(plan, &base, &client, &instruments).await?);
         }
     }
-    let report = Report {
+    let mut report = Report {
         schema: SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_owned(),
         started,
@@ -346,8 +348,33 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
         idle,
         load,
         calibration,
+        confirmations: Vec::new(),
     };
+    while !options.update && needs_confirmation(&report, old.as_ref())? {
+        report
+            .confirmations
+            .push(load_phase(plan, &base, &client, &instruments).await?);
+        report.finished = now();
+    }
     conclude(report, old.as_ref(), options)
+}
+
+/// Whether one more fresh load phase could decide a breach of `report`.
+///
+/// It could while a load metric breached in some run but not in most of
+/// three, and fewer than two confirmations ran. An update measures its own
+/// phases and confirms nothing.
+///
+/// # Errors
+///
+/// [`RunError::Report`] when a histogram of the report does not decode.
+pub fn needs_confirmation(report: &Report, old: Option<&Baselines>) -> Result<bool, RunError> {
+    let confirmed = u32::try_from(report.confirmations.len()).unwrap_or(u32::MAX);
+    if confirmed.saturating_add(1) >= crate::compare::RUNS {
+        return Ok(false);
+    }
+    let verdict = judge_file(report, old, false)?;
+    Ok(verdict.checks.iter().any(crate::compare::Check::undecided))
 }
 
 /// What makes runs of `plan` comparable.
@@ -386,7 +413,7 @@ pub fn conclude(
                 .collect::<Result<Vec<_>, _>>()?;
             let (metrics, noise) = baseline::across(&phases);
             let written = now();
-            let entry = old.and_then(|file| file.entry(report.host.cpu_model.as_deref()));
+            let entry = old.and_then(|file| file.entry(baseline::Shape::of(&report.host)));
             let (baseline, done) = baseline::updated(
                 entry,
                 &Update {
@@ -402,7 +429,7 @@ pub fn conclude(
                 schema: baseline::SCHEMA,
                 entries: Vec::new(),
             });
-            let model = baseline::model_name(baseline.model());
+            let model = baseline.shape().to_string();
             file.with(baseline).write(&options.baseline)?;
             text.push_str(&changes_markdown(&options.baseline, &model, &done));
             changes = Some(done);
@@ -421,7 +448,7 @@ pub fn conclude(
 
 fn changes_markdown(path: &Path, model: &str, changes: &[Change]) -> String {
     let mut text = format!(
-        "### Baseline\n\nThe entry for the CPU model {model}, the median of the update's load \
+        "### Baseline\n\nThe entry for the host {model}, the median of the update's load \
          phases, written to `{}`:\n\n",
         path.display()
     );
@@ -447,7 +474,7 @@ fn changes_markdown(path: &Path, model: &str, changes: &[Change]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::baseline::Baseline;
+    use crate::baseline::{Baseline, Shape};
     use crate::report::fixture;
 
     fn options(dir: &Path) -> RunOptions {
@@ -480,25 +507,39 @@ mod tests {
         let options = options(dir.path());
         conclude(on_model(20, "EPYC 7763"), None, &options).unwrap();
         let first = Baselines::read(&options.baseline).unwrap().unwrap();
-        let slow = first.entry(Some("EPYC 7763")).unwrap().clone();
+        let slow = first
+            .entry(Shape::new(Some("EPYC 7763"), None))
+            .unwrap()
+            .clone();
 
         let result = conclude(on_model(10, "EPYC 9V45"), Some(&first), &options).unwrap();
         assert!(
             result
                 .summary
-                .contains("The entry for the CPU model `EPYC 9V45`"),
+                .contains("The entry for the host `EPYC 9V45`"),
             "{}",
             result.summary
         );
         let both = Baselines::read(&options.baseline).unwrap().unwrap();
         assert_eq!(2, both.entries.len());
-        assert_eq!(Some(&slow), both.entry(Some("EPYC 7763")), "untouched");
+        assert_eq!(
+            Some(&slow),
+            both.entry(Shape::new(Some("EPYC 7763"), None)),
+            "untouched"
+        );
 
         // A faster run of the slow model tightens its entry alone.
-        let fast = both.entry(Some("EPYC 9V45")).unwrap().clone();
+        let fast = both
+            .entry(Shape::new(Some("EPYC 9V45"), None))
+            .unwrap()
+            .clone();
         conclude(on_model(15, "EPYC 7763"), Some(&both), &options).unwrap();
         let after = Baselines::read(&options.baseline).unwrap().unwrap();
-        assert_eq!(Some(&fast), after.entry(Some("EPYC 9V45")), "untouched");
+        assert_eq!(
+            Some(&fast),
+            after.entry(Shape::new(Some("EPYC 9V45"), None)),
+            "untouched"
+        );
         let p50 = |entry: &Baseline| {
             entry
                 .metrics
@@ -508,8 +549,44 @@ mod tests {
                 .unwrap()
         };
         assert!(
-            p50(after.entry(Some("EPYC 7763")).unwrap()) < p50(&slow),
+            p50(after.entry(Shape::new(Some("EPYC 7763"), None)).unwrap()) < p50(&slow),
             "the slow model's entry tightened"
+        );
+    }
+
+    #[test]
+    fn a_breach_asks_for_fresh_runs_until_most_of_three_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = options(dir.path());
+        conclude(on_model(10, "EPYC 7763"), None, &options).unwrap();
+        let file = Baselines::read(&options.baseline).unwrap().unwrap();
+        let quiet = on_model(10, "EPYC 7763");
+        assert!(!needs_confirmation(&quiet, Some(&file)).unwrap());
+        let mut slower = on_model(20, "EPYC 7763");
+        assert!(
+            needs_confirmation(&slower, Some(&file)).unwrap(),
+            "a first breach"
+        );
+        slower.confirmations.push(fixture::load(20, 250));
+        assert!(
+            !needs_confirmation(&slower, Some(&file)).unwrap(),
+            "two of two decide it"
+        );
+        let mut stalled = on_model(20, "EPYC 7763");
+        stalled.confirmations.push(fixture::load(10, 250));
+        assert!(
+            needs_confirmation(&stalled, Some(&file)).unwrap(),
+            "the third decides"
+        );
+        stalled.confirmations.push(fixture::load(10, 250));
+        assert!(
+            !needs_confirmation(&stalled, Some(&file)).unwrap(),
+            "at most two"
+        );
+        let unknown = on_model(20, "EPYC 9V74");
+        assert!(
+            !needs_confirmation(&unknown, Some(&file)).unwrap(),
+            "no entry, nothing to confirm"
         );
     }
 }

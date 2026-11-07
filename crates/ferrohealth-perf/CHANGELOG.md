@@ -10,6 +10,40 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-07
+
+### Changed
+
+- Breaking: a load breach is confirmed on fresh runs before it fails the
+  gate (#265). When a load metric breaches its entry, `run` measures the
+  load phase again, each time after its own warm-up, up to two more times,
+  and fails the metric only when it breaches in most of the runs. A one-off
+  stall or a noisy runner clears, and a real regression fails in every run.
+  The JSON report moves to schema 3 with the further phases under
+  `confirmations`, each check carries `runs` and `breached`, and its rule
+  names in how many runs it breached; `compare` still reads schemas 1 and 2.
+  No tolerance moves.
+- Breaking: a baseline entry is keyed by the host shape, the CPU model and
+  the total memory of the fingerprint together, so hosts of one CPU model
+  and another memory size never share an entry (#265; one EPYC 9V45 ran
+  about 35 % slower on another memory size). An entry committed by 0.3.0 is
+  found only by a host of the memory size it recorded, and a host of
+  another size exits 2 naming its shape. In the library `Baselines::entry`
+  takes a `Shape`, `Baseline::model` is replaced by `Baseline::shape`, and
+  `model_name` by the `Display` of `Shape`.
+
+### Added
+
+- A load phase where every route's p99 is over `[load] stall_ratio` (10 by
+  default) times its p50 at once marks a stalled runner: it is reported,
+  never judged, and the run exits 2; a stalled confirmation is not counted
+  (#265).
+- `ferrohealth-perf merge --baseline <file> <job>...` merges the baselines
+  several `--update` jobs wrote into the committed one, per host shape: the
+  median over the jobs and the committed entry, and as the noise floor the
+  larger of their spread and every job's own floor, so the floor holds the
+  spread between runners and not only within one (#265).
+
 ## [0.3.0] - 2026-11-07
 
 ### Changed

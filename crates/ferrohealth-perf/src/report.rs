@@ -22,7 +22,7 @@ use crate::histogram::{self, HistogramError};
 use crate::quantile::{Quantile, QuantileName, quantile};
 
 /// The schema of the report this version writes and reads.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 /// The band within which the second half's p50 and p95 must lie, as a
 /// share of the first half's.
@@ -54,6 +54,10 @@ pub struct Report {
     /// whose medians and spread with [`Report::load`] write the baseline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calibration: Vec<LoadReport>,
+    /// The fresh load phases a breach of [`Report::load`] was confirmed
+    /// or cleared on, each after its own warm-up; at most two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub confirmations: Vec<LoadReport>,
 }
 
 /// The server a run measured.
@@ -127,6 +131,10 @@ pub struct LoadReport {
     pub lag_p99_ms: Option<f64>,
     /// The limit on that lag, in milliseconds.
     pub max_lag_ms: u64,
+    /// The ratio of p99 to p50 above which every group at once marks a
+    /// stalled runner; absent in a report written before 0.4.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_ratio: Option<f64>,
     /// The server's peak memory over the phase, in bytes, when readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_memory_bytes: Option<u64>,
@@ -206,7 +214,7 @@ pub enum ReportError {
         source: serde_json::Error,
     },
     /// The report was written by a schema this version does not read.
-    #[error("the report has schema {0}; this ferrohealth-perf reads schema {SCHEMA} and 1")]
+    #[error("the report has schema {0}; this ferrohealth-perf reads schemas 1 to {SCHEMA}")]
     Schema(u32),
 }
 
@@ -282,6 +290,27 @@ impl LoadReport {
         })
     }
 
+    /// Whether the runner stalled: every group whose p50 and p99 resolve
+    /// has a p99 above [`LoadReport::stall_ratio`] times its p50, at once.
+    /// A stall that slows only some routes is left to the confirmation of a
+    /// breach.
+    #[must_use]
+    pub fn stalled(&self) -> bool {
+        let Some(limit) = self.stall_ratio else {
+            return false;
+        };
+        let ratios: Vec<f64> = self
+            .groups
+            .values()
+            .filter_map(|group| {
+                let at = |name| group.quantiles.get(&name).and_then(Quantile::value_ms);
+                let (p50, p99) = (at(QuantileName::P50)?, at(QuantileName::P99)?);
+                (p50 > 0.0).then_some(p99 / p50)
+            })
+            .collect();
+        !ratios.is_empty() && ratios.iter().all(|ratio| *ratio > limit)
+    }
+
     /// The requests answered as expected in the measured window.
     #[must_use]
     pub fn answered(&self) -> u64 {
@@ -315,6 +344,11 @@ impl Report {
             .unwrap_or(0);
         match schema {
             SCHEMA => {}
+            2 => {
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("schema".to_owned(), serde_json::Value::from(SCHEMA));
+                }
+            }
             // NOTE: no specification governs this: our own design; schema 1 held one calibration phase, not a list.
             1 => {
                 if let Some(object) = value.as_object_mut() {
@@ -386,6 +420,7 @@ mod tests {
             saturated: false,
             lag_p99_ms: Some(0.5),
             max_lag_ms: 10,
+            stall_ratio: Some(10.0),
             peak_memory_bytes: None,
             cpu_ms: None,
             transactions: None,
@@ -453,5 +488,21 @@ mod tests {
         assert_eq!(report.calibration, read.calibration);
         std::fs::write(&path, "{\"schema\": 9}").unwrap();
         assert!(matches!(Report::read(&path), Err(ReportError::Schema(9))));
+    }
+
+    #[test]
+    fn a_stall_is_every_route_at_once_past_the_ratio() {
+        let mut load = load_of(10, 10);
+        assert!(!load.stalled(), "a steady phase");
+        load = fixture::tailed(10, 500, 1000);
+        assert!(load.stalled(), "p99 at 50 times p50");
+        let quiet = load_of(10, 10).groups.remove("read").unwrap();
+        load.groups.insert("other".to_owned(), quiet);
+        assert!(
+            !load.stalled(),
+            "one route held, so it is no whole-host stall"
+        );
+        load.stall_ratio = None;
+        assert!(!load.stalled(), "a report written before 0.4.0");
     }
 }

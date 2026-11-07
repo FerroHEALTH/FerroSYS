@@ -33,6 +33,7 @@ pub(crate) fn tailed(latency_ms: u64, tail_ms: u64, n: u64) -> LoadReport {
         saturated: false,
         lag_p99_ms: Some(0.5),
         max_lag_ms: 10,
+        stall_ratio: Some(10.0),
         peak_memory_bytes: Some(100_000_000),
         cpu_ms: Some(2.0 * 100.0 * 0.5),
         transactions: Some(2 * n),
@@ -81,5 +82,6 @@ pub(crate) fn report() -> Report {
         },
         load: load(10, 250),
         calibration: Vec::new(),
+        confirmations: Vec::new(),
     }
 }
