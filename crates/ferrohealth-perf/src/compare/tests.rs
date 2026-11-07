@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use super::*;
-use crate::baseline::{Baselines, Update, updated};
-use crate::report::fixture;
+use crate::baseline::{Baselines, Shape, Update, updated};
+use crate::report::{LoadReport, fixture};
 
 fn baseline_of(report: &Report) -> Baseline {
     let metrics = crate::metric::of(&report.load).unwrap();
@@ -259,7 +259,12 @@ fn a_run_is_judged_against_the_entry_of_its_cpu_model() {
     let verdict = judge_file(&slow, Some(&file), false).unwrap();
     assert_eq!(Outcome::Pass, verdict.outcome, "{verdict:?}");
     // Against the fast entry the same run would breach.
-    let against_fast = judge(&slow, file.entry(Some("EPYC 9V45")), false).unwrap();
+    let against_fast = judge(
+        &slow,
+        file.entry(Shape::new(Some("EPYC 9V45"), None)),
+        false,
+    )
+    .unwrap();
     assert_eq!(Outcome::Fail, against_fast.outcome);
 }
 
@@ -273,7 +278,7 @@ fn a_model_with_no_entry_cannot_be_judged_and_is_named() {
     assert_eq!(2, verdict.outcome.code());
     let problem = &verdict.problems[0];
     assert!(
-        problem.contains("no entry for the CPU model `EPYC 7763`"),
+        problem.contains("no entry for the host `EPYC 7763` with no memory size"),
         "{problem}"
     );
     assert!(problem.contains("it holds `EPYC 9V45`"), "{problem}");
@@ -380,5 +385,150 @@ fn an_entry_marked_for_re_measurement_judges_no_load_phase() {
         Outcome::Fail,
         judge(&busy, Some(&entry), false).unwrap().outcome,
         "the idle limits still judge"
+    );
+}
+
+/// The fixture report with its first load phase replaced by `load` and
+/// `confirmations` after it.
+fn with_runs(load: LoadReport, confirmations: Vec<LoadReport>) -> Report {
+    let mut report = fixture::report();
+    report.load = load;
+    report.confirmations = confirmations;
+    report
+}
+
+fn p99_check(verdict: &Verdict) -> &Check {
+    verdict
+        .checks
+        .iter()
+        .find(|c| c.name == "read.p99_ms")
+        .unwrap()
+}
+
+#[test]
+fn a_breach_in_one_run_of_three_is_a_stall_and_passes() {
+    let entry = baseline_of(&fixture::report());
+    // The first run's tail stalled to 40 ms; two fresh runs hold at 10 ms.
+    let stalled = with_runs(
+        fixture::tailed(10, 40, 1000),
+        vec![fixture::load(10, 250), fixture::load(10, 250)],
+    );
+    let verdict = judge(&stalled, Some(&entry), false).unwrap();
+    assert_eq!(Outcome::Pass, verdict.outcome, "{verdict:?}");
+    let check = p99_check(&verdict);
+    assert_eq!((1, 3), (check.breached, check.runs));
+    assert!(
+        check.rule.contains("breached in 1 of 3 runs"),
+        "{}",
+        check.rule
+    );
+}
+
+#[test]
+fn a_real_2x_regression_fails_in_every_run() {
+    let entry = baseline_of(&fixture::report());
+    for confirmations in [
+        vec![fixture::load(20, 250)],
+        vec![fixture::load(20, 250), fixture::load(20, 250)],
+    ] {
+        let runs = u32::try_from(confirmations.len()).unwrap() + 1;
+        let slower = with_runs(fixture::load(20, 250), confirmations);
+        let verdict = judge(&slower, Some(&entry), false).unwrap();
+        assert_eq!(Outcome::Fail, verdict.outcome);
+        let check = p99_check(&verdict);
+        assert_eq!(
+            (runs, runs),
+            (check.breached, check.runs),
+            "breached in every run"
+        );
+        assert!(!check.passed);
+    }
+}
+
+#[test]
+fn a_breach_is_undecided_until_most_of_three_runs_agree() {
+    let entry = baseline_of(&fixture::report());
+    let first = judge(
+        &with_runs(fixture::load(20, 250), Vec::new()),
+        Some(&entry),
+        false,
+    )
+    .unwrap();
+    assert!(p99_check(&first).undecided(), "one breach of one run");
+    let cleared = with_runs(fixture::load(20, 250), vec![fixture::load(10, 250)]);
+    let verdict = judge(&cleared, Some(&entry), false).unwrap();
+    assert!(
+        p99_check(&verdict).undecided(),
+        "one of two: the third decides"
+    );
+    let confirmed = with_runs(fixture::load(20, 250), vec![fixture::load(20, 250)]);
+    let verdict = judge(&confirmed, Some(&entry), false).unwrap();
+    assert!(
+        !p99_check(&verdict).undecided(),
+        "two of two cannot be outvoted"
+    );
+    let quiet = judge(&fixture::report(), Some(&entry), false).unwrap();
+    assert!(
+        quiet.checks.iter().all(|c| !c.undecided()),
+        "nothing breached"
+    );
+}
+
+#[test]
+fn a_whole_host_stall_is_refused_and_never_judged() {
+    let entry = baseline_of(&fixture::report());
+    // Every route's p99 at 50 times its p50: the runner stalled.
+    let stalled = with_runs(fixture::tailed(10, 500, 1000), Vec::new());
+    let verdict = judge(&stalled, Some(&entry), false).unwrap();
+    assert_eq!(Outcome::Invalid, verdict.outcome, "{verdict:?}");
+    assert_eq!(2, verdict.outcome.code());
+    assert!(
+        verdict
+            .problems
+            .iter()
+            .any(|p| p.contains("the runner stalled in load phase 1")),
+        "{:?}",
+        verdict.problems
+    );
+    assert!(
+        verdict.checks.iter().all(|c| c.name.starts_with("idle.")),
+        "no load metric is judged on a stalled phase"
+    );
+}
+
+#[test]
+fn a_stalled_confirmation_is_not_counted() {
+    let entry = baseline_of(&fixture::report());
+    let report = with_runs(
+        fixture::load(20, 250),
+        vec![fixture::tailed(10, 500, 1000), fixture::load(20, 250)],
+    );
+    let verdict = judge(&report, Some(&entry), false).unwrap();
+    let check = p99_check(&verdict);
+    assert_eq!(
+        (2, 2),
+        (check.breached, check.runs),
+        "the stalled phase is left out"
+    );
+    assert_eq!(Outcome::Fail, verdict.outcome);
+}
+
+#[test]
+fn a_run_on_another_memory_size_has_no_entry_and_names_its_shape() {
+    let mut known = on_model(fixture::report(), "EPYC 9V45");
+    known.host.total_memory_bytes = Some(16 << 30);
+    let file = file_of(vec![baseline_of(&known)]);
+    let mut other = known.clone();
+    other.host.total_memory_bytes = Some(8 << 30);
+    let verdict = judge_file(&other, Some(&file), false).unwrap();
+    assert_eq!(Outcome::Invalid, verdict.outcome);
+    assert!(
+        verdict.problems[0].contains("`EPYC 9V45` with 8192 MiB of memory"),
+        "{:?}",
+        verdict.problems
+    );
+    assert_eq!(
+        Outcome::Pass,
+        judge_file(&known, Some(&file), false).unwrap().outcome
     );
 }

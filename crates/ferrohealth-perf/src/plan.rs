@@ -113,6 +113,9 @@ pub struct LoadSettings {
     /// How long the tool waits after the phase before it reads the
     /// transaction count, in seconds.
     pub settle_secs: u64,
+    /// The ratio of p99 to p50 above which every request group at once
+    /// marks a stalled runner, refused as unsteady; above one.
+    pub stall_ratio: f64,
 }
 
 impl Default for LoadSettings {
@@ -127,6 +130,8 @@ impl Default for LoadSettings {
             max_lag_ms: 10,
             sample_ms: 100,
             settle_secs: 11,
+            // NOTE: no specification governs this: our own design; a healthy run's p99 was 1.5 to 3 times its p50, a stalled 9V74 runner's 20 to 60 times.
+            stall_ratio: 10.0,
         }
     }
 }
@@ -246,6 +251,12 @@ impl Plan {
         }
         if load.duration_secs == 0 {
             return invalid("load.duration_secs must be at least 1".to_owned());
+        }
+        if !(load.stall_ratio.is_finite() && load.stall_ratio > 1.0) {
+            return invalid(format!(
+                "load.stall_ratio must be finite and above 1, not {}",
+                load.stall_ratio
+            ));
         }
         if load.max_in_flight == 0 || load.sample_ms == 0 || load.timeout_ms == 0 {
             return invalid(
@@ -372,6 +383,19 @@ mod tests {
     fn an_unknown_key_is_refused() {
         let text = format!("[idle]\nmax_cpu = 3.0\n{ONE}");
         assert!(matches!(Plan::parse(&text), Err(PlanError::Parse { .. })));
+    }
+
+    #[test]
+    fn a_stall_ratio_of_one_or_less_is_refused() {
+        for ratio in ["1.0", "0.5", "inf"] {
+            let text = format!("[load]\nstall_ratio = {ratio}\n{ONE}");
+            assert!(
+                matches!(Plan::parse(&text), Err(PlanError::Invalid(reason)) if reason.contains("stall_ratio")),
+                "{ratio}"
+            );
+        }
+        let text = format!("[load]\nstall_ratio = 6.0\n{ONE}");
+        assert!((Plan::parse(&text).unwrap().load.stall_ratio - 6.0).abs() < f64::EPSILON);
     }
 
     #[test]

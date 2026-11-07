@@ -46,11 +46,25 @@ enum Command {
     Run(RunArgs),
     /// Judges a saved report against the baseline; contacts no server.
     Compare(CompareArgs),
+    /// Merges the baselines several `--update` jobs wrote into the
+    /// committed one, so each host shape's noise floor holds the spread
+    /// between runners; contacts no server.
+    Merge(MergeArgs),
+}
+
+#[derive(Debug, Args)]
+struct MergeArgs {
+    /// The committed baseline file the entries are merged into.
+    #[arg(long, value_name = "PATH", default_value = "perf/baseline.toml")]
+    baseline: PathBuf,
+    /// The baseline files the jobs wrote, one or more.
+    #[arg(value_name = "JOB", required = true)]
+    jobs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct Output {
-    /// The baseline file, one entry per CPU model.
+    /// The baseline file, one entry per host shape.
     #[arg(long, value_name = "PATH", default_value = "perf/baseline.toml")]
     baseline: PathBuf,
     /// A file the Markdown summary is also written to.
@@ -90,7 +104,7 @@ struct RunArgs {
     /// The directory the JSON reports are written to.
     #[arg(long, value_name = "DIR", default_value = "target/perf")]
     out_dir: PathBuf,
-    /// Writes the baseline entry of the runner's CPU model from a run that
+    /// Writes the baseline entry of the runner's host shape from a run that
     /// passes: the median of `--runs` load phases, with their spread as the
     /// noise floor.
     #[arg(long)]
@@ -133,7 +147,27 @@ fn dispatch(command: Command) -> Result<u8, Box<dyn Error>> {
     match command {
         Command::Run(args) => run_command(args),
         Command::Compare(args) => compare_command(&args),
+        Command::Merge(args) => merge_command(&args),
     }
+}
+
+fn merge_command(args: &MergeArgs) -> Result<u8, Box<dyn Error>> {
+    let into = Baselines::read(&args.baseline)?;
+    let mut inputs = Vec::new();
+    for job in &args.jobs {
+        let file = Baselines::read(job)?
+            .ok_or_else(|| format!("the job baseline {} does not exist", job.display()))?;
+        inputs.push(file);
+    }
+    let written = jiff::Timestamp::now().to_string();
+    let (file, merged) =
+        ferrohealth_perf::baseline::merge(into, &inputs, env!("CARGO_PKG_VERSION"), &written)?;
+    file.write(&args.baseline)?;
+    println!("merged into {}:", args.baseline.display());
+    for model in merged {
+        println!("- the host {} over {} jobs", model.model, model.jobs);
+    }
+    Ok(0)
 }
 
 fn run_command(args: RunArgs) -> Result<u8, Box<dyn Error>> {

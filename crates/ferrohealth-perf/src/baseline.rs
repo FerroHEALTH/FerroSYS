@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: Cadasto B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The committed baseline, `perf/baseline.toml`: per CPU model, the load
-//! metrics a run is compared against, their tolerances and the A/A noise
-//! floor.
+//! The committed baseline, `perf/baseline.toml`: per host shape, the load
+//! metrics a run is compared against, their tolerances and the noise floor.
 //!
 //! Shared CI runners mix CPU generations, and a latency or a CPU time is
-//! comparable only on a like CPU, so the file holds one `[[baseline]]`
-//! entry per CPU model, keyed by the model string of the host fingerprint.
-//! A run is judged against the entry for its own model, and `--update`
-//! writes or tightens that entry alone. An entry is measured over several
+//! comparable only on a like host, so the file holds one `[[baseline]]`
+//! entry per host shape, keyed by the CPU model and the total memory of the
+//! host fingerprint. A run is judged against the entry for its own shape,
+//! and `--update` writes or tightens that entry alone. An entry is measured over several
 //! load phases: each metric is their median, and its noise floor is how far
 //! the worst of them strayed from that median, so a tail that moves from
 //! run to run is judged against the movement it was seen to have. The file names its `schema`. A
@@ -66,18 +65,18 @@ use crate::report::PlanIdentity;
 /// The schema this version writes.
 pub const SCHEMA: i64 = 3;
 
-/// The baseline file: one entry per CPU model.
+/// The baseline file: one entry per host shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Baselines {
     /// The schema, [`SCHEMA`].
     pub schema: i64,
-    /// The entries, one per CPU model, in the order of their model.
+    /// The entries, one per host shape, in the order of their shape.
     #[serde(default, rename = "baseline")]
     pub entries: Vec<Baseline>,
 }
 
-/// The baseline of one CPU model.
+/// The baseline of one host shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Baseline {
@@ -87,7 +86,7 @@ pub struct Baseline {
     pub written: String,
     /// The plan it was measured with.
     pub plan: PlanIdentity,
-    /// The host it was measured on, whose CPU model keys the entry.
+    /// The host it was measured on, whose shape keys the entry.
     pub host: Fingerprint,
     /// The tolerance of each kind, as a fraction.
     #[serde(default)]
@@ -176,13 +175,49 @@ pub enum BaselineError {
     Serialize(#[source] toml::ser::Error),
 }
 
-/// The name a message gives the CPU model `model`.
-#[must_use]
-pub fn model_name(model: Option<&str>) -> String {
-    model.map_or_else(
-        || "with no model name (the host disclosed none)".to_owned(),
-        |name| format!("`{name}`"),
-    )
+/// The shape of a host an entry is keyed by: its CPU model and its memory.
+///
+/// Both come from the fingerprint. One CPU model ran a third slower on a host
+/// of another memory size, so hosts of different shapes never share an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Shape<'a> {
+    /// The CPU model, when the host discloses one.
+    pub model: Option<&'a str>,
+    /// The total memory in bytes, when the host discloses it.
+    pub memory_bytes: Option<u64>,
+}
+
+impl<'a> Shape<'a> {
+    /// A shape of `model` and `memory_bytes`.
+    #[must_use]
+    pub const fn new(model: Option<&'a str>, memory_bytes: Option<u64>) -> Self {
+        Self {
+            model,
+            memory_bytes,
+        }
+    }
+
+    /// The shape of the host `fingerprint` describes.
+    #[must_use]
+    pub fn of(fingerprint: &'a Fingerprint) -> Self {
+        Self::new(
+            fingerprint.cpu_model.as_deref(),
+            fingerprint.total_memory_bytes,
+        )
+    }
+}
+
+impl std::fmt::Display for Shape<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.model {
+            Some(model) => write!(f, "`{model}`")?,
+            None => f.write_str("with no model name (the host disclosed none)")?,
+        }
+        match self.memory_bytes {
+            Some(bytes) => write!(f, " with {} MiB of memory", bytes >> 20),
+            None => f.write_str(" with no memory size"),
+        }
+    }
 }
 
 impl Baselines {
@@ -211,7 +246,7 @@ impl Baselines {
     /// file, [`BaselineError::NoSchema`] and [`BaselineError::Schema`] for a
     /// missing or newer schema, and [`BaselineError::Invalid`] for a
     /// negative or non-finite value, a noise floor below one, or two entries
-    /// of one CPU model.
+    /// of one host shape.
     pub fn parse(text: &str) -> Result<Self, BaselineError> {
         let table: toml::Table = toml::from_str(text).map_err(BaselineError::Parse)?;
         let schema = table
@@ -223,21 +258,20 @@ impl Baselines {
         let mut models = std::collections::BTreeSet::new();
         for entry in &file.entries {
             entry.check()?;
-            let model = entry.model();
+            let model = entry.shape();
             if !models.insert(model) {
                 return Err(BaselineError::Invalid(format!(
-                    "two entries for the CPU model {}",
-                    model_name(model)
+                    "two entries for the host {model}"
                 )));
             }
         }
         Ok(file)
     }
 
-    /// The entry for the CPU model `model`.
+    /// The entry for hosts of `shape`.
     #[must_use]
-    pub fn entry(&self, model: Option<&str>) -> Option<&Baseline> {
-        self.entries.iter().find(|entry| entry.model() == model)
+    pub fn entry(&self, shape: Shape<'_>) -> Option<&Baseline> {
+        self.entries.iter().find(|entry| entry.shape() == shape)
     }
 
     /// The models the file holds an entry for, by name.
@@ -245,11 +279,11 @@ impl Baselines {
     pub fn models(&self) -> Vec<String> {
         self.entries
             .iter()
-            .map(|entry| model_name(entry.model()))
+            .map(|entry| entry.shape().to_string())
             .collect()
     }
 
-    /// The file with `entry` in place of the entry of its CPU model, or
+    /// The file with `entry` in place of the entry of its host shape, or
     /// added when it has none; every other entry is kept as it was.
     #[must_use]
     pub fn with(mut self, entry: Baseline) -> Self {
@@ -257,12 +291,12 @@ impl Baselines {
         match self
             .entries
             .iter_mut()
-            .find(|old| old.model() == entry.model())
+            .find(|old| old.shape() == entry.shape())
         {
             Some(old) => *old = entry,
             None => self.entries.push(entry),
         }
-        self.entries.sort_by(|a, b| a.model().cmp(&b.model()));
+        self.entries.sort_by(|a, b| a.shape().cmp(&b.shape()));
         self
     }
 
@@ -274,7 +308,7 @@ impl Baselines {
     pub fn to_toml(&self) -> Result<String, BaselineError> {
         let body = toml::to_string(self).map_err(BaselineError::Serialize)?;
         Ok(format!(
-            "# The performance baseline of ferrohealth-perf, one [[baseline]] per CPU model.\n\
+            "# The performance baseline of ferrohealth-perf, one [[baseline]] per host shape.\n\
              # `ferrohealth-perf run --update` writes or lowers the entry of the runner's\n\
              # model; a raise is a hand edit in a change that says why.\n{body}"
         ))
@@ -301,10 +335,10 @@ impl Baselines {
 }
 
 impl Baseline {
-    /// The CPU model the entry was measured on, its key.
+    /// The shape of the host the entry was measured on, its key.
     #[must_use]
-    pub fn model(&self) -> Option<&str> {
-        self.host.cpu_model.as_deref()
+    pub fn shape(&self) -> Shape<'_> {
+        Shape::of(&self.host)
     }
 
     fn check(&self) -> Result<(), BaselineError> {
@@ -348,7 +382,7 @@ impl Baseline {
 
 /// Brings a baseline file of `schema` to [`SCHEMA`], one schema at a time.
 /// Schema 1 held one baseline at the top level, which becomes the one
-/// entry, keyed by the CPU model its host names. Schema 2 entries were
+/// entry, keyed by the shape its host names. Schema 2 entries were
 /// measured within one run, so schema 3 keeps them marked for
 /// re-measurement.
 fn migrate(schema: i64, mut table: toml::Table) -> Result<toml::Table, BaselineError> {
@@ -419,7 +453,7 @@ pub struct Update<'a> {
     pub written: &'a str,
 }
 
-/// The entry an update writes for the run's CPU model, and what it did to
+/// The entry an update writes for the run's host shape, and what it did to
 /// each metric; `old` is the entry of that model, if the file holds one.
 ///
 /// With no old entry, one of another plan, or one marked for
@@ -487,6 +521,98 @@ pub fn updated(old: Option<&Baseline>, update: &Update<'_>) -> (Baseline, Vec<Ch
     let (mut baseline, _) = fresh(Vec::new());
     baseline.metrics = metrics;
     (baseline, changes)
+}
+
+/// What [`merge`] did to one host shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merged {
+    /// The host shape, as [`Shape`] names it.
+    pub model: String,
+    /// The jobs whose entries were merged, the committed entry among them.
+    pub jobs: usize,
+}
+
+/// Merges the entries several jobs wrote into `into`, one host shape at a
+/// time, so an entry's noise floor holds the spread between runners of one
+/// model and not only within one job.
+///
+/// For each model the inputs hold an entry of (measured across runs, not
+/// marked for re-measurement), the merged entry takes, per metric, the
+/// median over those entries and the committed entry of `into`, and as its
+/// noise floor the larger of their spread ([`across`]) and the largest
+/// floor any of them recorded. The tolerances of the committed entry are
+/// kept. Every other entry of `into` is left as it was.
+///
+/// # Errors
+///
+/// [`BaselineError::Invalid`] when two entries of one model were measured
+/// with different plans.
+pub fn merge(
+    into: Option<Baselines>,
+    inputs: &[Baselines],
+    tool: &str,
+    written: &str,
+) -> Result<(Baselines, Vec<Merged>), BaselineError> {
+    let mut file = into.unwrap_or(Baselines {
+        schema: SCHEMA,
+        entries: Vec::new(),
+    });
+    let mut models: Vec<Shape<'_>> = inputs
+        .iter()
+        .flat_map(|input| input.entries.iter())
+        .filter(|entry| !entry.remeasure)
+        .map(Baseline::shape)
+        .collect();
+    models.sort_unstable();
+    models.dedup();
+    let mut merged = Vec::new();
+    let mut entries = Vec::new();
+    for model in models {
+        let mut jobs: Vec<&Baseline> = inputs
+            .iter()
+            .filter_map(|input| input.entry(model))
+            .filter(|entry| !entry.remeasure)
+            .collect();
+        let committed = file.entry(model).filter(|entry| !entry.remeasure);
+        jobs.extend(committed);
+        let Some(first) = jobs.first() else {
+            continue;
+        };
+        if let Some(other) = jobs.iter().find(|entry| entry.plan != first.plan) {
+            return Err(BaselineError::Invalid(format!(
+                "the entries for the host {model} were measured with different plans ({:?} and {:?})",
+                first.plan, other.plan
+            )));
+        }
+        let phases: Vec<BTreeMap<Metric, f64>> =
+            jobs.iter().map(|entry| entry.metrics.clone()).collect();
+        let (metrics, spread) = across(&phases);
+        let mut noise = spread;
+        for entry in &jobs {
+            for (metric, floor) in &entry.noise {
+                let held = noise.entry(metric.clone()).or_insert(1.0);
+                *held = held.max(*floor);
+            }
+        }
+        entries.push(Baseline {
+            tool: tool.to_owned(),
+            written: written.to_owned(),
+            plan: first.plan.clone(),
+            host: first.host.clone(),
+            tolerance: committed.unwrap_or(first).tolerance,
+            metrics,
+            noise,
+            remeasure: false,
+        });
+        merged.push(Merged {
+            model: model.to_string(),
+            jobs: jobs.len(),
+        });
+    }
+    for entry in entries {
+        file = file.with(entry);
+    }
+    Ok((file, merged))
 }
 
 /// The median of each metric over the load phases `runs`, and its noise

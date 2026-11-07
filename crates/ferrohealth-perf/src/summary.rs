@@ -40,6 +40,17 @@ pub fn markdown(report: &Report, verdict: &Verdict) -> String {
         ),
     );
     line(&mut out, "");
+    if !report.confirmations.is_empty() {
+        line(
+            &mut out,
+            &format!(
+                "A load breach was judged again on {} fresh load phase(s); a metric fails \
+                 only when it breached in most of the runs.",
+                report.confirmations.len()
+            ),
+        );
+        line(&mut out, "");
+    }
     list(&mut out, "Why it could not be judged", &verdict.problems);
     let breaches: Vec<&Check> = verdict.breaches().collect();
     if !breaches.is_empty() {

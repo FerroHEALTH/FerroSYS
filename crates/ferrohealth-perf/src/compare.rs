@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The judgement of a run: the idle limits, the failed requests, and every
-//! load metric against the baseline entry of the runner's CPU model.
+//! load metric against the baseline entry of the runner's host shape.
 //!
 //! A metric breaches when it is worse than the baseline by more than the
 //! larger of its tolerance and its noise floor across the update's load
@@ -10,17 +10,22 @@
 //! "Rigorous Benchmarking in Reasonable Time", ISMM 2013, on measuring the
 //! noise before judging a difference); the floor follows Veredictum's
 //! `perf_result::compare` (Apache-2.0, credited in `NOTICE`). A run that
-//! cannot be judged (no baseline, no entry for the runner's CPU model,
+//! cannot be judged (no baseline, no entry for the runner's host shape,
 //! another plan, a metric the baseline holds
 //! and the run lacks, a generator that fell behind, an unsteady window) is
-//! invalid. The exit code is 0 for a pass, 1 for a breach and 2 for an
-//! invalid run or a harness error; a breach outranks an invalid run.
+//! invalid. A breach of a load metric is confirmed on up to two fresh load
+//! phases and fails only when the metric breaches in most of the runs, so a
+//! one-off stall or a noisy runner does not fail the gate and a real
+//! regression, which repeats, does. A phase where every route's p99 is far
+//! above its p50 at once marks a stalled runner and is not judged. The exit
+//! code is 0 for a pass, 1 for a breach and 2 for an invalid run or a
+//! harness error; a breach outranks an invalid run.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::baseline::{Baseline, Baselines, model_name};
+use crate::baseline::{Baseline, Baselines, Shape};
 use crate::metric::Metric;
 use crate::report::{Report, ReportError, STEADY};
 
@@ -28,7 +33,7 @@ use crate::report::{Report, ReportError, STEADY};
 const NO_BASELINE: &str = "there is no baseline; write one with --update";
 
 /// The problem of a run judged against an entry marked for re-measurement.
-const REMEASURE: &str = "the baseline entry for this CPU model was measured within one run \
+const REMEASURE: &str = "the baseline entry for this host shape was measured within one run \
      (schema 2 or older); measure it again with --update before it judges a load phase";
 
 /// The warning of an update that re-measures such an entry.
@@ -75,7 +80,30 @@ pub struct Check {
     pub rule: String,
     /// Whether it passed.
     pub passed: bool,
+    /// The load phases it was judged on, a stalled phase not counted; zero
+    /// for an idle limit, which one run decides.
+    #[serde(default)]
+    pub runs: u32,
+    /// The load phases it breached in.
+    #[serde(default)]
+    pub breached: u32,
 }
+
+impl Check {
+    /// Whether one more load phase could still change this check: it
+    /// breached in some run but not yet in most of three.
+    #[must_use]
+    pub fn undecided(&self) -> bool {
+        self.runs > 0 && self.breached > 0 && self.breached < CONFIRMING && self.runs < RUNS
+    }
+}
+
+/// The most load phases a breach is judged on: the first and its fresh
+/// confirmations.
+pub const RUNS: u32 = 3;
+
+/// The breaches out of [`RUNS`] that fail a metric.
+pub const CONFIRMING: u32 = 2;
 
 /// The judgement of a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,30 +159,13 @@ pub fn judge(
             threshold: 0.0,
             rule: "an arrival waited past the saturation limit: the server fell behind".to_owned(),
             passed: false,
+            runs: 0,
+            breached: 0,
         });
     }
-    for phase in std::iter::once(load).chain(report.calibration.iter()) {
-        if let Some(lag) = phase.lag_p99_ms
-            && lag > crate::quantile::exact_f64(phase.max_lag_ms)
-        {
-            problems.push(format!(
-                "the generator's lag p99 is {lag:.2} ms, over {} ms: it could not keep the schedule",
-                phase.max_lag_ms
-            ));
-        }
-        let steadiness = phase.steadiness()?;
-        if !steadiness.steady() {
-            problems.push(format!(
-                "the window is not steady: the second half's p50 and p95 over the first's are \
-                 {} and {}, outside {} to {}",
-                ratio(steadiness.p50_ratio),
-                ratio(steadiness.p95_ratio),
-                STEADY.0,
-                STEADY.1
-            ));
-        }
-    }
+    phase_problems(report, &mut problems)?;
     let metrics = crate::metric::of(load)?;
+    let baseline = baseline.filter(|_| !load.stalled());
     match baseline {
         None if writing => {}
         None => problems.push(NO_BASELINE.to_owned()),
@@ -178,7 +189,11 @@ pub fn judge(
             }
         }
         Some(base) => {
+            let first = checks.len();
             baseline_checks(base, &metrics, &mut checks, &mut problems, &mut warnings);
+            if let Some(judged) = checks.get_mut(first..) {
+                confirm(base, report, judged)?;
+            }
             let differences = base.host.differences(&report.host);
             if !differences.is_empty() {
                 warnings.push(format!(
@@ -188,7 +203,7 @@ pub fn judge(
             }
         }
     }
-    let failures = load.failures.clone();
+    let failures = all_failures(report);
     let outcome = if checks.iter().any(|c| !c.passed) || !failures.is_empty() {
         Outcome::Fail
     } else if !problems.is_empty() {
@@ -205,7 +220,7 @@ pub fn judge(
     })
 }
 
-/// Judges `report` against the entry of `baselines` for the CPU model of
+/// Judges `report` against the entry of `baselines` for the host shape of
 /// the report's host.
 ///
 /// The idle limits and the failures judge every run. With no file, or no
@@ -222,8 +237,8 @@ pub fn judge_file(
     baselines: Option<&Baselines>,
     writing: bool,
 ) -> Result<Verdict, ReportError> {
-    let model = report.host.cpu_model.as_deref();
-    let entry = baselines.and_then(|file| file.entry(model));
+    let shape = Shape::of(&report.host);
+    let entry = baselines.and_then(|file| file.entry(shape));
     let mut verdict = judge(report, entry, writing)?;
     let Some(file) = baselines.filter(|_| entry.is_none()) else {
         return Ok(verdict);
@@ -235,9 +250,8 @@ pub fn judge_file(
         held.join(", ")
     };
     let missing = format!(
-        "the baseline holds no entry for the CPU model {} (it holds {held}); \
-         run once with --update on a runner of that model and commit the entry",
-        model_name(model)
+        "the baseline holds no entry for the host {shape} (it holds {held}); \
+         run once with --update on a runner of that shape and commit the entry"
     );
     for problem in &mut verdict.problems {
         if problem == NO_BASELINE {
@@ -275,10 +289,100 @@ fn idle_checks(report: &Report, checks: &mut Vec<Check>, warnings: &mut Vec<Stri
                 threshold: limit,
                 rule: "absolute limit".to_owned(),
                 passed: value <= limit,
+                runs: 0,
+                breached: 0,
             }),
             None => warnings.push(missing.to_owned()),
         }
     }
+}
+
+/// The problems of every load phase of `report`: a generator that fell
+/// behind, a window that was not steady, a runner that stalled.
+fn phase_problems(report: &Report, problems: &mut Vec<String>) -> Result<(), ReportError> {
+    let load = &report.load;
+    for phase in std::iter::once(load).chain(report.calibration.iter()) {
+        if let Some(lag) = phase.lag_p99_ms
+            && lag > crate::quantile::exact_f64(phase.max_lag_ms)
+        {
+            problems.push(format!(
+                "the generator's lag p99 is {lag:.2} ms, over {} ms: it could not keep the schedule",
+                phase.max_lag_ms
+            ));
+        }
+        let steadiness = phase.steadiness()?;
+        if !steadiness.steady() {
+            problems.push(format!(
+                "the window is not steady: the second half's p50 and p95 over the first's are \
+                 {} and {}, outside {} to {}",
+                ratio(steadiness.p50_ratio),
+                ratio(steadiness.p95_ratio),
+                STEADY.0,
+                STEADY.1
+            ));
+        }
+    }
+    for (index, phase) in std::iter::once(load)
+        .chain(report.calibration.iter())
+        .chain(report.confirmations.iter())
+        .enumerate()
+    {
+        if phase.stalled() {
+            problems.push(format!(
+                "the runner stalled in load phase {}: every route's p99 is over {} times its p50 \
+                 at once, so the phase is not judged",
+                index + 1,
+                phase.stall_ratio.unwrap_or(0.0)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The failed requests of the first load phase and its confirmations.
+fn all_failures(report: &Report) -> BTreeMap<String, BTreeMap<String, u64>> {
+    let mut failures = report.load.failures.clone();
+    for phase in &report.confirmations {
+        for (group, kinds) in &phase.failures {
+            for (kind, count) in kinds {
+                let total = failures
+                    .entry(group.clone())
+                    .or_default()
+                    .entry(kind.clone())
+                    .or_insert(0);
+                *total = total.saturating_add(*count);
+            }
+        }
+    }
+    failures
+}
+
+/// Judges the load metric `checks` of the first phase again on each of
+/// the report's confirmations that did not stall: a metric fails when it
+/// breached in most of the runs judged, and its rule says in how many.
+fn confirm(base: &Baseline, report: &Report, checks: &mut [Check]) -> Result<(), ReportError> {
+    if report.confirmations.is_empty() {
+        return Ok(());
+    }
+    for phase in report.confirmations.iter().filter(|phase| !phase.stalled()) {
+        let metrics = crate::metric::of(phase)?;
+        let mut again = Vec::new();
+        baseline_checks(base, &metrics, &mut again, &mut Vec::new(), &mut Vec::new());
+        for check in checks.iter_mut() {
+            if let Some(other) = again.iter().find(|other| other.name == check.name) {
+                check.runs = check.runs.saturating_add(1);
+                check.breached = check.breached.saturating_add(u32::from(!other.passed));
+            }
+        }
+    }
+    for check in checks.iter_mut() {
+        check.passed = check.breached.saturating_mul(2) <= check.runs;
+        check.rule = format!(
+            "{} (breached in {} of {} runs)",
+            check.rule, check.breached, check.runs
+        );
+    }
+    Ok(())
 }
 
 fn baseline_checks(
@@ -320,6 +424,8 @@ fn baseline_checks(
             threshold,
             rule,
             passed,
+            runs: 1,
+            breached: u32::from(!passed),
         });
     }
     for metric in metrics.keys().filter(|m| !base.metrics.contains_key(*m)) {

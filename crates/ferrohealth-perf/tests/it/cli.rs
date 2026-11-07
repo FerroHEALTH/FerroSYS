@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use ferrohealth_perf::baseline::{Baseline, Baselines};
+use ferrohealth_perf::baseline::{Baseline, Baselines, Shape};
 use ferrohealth_perf::metric::Metric;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -169,7 +169,7 @@ async fn update_then_compare_then_a_regression_then_a_refused_update() {
     let unknown = perf(&["compare", "--report", report, "--baseline", base], &step);
     assert_eq!(Some(2), unknown.status.code(), "{}", text(&unknown.stdout));
     assert!(
-        text(&unknown.stdout).contains("no entry for the CPU model"),
+        text(&unknown.stdout).contains("no entry for the host"),
         "{}",
         text(&unknown.stdout)
     );
@@ -253,4 +253,48 @@ fn a_run_needs_a_server_process() {
         "{}",
         text(&output.stderr)
     );
+}
+
+#[test]
+fn merge_folds_the_jobs_into_the_committed_baseline() {
+    let dir = tempfile::tempdir().unwrap();
+    let step = dir.path().join("s.md");
+    let entry = |p95: f64| {
+        let text = format!(
+            "schema = 3\n[[baseline]]\ntool = \"0.4.0\"\nwritten = \"2026-11-07T10:00:00Z\"\n\
+             [baseline.plan]\nrate = 50.0\nwarmup_secs = 10\nduration_secs = 60\nrequests = 1\n\
+             groups = [\"read\"]\n[baseline.host]\narch = \"x86_64\"\nos = \"linux\"\n\
+             cpu_model = \"EPYC 7763\"\n[baseline.metrics]\n\"read.p95_ms\" = {p95}\n"
+        );
+        Baselines::parse(&text).unwrap()
+    };
+    let committed = dir.path().join("perf/baseline.toml");
+    entry(4.0).write(&committed).unwrap();
+    let mut jobs = Vec::new();
+    for (index, p95) in [5.0, 6.0].into_iter().enumerate() {
+        let path = dir.path().join(format!("job-{index}.toml"));
+        entry(p95).write(&path).unwrap();
+        jobs.push(path);
+    }
+    let mut args = vec!["merge", "--baseline", committed.to_str().unwrap()];
+    args.extend(jobs.iter().map(|p| p.to_str().unwrap()));
+    let merged = perf(&args, &step);
+    assert_eq!(Some(0), merged.status.code(), "{}", text(&merged.stderr));
+    assert!(text(&merged.stdout).contains("`EPYC 7763` with no memory size over 3 jobs"));
+    let file = Baselines::read(&committed).unwrap().unwrap();
+    let p95 = Metric::try_from("read.p95_ms".to_owned()).unwrap();
+    let entry = file.entry(Shape::new(Some("EPYC 7763"), None)).unwrap();
+    assert_eq!(Some(&5.0), entry.metrics.get(&p95));
+    assert!((entry.noise.get(&p95).unwrap() - 1.2).abs() < 1e-9);
+
+    let missing = perf(
+        &[
+            "merge",
+            "--baseline",
+            committed.to_str().unwrap(),
+            "absent.toml",
+        ],
+        &step,
+    );
+    assert_eq!(Some(2), missing.status.code());
 }
