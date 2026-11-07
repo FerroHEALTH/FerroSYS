@@ -451,7 +451,7 @@ fn hosts_of_one_cpu_model_and_another_memory_size_never_share_an_entry() {
         "a third size has no entry"
     );
     assert_eq!(
-        "`AMD EPYC 9V45 96-Core Processor` with 8192 MiB of memory",
+        "`AMD EPYC 9V45 96-Core Processor` with 8 GiB of memory",
         Shape::of(&small).to_string()
     );
     // An update on the large host leaves the small host's entry alone.
@@ -465,4 +465,36 @@ fn hosts_of_one_cpu_model_and_another_memory_size_never_share_an_entry() {
         Some(&5.0),
         file.entry(Shape::of(&large)).unwrap().metrics.get(&p95())
     );
+}
+
+#[test]
+fn virtual_machines_of_one_size_share_a_shape_and_other_sizes_do_not() {
+    // The MemTotal three 8 GiB and two other 8 GiB runners reported, and a
+    // 16 GiB runner's.
+    let model = Some("AMD EPYC 9V45 96-Core Processor");
+    let eight = Shape::new(model, Some(8_317_927_424));
+    for bytes in [8_317_931_520, 8_317_935_616, 8_154_009_600, 8_154_017_792] {
+        assert_eq!(eight, Shape::new(model, Some(bytes)), "{bytes}");
+    }
+    let sixteen = Shape::new(model, Some(16_760_344_576));
+    assert_ne!(eight, sixteen);
+    assert_eq!(Some(8 << 30), eight.memory_bytes);
+    assert_eq!(Some(16 << 30), sixteen.memory_bytes);
+    assert_eq!(None, Shape::new(model, None).memory_bytes);
+}
+
+#[test]
+fn an_entry_written_with_an_exact_byte_count_is_found_by_its_rounded_size() {
+    let plan = plan();
+    let written = Fingerprint {
+        total_memory_bytes: Some(8_317_927_424),
+        ..host_of("AMD EPYC 9V45 96-Core Processor")
+    };
+    let (entry, _) = updated(None, &update(&metrics(4.0, 50.0), &plan, &written));
+    let file = file_of(vec![entry.clone()]);
+    let other_vm = Fingerprint {
+        total_memory_bytes: Some(8_317_935_616),
+        ..written.clone()
+    };
+    assert_eq!(Some(&entry), file.entry(Shape::of(&other_vm)));
 }

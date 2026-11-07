@@ -166,7 +166,9 @@ same commit measured 25 to 45 % slower on an AMD EPYC 7763 than on an EPYC
 different memory size. A latency or a CPU time is comparable only on a like
 host, so the file holds one `[[baseline]]` entry per host shape, keyed by
 the `cpu_model` and the `total_memory_bytes` of the host fingerprint
-(`model name` in `/proc/cpuinfo`, `MemTotal` in `/proc/meminfo`). A run is
+(`model name` in `/proc/cpuinfo`, `MemTotal` in `/proc/meminfo`), the memory
+rounded to the nearest GiB, since machines of one size report a `MemTotal`
+a few KiB apart. A run is
 judged against the entry for its own shape. A shape with no entry cannot be
 judged: the run exits 2, naming the shape and the shapes the file holds,
 and the idle limits still judge it.

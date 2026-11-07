@@ -10,6 +10,17 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-07
+
+### Fixed
+
+- A host shape keys its memory by the host's `MemTotal` rounded to the
+  nearest GiB (#269). Runners of one size report a `MemTotal` a few KiB
+  apart, so 0.4.0 split one runner size into several shapes and most fresh
+  runners had no entry. An entry 0.4.0 wrote with an exact byte count is
+  found by every host of its rounded size, and the message names the size
+  in GiB.
+
 ## [0.4.0] - 2026-11-07
 
 ### Changed

@@ -175,22 +175,34 @@ pub enum BaselineError {
     Serialize(#[source] toml::ser::Error),
 }
 
+/// One gibibyte, the unit a host shape's memory is rounded to.
+const GIB: u64 = 1 << 30;
+
 /// The shape of a host an entry is keyed by: its CPU model and its memory.
 ///
 /// Both come from the fingerprint. One CPU model ran a third slower on a host
 /// of another memory size, so hosts of different shapes never share an entry.
+/// The memory is the size the host was given, its `MemTotal` rounded to the
+/// nearest GiB: virtual machines of one size report a `MemTotal` a few KiB
+/// apart, and that difference is no other shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Shape<'a> {
     /// The CPU model, when the host discloses one.
     pub model: Option<&'a str>,
-    /// The total memory in bytes, when the host discloses it.
+    /// The total memory in bytes rounded to the nearest GiB, when the host
+    /// discloses it.
     pub memory_bytes: Option<u64>,
 }
 
 impl<'a> Shape<'a> {
-    /// A shape of `model` and `memory_bytes`.
+    /// A shape of `model` and `memory_bytes`, the memory rounded to the
+    /// nearest GiB.
     #[must_use]
     pub const fn new(model: Option<&'a str>, memory_bytes: Option<u64>) -> Self {
+        let memory_bytes = match memory_bytes {
+            Some(bytes) => Some(bytes.saturating_add(GIB >> 1) & !(GIB - 1)),
+            None => None,
+        };
         Self {
             model,
             memory_bytes,
@@ -214,7 +226,7 @@ impl std::fmt::Display for Shape<'_> {
             None => f.write_str("with no model name (the host disclosed none)")?,
         }
         match self.memory_bytes {
-            Some(bytes) => write!(f, " with {} MiB of memory", bytes >> 20),
+            Some(bytes) => write!(f, " with {} GiB of memory", bytes >> 30),
             None => f.write_str(" with no memory size"),
         }
     }
