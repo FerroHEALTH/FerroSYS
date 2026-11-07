@@ -9,20 +9,25 @@
 //! comparable only on a like CPU, so the file holds one `[[baseline]]`
 //! entry per CPU model, keyed by the model string of the host fingerprint.
 //! A run is judged against the entry for its own model, and `--update`
-//! writes or tightens that entry alone. The file names its `schema`. A
+//! writes or tightens that entry alone. An entry is measured over several
+//! load phases: each metric is their median, and its noise floor is how far
+//! the worst of them strayed from that median, so a tail that moves from
+//! run to run is judged against the movement it was seen to have. The file names its `schema`. A
 //! reader migrates every older schema to the current one before it reads
 //! the values, so a schema bump never makes a committed baseline
-//! unreadable; a newer schema is refused by name. Updating is a ratchet: on
-//! the same plan each metric moves only to the better of the entry and the
-//! run, so a run never loosens it, and a raise is a hand edit in a change
+//! unreadable; a newer schema is refused by name. An entry of schema 2 or
+//! older was measured within one run and is kept marked for re-measurement.
+//! Updating is a ratchet: on the same plan each metric moves only to the
+//! better of the entry and the median of the new update, so neither a run
+//! nor one lucky phase loosens or tightens it past what the runs show, and a raise is a hand edit in a change
 //! that says why. The tolerances are the product's and survive every
 //! update. No specification governs the format: our own design.
 //!
 //! ```toml
-//! schema = 2
+//! schema = 3
 //!
 //! [[baseline]]
-//! tool = "0.2.0"
+//! tool = "0.3.0"
 //! written = "2026-11-07T10:00:00Z"
 //!
 //! [baseline.plan]
@@ -45,7 +50,7 @@
 //! "metadata.p95_ms" = 4.1
 //!
 //! [baseline.noise]
-//! "metadata.p95_ms" = 1.08
+//! "metadata.p95_ms" = 1.31
 //! ```
 
 use std::collections::BTreeMap;
@@ -59,7 +64,7 @@ use crate::metric::{Kind, Metric};
 use crate::report::PlanIdentity;
 
 /// The schema this version writes.
-pub const SCHEMA: i64 = 2;
+pub const SCHEMA: i64 = 3;
 
 /// The baseline file: one entry per CPU model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,9 +94,15 @@ pub struct Baseline {
     pub tolerance: Tolerances,
     /// The value of each metric.
     pub metrics: BTreeMap<Metric, f64>,
-    /// The A/A noise floor of each metric, a ratio of at least one.
+    /// The noise floor of each metric across the update's load phases, a
+    /// ratio of at least one.
     #[serde(default)]
     pub noise: BTreeMap<Metric, f64>,
+    /// Whether the entry predates the noise measured across runs (schema 2
+    /// and older) and must be measured again with `--update` before it
+    /// judges a load phase.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remeasure: bool,
 }
 
 /// The tolerance of each metric kind, as a fraction of the baseline.
@@ -335,21 +346,34 @@ impl Baseline {
     }
 }
 
-/// Brings a baseline file of `schema` to [`SCHEMA`]. Schema 1 held one
-/// baseline at the top level, which becomes the one entry, keyed by the
-/// CPU model its host names.
+/// Brings a baseline file of `schema` to [`SCHEMA`], one schema at a time.
+/// Schema 1 held one baseline at the top level, which becomes the one
+/// entry, keyed by the CPU model its host names. Schema 2 entries were
+/// measured within one run, so schema 3 keeps them marked for
+/// re-measurement.
 fn migrate(schema: i64, mut table: toml::Table) -> Result<toml::Table, BaselineError> {
     match schema {
         SCHEMA => Ok(table),
+        2 => {
+            if let Some(toml::Value::Array(entries)) = table.get_mut("baseline") {
+                for entry in entries.iter_mut() {
+                    if let toml::Value::Table(entry) = entry {
+                        entry.insert("remeasure".to_owned(), toml::Value::Boolean(true));
+                    }
+                }
+            }
+            table.insert("schema".to_owned(), toml::Value::Integer(SCHEMA));
+            Ok(table)
+        }
         1 => {
             table.remove("schema");
             let mut file = toml::Table::new();
-            file.insert("schema".to_owned(), toml::Value::Integer(SCHEMA));
+            file.insert("schema".to_owned(), toml::Value::Integer(2));
             file.insert(
                 "baseline".to_owned(),
                 toml::Value::Array(vec![toml::Value::Table(table)]),
             );
-            Ok(file)
+            migrate(2, file)
         }
         other => Err(BaselineError::Schema(other)),
     }
@@ -373,14 +397,17 @@ pub enum Change {
     Kept(Metric, f64),
     /// The plan changed, so the baseline was written afresh.
     Rewritten,
+    /// The entry predated the noise measured across runs, so it was
+    /// measured again and written afresh.
+    Remeasured,
 }
 
 /// The inputs of an update besides the old baseline.
 #[derive(Debug, Clone)]
 pub struct Update<'a> {
-    /// The run's metrics.
+    /// The median of each metric over the update's load phases.
     pub metrics: &'a BTreeMap<Metric, f64>,
-    /// The A/A noise floor measured with it.
+    /// The noise floor across those phases ([`across`]).
     pub noise: BTreeMap<Metric, f64>,
     /// The run's plan.
     pub plan: &'a PlanIdentity,
@@ -395,10 +422,11 @@ pub struct Update<'a> {
 /// The entry an update writes for the run's CPU model, and what it did to
 /// each metric; `old` is the entry of that model, if the file holds one.
 ///
-/// With no old baseline, or one of another plan, the run's metrics become
-/// the baseline. On the same plan each metric moves to the better of the
-/// two values and a metric new to the run is added. The tolerances of the
-/// old baseline are kept.
+/// With no old entry, one of another plan, or one marked for
+/// re-measurement, the update's medians become the entry. On the same plan
+/// each metric moves to the better of the entry and the update's median,
+/// and a metric new to the update is added. The tolerances of the old entry
+/// are kept.
 #[must_use]
 pub fn updated(old: Option<&Baseline>, update: &Update<'_>) -> (Baseline, Vec<Change>) {
     let tolerance = old.map(|b| b.tolerance).unwrap_or_default();
@@ -412,12 +440,15 @@ pub fn updated(old: Option<&Baseline>, update: &Update<'_>) -> (Baseline, Vec<Ch
                 tolerance,
                 metrics: update.metrics.clone(),
                 noise: update.noise.clone(),
+                remeasure: false,
             },
             changes,
         )
     };
-    let Some(old) = old.filter(|b| &b.plan == update.plan) else {
-        let changes = if old.is_some() {
+    let Some(old) = old.filter(|b| &b.plan == update.plan && !b.remeasure) else {
+        let changes = if old.is_some_and(|b| b.remeasure && &b.plan == update.plan) {
+            vec![Change::Remeasured]
+        } else if old.is_some() {
             vec![Change::Rewritten]
         } else {
             update
@@ -458,17 +489,55 @@ pub fn updated(old: Option<&Baseline>, update: &Update<'_>) -> (Baseline, Vec<Ch
     (baseline, changes)
 }
 
-/// The A/A noise floor of two runs of one plan: per metric, the larger of
-/// the two ratios between them; a metric that is zero in either is left
-/// out.
+/// The median of each metric over the load phases `runs`, and its noise
+/// floor across them.
+///
+/// The floor is how far the worst phase strayed from the median, as a ratio
+/// of at least one: above it for a metric where higher is worse, below it
+/// for throughput. A metric missing from a phase is taken over the phases
+/// that hold it; a floor is left out where the median is zero.
 #[must_use]
-pub fn noise_floor(a: &BTreeMap<Metric, f64>, b: &BTreeMap<Metric, f64>) -> BTreeMap<Metric, f64> {
-    a.iter()
-        .filter_map(|(metric, x)| {
-            let y = *b.get(metric)?;
-            (*x > 0.0 && y > 0.0).then(|| (metric.clone(), (x / y).max(y / x)))
-        })
-        .collect()
+pub fn across(runs: &[BTreeMap<Metric, f64>]) -> (BTreeMap<Metric, f64>, BTreeMap<Metric, f64>) {
+    let mut values: BTreeMap<&Metric, Vec<f64>> = BTreeMap::new();
+    for run in runs {
+        for (metric, value) in run {
+            values.entry(metric).or_default().push(*value);
+        }
+    }
+    let mut medians = BTreeMap::new();
+    let mut noise = BTreeMap::new();
+    for (metric, mut seen) in values {
+        seen.sort_by(f64::total_cmp);
+        let Some(median) = median(&seen) else {
+            continue;
+        };
+        medians.insert(metric.clone(), median);
+        let worst = if metric.kind().lower_is_worse() {
+            seen.first().map(|low| median / low)
+        } else {
+            seen.last().map(|high| high / median)
+        };
+        if let Some(ratio) = worst.filter(|r| median > 0.0 && r.is_finite()) {
+            noise.insert(metric.clone(), ratio.max(1.0));
+        }
+    }
+    (medians, noise)
+}
+
+/// The median of `sorted`, the mean of the middle two for an even count.
+#[expect(
+    clippy::integer_division,
+    reason = "the middle index of a slice is defined by the truncating division"
+)]
+fn median(sorted: &[f64]) -> Option<f64> {
+    let middle = sorted.len() / 2;
+    if sorted.len() % 2 == 1 {
+        sorted.get(middle).copied()
+    } else {
+        let low = sorted.get(middle.checked_sub(1)?)?;
+        let high = sorted.get(middle)?;
+        Some(f64::midpoint(*low, *high))
+    }
 }
 
 #[cfg(test)]

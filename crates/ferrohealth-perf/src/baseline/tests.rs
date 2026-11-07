@@ -199,27 +199,65 @@ fn a_schema_1_file_migrates_into_one_entry_of_its_model() {
         (entry.tolerance.memory - 0.20).abs() < f64::EPSILON,
         "a default"
     );
+    assert!(entry.remeasure, "an entry measured within one run");
     let again = Baselines::parse(&file.to_toml().unwrap()).unwrap();
-    assert_eq!(file, again, "the migrated file is written as schema 2");
+    assert_eq!(file, again, "the migrated file is written as schema 3");
 }
 
 #[test]
-fn the_module_example_parses() {
+fn a_schema_2_file_keeps_its_entries_marked_for_re_measurement() {
     let text = "schema = 2\n[[baseline]]\ntool = \"0.2.0\"\nwritten = \"2026-11-07T10:00:00Z\"\n\
                 [baseline.plan]\nrate = 50.0\nwarmup_secs = 10\nduration_secs = 60\nrequests = 2\n\
                 groups = [\"create\", \"metadata\"]\n[baseline.host]\narch = \"x86_64\"\n\
                 os = \"linux\"\ncpu_model = \"AMD EPYC 7763 64-Core Processor\"\n\
-                [baseline.tolerance]\nlatency = 0.25\n[baseline.metrics]\nthroughput_rps = 49.9\n\
-                \"metadata.p95_ms\" = 4.1\n[baseline.noise]\n\"metadata.p95_ms\" = 1.08\n";
+                [baseline.metrics]\nthroughput_rps = 49.9\n\"metadata.p95_ms\" = 4.1\n";
     let file = Baselines::parse(text).unwrap();
-    assert_eq!(2, file.entries.first().unwrap().metrics.len());
+    assert_eq!(SCHEMA, file.schema);
+    let entry = file.entry(Some("AMD EPYC 7763 64-Core Processor")).unwrap();
+    assert!(entry.remeasure);
+    assert_eq!(2, entry.metrics.len(), "the values are kept");
+    let written = file.to_toml().unwrap();
+    assert!(written.contains("remeasure = true"), "{written}");
+    assert_eq!(file, Baselines::parse(&written).unwrap());
+}
+
+#[test]
+fn an_update_measures_an_entry_marked_for_re_measurement_afresh() {
+    let (plan, host) = (plan(), host());
+    let (mut old, _) = updated(None, &update(&metrics(2.0, 60.0), &plan, &host));
+    old.remeasure = true;
+    old.tolerance.latency = 0.3;
+    // The old entry is better on both metrics, and the update still replaces it.
+    let run = metrics(4.0, 50.0);
+    let (new, changes) = updated(Some(&old), &update(&run, &plan, &host));
+    assert_eq!(run, new.metrics);
+    assert!(!new.remeasure);
+    assert_eq!(vec![Change::Remeasured], changes);
+    assert!(
+        (new.tolerance.latency - 0.3).abs() < f64::EPSILON,
+        "the tolerance stays"
+    );
+}
+
+#[test]
+fn the_module_example_parses() {
+    let text = "schema = 3\n[[baseline]]\ntool = \"0.3.0\"\nwritten = \"2026-11-07T10:00:00Z\"\n\
+                [baseline.plan]\nrate = 50.0\nwarmup_secs = 10\nduration_secs = 60\nrequests = 2\n\
+                groups = [\"create\", \"metadata\"]\n[baseline.host]\narch = \"x86_64\"\n\
+                os = \"linux\"\ncpu_model = \"AMD EPYC 7763 64-Core Processor\"\n\
+                [baseline.tolerance]\nlatency = 0.25\n[baseline.metrics]\nthroughput_rps = 49.9\n\
+                \"metadata.p95_ms\" = 4.1\n[baseline.noise]\n\"metadata.p95_ms\" = 1.31\n";
+    let file = Baselines::parse(text).unwrap();
+    let entry = file.entries.first().unwrap();
+    assert_eq!(2, entry.metrics.len());
+    assert!(!entry.remeasure, "a schema-3 entry is measured across runs");
 }
 
 #[test]
 fn a_newer_or_missing_schema_is_refused() {
     assert!(matches!(
-        Baselines::parse("schema = 3\n"),
-        Err(BaselineError::Schema(3))
+        Baselines::parse("schema = 4\n"),
+        Err(BaselineError::Schema(4))
     ));
     assert!(matches!(
         Baselines::parse("tool = \"x\"\n"),
@@ -240,7 +278,7 @@ fn a_bad_value_or_a_model_named_twice_is_refused() {
         ("\"read.p95_ms\" = 1.05", "\"read.p95_ms\" = 0.5"),
         ("throughput_rps = 50.0", "throughput_rps = -1.0"),
         ("throughput = 0.2", "throughput = 1.0"),
-        ("schema = 2", "schema = 2\nextra = 1"),
+        ("schema = 3", "schema = 3\nextra = 1"),
     ] {
         assert!(text.contains(from), "{from} in {text}");
         let bad = text.replacen(from, to, 1);
@@ -258,18 +296,50 @@ fn a_bad_value_or_a_model_named_twice_is_refused() {
 }
 
 #[test]
-fn the_noise_floor_is_the_larger_ratio() {
-    let a = metrics(4.0, 50.0);
-    let b = metrics(5.0, 40.0);
-    let floor = noise_floor(&a, &b);
+fn an_update_takes_the_median_of_its_phases_and_their_spread_as_the_floor() {
+    let runs = [
+        metrics(4.0, 50.0),
+        metrics(5.0, 48.0),
+        metrics(9.0, 40.0),
+        metrics(4.5, 49.0),
+        metrics(4.2, 50.0),
+    ];
+    let (medians, floor) = across(&runs);
+    assert_eq!(Some(&4.5), medians.get(&p95()), "the median, not the best");
+    assert_eq!(Some(&49.0), medians.get(&Metric::Throughput));
     assert!(
-        (floor.get(&p95()).unwrap() - 1.25).abs() < 1e-9,
-        "{floor:?}"
+        (floor.get(&p95()).unwrap() - 2.0).abs() < 1e-9,
+        "the slowest phase over the median: {floor:?}"
     );
     assert!(
-        (floor.get(&Metric::Throughput).unwrap() - 1.25).abs() < 1e-9,
-        "{floor:?}"
+        (floor.get(&Metric::Throughput).unwrap() - 49.0 / 40.0).abs() < 1e-9,
+        "the median over the lowest throughput: {floor:?}"
     );
+    let (even, _) = across(&runs[..4]);
+    assert_eq!(Some(&4.75), even.get(&p95()), "the mean of the middle two");
     let zero = BTreeMap::from([(Metric::TransactionsPerRequest, 0.0)]);
-    assert!(noise_floor(&zero, &zero).is_empty(), "zero gives no ratio");
+    let (medians, floor) = across(&[zero.clone(), zero]);
+    assert_eq!(Some(&0.0), medians.get(&Metric::TransactionsPerRequest));
+    assert!(floor.is_empty(), "a zero median gives no ratio");
+}
+
+#[test]
+fn the_ratchet_tightens_only_on_a_better_median() {
+    let (plan, host) = (plan(), host());
+    let first = [metrics(5.0, 50.0), metrics(5.5, 50.0), metrics(6.0, 50.0)];
+    let (medians, floor) = across(&first);
+    let mut first_update = update(&medians, &plan, &host);
+    first_update.noise = floor;
+    let (old, _) = updated(None, &first_update);
+    assert_eq!(Some(&5.5), old.metrics.get(&p95()));
+    // One lucky phase at 3 ms does not move a median of 5.8 below 5.5.
+    let lucky = [metrics(3.0, 50.0), metrics(5.8, 50.0), metrics(6.2, 50.0)];
+    let (medians, _) = across(&lucky);
+    let (kept, _) = updated(Some(&old), &update(&medians, &plan, &host));
+    assert_eq!(Some(&5.5), kept.metrics.get(&p95()));
+    // A better median does.
+    let better = [metrics(4.0, 50.0), metrics(4.1, 50.0), metrics(4.4, 50.0)];
+    let (medians, _) = across(&better);
+    let (tightened, _) = updated(Some(&old), &update(&medians, &plan, &host));
+    assert_eq!(Some(&4.1), tightened.metrics.get(&p95()));
 }

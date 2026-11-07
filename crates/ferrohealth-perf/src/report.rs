@@ -22,7 +22,7 @@ use crate::histogram::{self, HistogramError};
 use crate::quantile::{Quantile, QuantileName, quantile};
 
 /// The schema of the report this version writes and reads.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// The band within which the second half's p50 and p95 must lie, as a
 /// share of the first half's.
@@ -50,10 +50,10 @@ pub struct Report {
     pub idle: IdleReport,
     /// The load phase.
     pub load: LoadReport,
-    /// The second load phase of an A/A calibration, when the run wrote a
-    /// baseline.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calibration: Option<LoadReport>,
+    /// The further load phases of an update, each after its own warm-up,
+    /// whose medians and spread with [`Report::load`] write the baseline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calibration: Vec<LoadReport>,
 }
 
 /// The server a run measured.
@@ -206,7 +206,7 @@ pub enum ReportError {
         source: serde_json::Error,
     },
     /// The report was written by a schema this version does not read.
-    #[error("the report has schema {0}; this ferrohealth-perf reads schema {SCHEMA}")]
+    #[error("the report has schema {0}; this ferrohealth-perf reads schema {SCHEMA} and 1")]
     Schema(u32),
 }
 
@@ -303,14 +303,33 @@ impl Report {
             path: shown.clone(),
             source,
         })?;
-        let report: Self = serde_json::from_str(&text).map_err(|source| ReportError::Parse {
-            path: shown,
+        let parse = |source| ReportError::Parse {
+            path: shown.clone(),
             source,
-        })?;
-        if report.schema != SCHEMA {
-            return Err(ReportError::Schema(report.schema));
+        };
+        let mut value: serde_json::Value = serde_json::from_str(&text).map_err(parse)?;
+        let schema = value
+            .get("schema")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0);
+        match schema {
+            SCHEMA => {}
+            // NOTE: no specification governs this: our own design; schema 1 held one calibration phase, not a list.
+            1 => {
+                if let Some(object) = value.as_object_mut() {
+                    if let Some(one) = object.remove("calibration") {
+                        object.insert(
+                            "calibration".to_owned(),
+                            serde_json::Value::Array(vec![one]),
+                        );
+                    }
+                    object.insert("schema".to_owned(), serde_json::Value::from(SCHEMA));
+                }
+            }
+            other => return Err(ReportError::Schema(other)),
         }
-        Ok(report)
+        serde_json::from_value(value).map_err(parse)
     }
 
     /// Writes the report into `dir` as `report-<stamp>.json`, then replaces
@@ -410,5 +429,29 @@ mod tests {
         let (a, b) = group.halves().unwrap();
         assert_eq!((200, 200), (a.len(), b.len()));
         assert_eq!(400, load.answered());
+    }
+
+    #[test]
+    fn a_schema_1_report_reads_with_its_one_calibration_as_a_list() {
+        let mut report = fixture::report();
+        report.calibration = vec![load_of(10, 10)];
+        let mut value = serde_json::to_value(&report).unwrap();
+        let object = value.as_object_mut().unwrap();
+        let one = object
+            .get_mut("calibration")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        object.insert("calibration".to_owned(), one);
+        object.insert("schema".to_owned(), serde_json::Value::from(1));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.json");
+        std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+        let read = Report::read(&path).unwrap();
+        assert_eq!(SCHEMA, read.schema);
+        assert_eq!(report.calibration, read.calibration);
+        std::fs::write(&path, "{\"schema\": 9}").unwrap();
+        assert!(matches!(Report::read(&path), Err(ReportError::Schema(9))));
     }
 }

@@ -5,7 +5,8 @@
 //! load metric against the baseline entry of the runner's CPU model.
 //!
 //! A metric breaches when it is worse than the baseline by more than the
-//! larger of its tolerance and its A/A noise floor (Kalibera and Jones,
+//! larger of its tolerance and its noise floor across the update's load
+//! phases (Kalibera and Jones,
 //! "Rigorous Benchmarking in Reasonable Time", ISMM 2013, on measuring the
 //! noise before judging a difference); the floor follows Veredictum's
 //! `perf_result::compare` (Apache-2.0, credited in `NOTICE`). A run that
@@ -25,6 +26,14 @@ use crate::report::{Report, ReportError, STEADY};
 
 /// The problem of a run judged with no baseline.
 const NO_BASELINE: &str = "there is no baseline; write one with --update";
+
+/// The problem of a run judged against an entry marked for re-measurement.
+const REMEASURE: &str = "the baseline entry for this CPU model was measured within one run \
+     (schema 2 or older); measure it again with --update before it judges a load phase";
+
+/// The warning of an update that re-measures such an entry.
+const REMEASURE_WRITING: &str =
+    "the baseline entry was measured within one run; it is measured again across runs";
 
 /// The outcome of a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,7 +133,7 @@ pub fn judge(
             passed: false,
         });
     }
-    for phase in std::iter::once(load).chain(report.calibration.as_ref()) {
+    for phase in std::iter::once(load).chain(report.calibration.iter()) {
         if let Some(lag) = phase.lag_p99_ms
             && lag > crate::quantile::exact_f64(phase.max_lag_ms)
         {
@@ -149,6 +158,13 @@ pub fn judge(
     match baseline {
         None if writing => {}
         None => problems.push(NO_BASELINE.to_owned()),
+        Some(base) if base.remeasure && base.plan == report.plan => {
+            if writing {
+                warnings.push(REMEASURE_WRITING.to_owned());
+            } else {
+                problems.push(REMEASURE.to_owned());
+            }
+        }
         Some(base) if base.plan != report.plan => {
             if writing {
                 warnings.push(

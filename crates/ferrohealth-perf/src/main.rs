@@ -25,7 +25,7 @@ use ferrohealth_perf::compare::judge_file;
 use ferrohealth_perf::plan::Plan;
 use ferrohealth_perf::process::{Target, container_cgroup};
 use ferrohealth_perf::report::Report;
-use ferrohealth_perf::run::{RunOptions, run};
+use ferrohealth_perf::run::{DEFAULT_RUNS, RunOptions, run};
 use ferrohealth_perf::summary;
 use ferrohealth_secret::secret_url::SecretUrl;
 
@@ -91,9 +91,13 @@ struct RunArgs {
     #[arg(long, value_name = "DIR", default_value = "target/perf")]
     out_dir: PathBuf,
     /// Writes the baseline entry of the runner's CPU model from a run that
-    /// passes, after a second load phase for the A/A noise floor.
+    /// passes: the median of `--runs` load phases, with their spread as the
+    /// noise floor.
     #[arg(long)]
     update: bool,
+    /// The load phases `--update` measures, each after its own warm-up.
+    #[arg(long, value_name = "N", requires = "update", value_parser = clap::value_parser!(u32).range(2..))]
+    runs: Option<u32>,
     #[command(flatten)]
     output: Output,
 }
@@ -148,6 +152,7 @@ fn run_command(args: RunArgs) -> Result<u8, Box<dyn Error>> {
         baseline: args.output.baseline.clone(),
         out_dir: args.out_dir,
         update: args.update,
+        runs: args.runs.unwrap_or(DEFAULT_RUNS),
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -69,7 +69,7 @@ async fn update_then_compare_then_a_regression_then_a_refused_update() {
             summary.to_str().unwrap(),
         ];
         if update {
-            args.push("--update");
+            args.extend(["--update", "--runs", "3"]);
         }
         perf(&args, &step)
     };
@@ -98,6 +98,12 @@ async fn update_then_compare_then_a_regression_then_a_refused_update() {
     };
     let latest = reports.join("latest.json");
     assert!(latest.is_file());
+    let measured = ferrohealth_perf::report::Report::read(&latest).unwrap();
+    assert_eq!(
+        2,
+        measured.calibration.len(),
+        "--runs 3 measured three load phases"
+    );
     let dated = std::fs::read_dir(&reports)
         .unwrap()
         .filter(|entry| {
@@ -215,6 +221,23 @@ fn a_harness_error_exits_2_and_says_why() {
         "{}",
         text(&output.stderr)
     );
+}
+
+#[test]
+fn runs_takes_at_least_two_phases_and_only_with_update() {
+    let dir = tempfile::tempdir().unwrap();
+    let step = dir.path().join("s.md");
+    let base = ["run", "--pid", "1", "--base-url", "http://127.0.0.1:9"];
+    for extra in [&["--update", "--runs", "1"][..], &["--runs", "3"][..]] {
+        let args: Vec<&str> = base.iter().chain(extra).copied().collect();
+        let output = perf(&args, &step);
+        assert_eq!(Some(2), output.status.code(), "{extra:?}");
+        assert!(
+            text(&output.stderr).contains("--runs"),
+            "{extra:?}: {}",
+            text(&output.stderr)
+        );
+    }
 }
 
 #[test]

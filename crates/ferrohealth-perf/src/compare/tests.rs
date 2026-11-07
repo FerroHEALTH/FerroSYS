@@ -309,3 +309,76 @@ fn the_idle_limits_judge_a_model_with_no_entry() {
     let none = judge_file(&busy, None, false).unwrap();
     assert_eq!(Outcome::Fail, none.outcome, "and so does a missing file");
 }
+
+/// The entry an update over phases whose p99 tails took `tails` writes.
+fn entry_across(tails: &[u64]) -> Baseline {
+    let report = fixture::report();
+    let phases: Vec<_> = tails
+        .iter()
+        .map(|tail| crate::metric::of(&fixture::tailed(10, *tail, 1000)).unwrap())
+        .collect();
+    let (metrics, noise) = crate::baseline::across(&phases);
+    updated(
+        None,
+        &Update {
+            metrics: &metrics,
+            noise,
+            plan: &report.plan,
+            host: &report.host,
+            tool: "0.0.0",
+            written: "2026-11-07T10:00:00Z",
+        },
+    )
+    .0
+}
+
+fn run_with_tail(tail_ms: u64) -> Report {
+    let mut report = fixture::report();
+    report.load = fixture::tailed(10, tail_ms, 1000);
+    report
+}
+
+#[test]
+fn a_noisy_p99_inside_the_spread_across_runs_passes() {
+    // Five phases of one commit: the p99 tail moved from 20 to 26 ms.
+    let entry = entry_across(&[20, 20, 26, 21, 20]);
+    let p99 = Metric::try_from("read.p99_ms".to_owned()).unwrap();
+    let floor = *entry.noise.get(&p99).unwrap();
+    assert!(floor > 1.25, "the spread is past the tolerance: {floor}");
+    // A run whose tail reached 26 ms, 30 % over the median, is that same noise.
+    let verdict = judge(&run_with_tail(26), Some(&entry), false).unwrap();
+    assert_eq!(Outcome::Pass, verdict.outcome, "{verdict:?}");
+}
+
+#[test]
+fn a_real_2x_regression_of_the_tail_still_fails() {
+    let entry = entry_across(&[20, 20, 26, 21, 20]);
+    let verdict = judge(&run_with_tail(40), Some(&entry), false).unwrap();
+    assert_eq!(Outcome::Fail, verdict.outcome);
+    let breached: Vec<_> = verdict.breaches().map(|c| c.name.as_str()).collect();
+    assert_eq!(vec!["read.p99_ms"], breached, "the p50 and p95 hold");
+}
+
+#[test]
+fn an_entry_marked_for_re_measurement_judges_no_load_phase() {
+    let report = fixture::report();
+    let mut entry = baseline_of(&report);
+    entry.remeasure = true;
+    let verdict = judge(&report, Some(&entry), false).unwrap();
+    assert_eq!(Outcome::Invalid, verdict.outcome);
+    assert!(
+        verdict.problems[0].contains("measure it again with --update"),
+        "{:?}",
+        verdict.problems
+    );
+    assert!(verdict.checks.iter().all(|c| c.name.starts_with("idle.")));
+    let writing = judge(&report, Some(&entry), true).unwrap();
+    assert_eq!(Outcome::Pass, writing.outcome);
+    let mut busy = report;
+    busy.idle.cpu_percent = Some(50.0);
+    assert_eq!(
+        Outcome::Fail,
+        judge(&busy, Some(&entry), false).unwrap().outcome,
+        "the idle limits still judge"
+    );
+}

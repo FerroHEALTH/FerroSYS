@@ -106,6 +106,7 @@ async fn measure(target: Target, database: Option<String>, update: bool) -> RunR
         baseline: dir.path().join("perf/baseline.toml"),
         out_dir: dir.path().join("reports"),
         update,
+        runs: 2,
     };
     run(&options).await.unwrap()
 }
@@ -165,7 +166,11 @@ async fn a_quiet_process_passes_and_writes_its_baseline() {
     assert!(idle.transactions_per_second.unwrap() < 5.0, "{idle:?}");
     let changes = result.changes.unwrap();
     assert!(!changes.is_empty(), "the baseline was written");
-    assert!(result.report.calibration.is_some(), "the A/A phase ran");
+    assert_eq!(
+        1,
+        result.report.calibration.len(),
+        "the second of two load phases ran"
+    );
     assert!(
         result.summary.contains("### Baseline"),
         "{}",
