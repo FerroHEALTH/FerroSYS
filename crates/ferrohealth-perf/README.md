@@ -47,7 +47,7 @@ socket is never asked. A host without `/proc` reports both as unavailable.
 ## Use
 
 ```sh
-cargo install ferrohealth-perf --version =0.2.0 --locked
+cargo install ferrohealth-perf --version =0.3.0 --locked
 ```
 
 Pin the version exactly, as every FerroHEALTH product does.
@@ -221,7 +221,7 @@ perf:
     FERROHEALTH_PERF_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
   steps:
     - uses: actions/checkout@<sha>
-    - run: cargo install ferrohealth-perf --version =0.2.0 --locked
+    - run: cargo install ferrohealth-perf --version =0.3.0 --locked
     - run: cargo build --release --locked
     - name: Start the server
       run: |
