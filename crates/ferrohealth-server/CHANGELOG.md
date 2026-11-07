@@ -10,6 +10,16 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `caller_rate::CallerLimit::take` is public: it takes one request of a
+  caller's allowance at a given instant and returns the wait until the next
+  when the request is over the rate, without counting it. `caller_rate::refusal`
+  builds the `429 Too Many Requests` answer with `Retry-After` for that wait.
+  The `limit` middleware is built on the two, so a product that decides on a
+  caller's rate outside the middleware, right after its authentication,
+  shares one state and one rule with it (#275).
+
 ## [0.6.0] - 2026-11-06
 
 ### Changed
