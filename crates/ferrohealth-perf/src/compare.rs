@@ -26,8 +26,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::baseline::{Baseline, Baselines, Shape};
-use crate::metric::Metric;
-use crate::report::{Report, ReportError, STEADY};
+use crate::metric::{Kind, Metric};
+use crate::report::{IdleReport, LoadReport, Report, ReportError, STEADY};
 
 /// The problem of a run judged with no baseline.
 const NO_BASELINE: &str = "there is no baseline; write one with --update";
@@ -87,6 +87,16 @@ pub struct Check {
     /// The load phases it breached in.
     #[serde(default)]
     pub breached: u32,
+    /// The head over the base, in an A/B run; absent against a baseline or
+    /// a limit, and where the base measured zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<f64>,
+    /// The product's tolerance of the metric's kind, in an A/B run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance: Option<f64>,
+    /// The noise floor measured within the arms, in an A/B run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor: Option<f64>,
 }
 
 impl Check {
@@ -146,10 +156,11 @@ pub fn judge(
     baseline: Option<&Baseline>,
     writing: bool,
 ) -> Result<Verdict, ReportError> {
-    let mut checks = Vec::new();
-    let mut problems = Vec::new();
-    let mut warnings = Vec::new();
-    idle_checks(report, &mut checks, &mut warnings);
+    let Findings {
+        mut checks,
+        mut problems,
+        mut warnings,
+    } = Findings::idle(&report.idle);
     let load = &report.load;
     if load.saturated {
         checks.push(Check {
@@ -161,6 +172,9 @@ pub fn judge(
             passed: false,
             runs: 0,
             breached: 0,
+            ratio: None,
+            tolerance: None,
+            floor: None,
         });
     }
     phase_problems(report, &mut problems)?;
@@ -205,20 +219,12 @@ pub fn judge(
         }
     }
     let failures = all_failures(report);
-    let outcome = if checks.iter().any(|c| !c.passed) || !failures.is_empty() {
-        Outcome::Fail
-    } else if !problems.is_empty() {
-        Outcome::Invalid
-    } else {
-        Outcome::Pass
-    };
-    Ok(Verdict {
-        outcome,
+    Ok(Findings {
         checks,
-        failures,
         problems,
         warnings,
-    })
+    }
+    .verdict(failures))
 }
 
 /// Judges `report` against the entry of `baselines` for the host shape of
@@ -266,8 +272,47 @@ fn ratio(value: Option<f64>) -> String {
     value.map_or_else(|| "not measurable".to_owned(), |r| format!("{r:.2}"))
 }
 
-fn idle_checks(report: &Report, checks: &mut Vec<Check>, warnings: &mut Vec<String>) {
-    let idle = &report.idle;
+/// What a judgement found before its outcome is drawn.
+#[derive(Debug, Default)]
+pub(crate) struct Findings {
+    /// Every check, in order.
+    pub(crate) checks: Vec<Check>,
+    /// Why the run cannot be judged.
+    pub(crate) problems: Vec<String>,
+    /// What a reader should know that changes no outcome.
+    pub(crate) warnings: Vec<String>,
+}
+
+impl Findings {
+    /// The findings of the absolute idle limits of `idle`, which judge
+    /// every run alike.
+    pub(crate) fn idle(idle: &IdleReport) -> Self {
+        let mut found = Self::default();
+        idle_checks(idle, &mut found.checks, &mut found.warnings);
+        found
+    }
+
+    /// The verdict: a breach or a failed request fails the run and
+    /// outranks a problem, which makes it one that cannot be judged.
+    pub(crate) fn verdict(self, failures: BTreeMap<String, BTreeMap<String, u64>>) -> Verdict {
+        let outcome = if self.checks.iter().any(|c| !c.passed) || !failures.is_empty() {
+            Outcome::Fail
+        } else if !self.problems.is_empty() {
+            Outcome::Invalid
+        } else {
+            Outcome::Pass
+        };
+        Verdict {
+            outcome,
+            checks: self.checks,
+            failures,
+            problems: self.problems,
+            warnings: self.warnings,
+        }
+    }
+}
+
+fn idle_checks(idle: &IdleReport, checks: &mut Vec<Check>, warnings: &mut Vec<String>) {
     for (name, measured, limit, missing) in [
         (
             "idle.cpu_percent",
@@ -292,6 +337,9 @@ fn idle_checks(report: &Report, checks: &mut Vec<Check>, warnings: &mut Vec<Stri
                 passed: value <= limit,
                 runs: 0,
                 breached: 0,
+                ratio: None,
+                tolerance: None,
+                floor: None,
             }),
             None => warnings.push(missing.to_owned()),
         }
@@ -303,25 +351,7 @@ fn idle_checks(report: &Report, checks: &mut Vec<Check>, warnings: &mut Vec<Stri
 fn phase_problems(report: &Report, problems: &mut Vec<String>) -> Result<(), ReportError> {
     let load = &report.load;
     for phase in std::iter::once(load).chain(report.calibration.iter()) {
-        if let Some(lag) = phase.lag_p99_ms
-            && lag > crate::quantile::exact_f64(phase.max_lag_ms)
-        {
-            problems.push(format!(
-                "the generator's lag p99 is {lag:.2} ms, over {} ms: it could not keep the schedule",
-                phase.max_lag_ms
-            ));
-        }
-        let steadiness = phase.steadiness()?;
-        if !steadiness.steady() {
-            problems.push(format!(
-                "the window is not steady: the second half's p50 and p95 over the first's are \
-                 {} and {}, outside {} to {}",
-                ratio(steadiness.p50_ratio),
-                ratio(steadiness.p95_ratio),
-                STEADY.0,
-                STEADY.1
-            ));
-        }
+        schedule_problems(phase, problems)?;
     }
     for (index, phase) in std::iter::once(load)
         .chain(report.calibration.iter())
@@ -340,22 +370,62 @@ fn phase_problems(report: &Report, problems: &mut Vec<String>) -> Result<(), Rep
     Ok(())
 }
 
+/// The problems of one load phase's schedule: a generator that fell behind
+/// and a window that was not steady.
+///
+/// # Errors
+///
+/// [`ReportError::Histogram`] when a histogram of the phase does not decode.
+pub(crate) fn schedule_problems(
+    phase: &LoadReport,
+    problems: &mut Vec<String>,
+) -> Result<(), ReportError> {
+    if let Some(lag) = phase.lag_p99_ms
+        && lag > crate::quantile::exact_f64(phase.max_lag_ms)
+    {
+        problems.push(format!(
+            "the generator's lag p99 is {lag:.2} ms, over {} ms: it could not keep the schedule",
+            phase.max_lag_ms
+        ));
+    }
+    let steadiness = phase.steadiness()?;
+    if !steadiness.steady() {
+        problems.push(format!(
+            "the window is not steady: the second half's p50 and p95 over the first's are \
+             {} and {}, outside {} to {}",
+            ratio(steadiness.p50_ratio),
+            ratio(steadiness.p95_ratio),
+            STEADY.0,
+            STEADY.1
+        ));
+    }
+    Ok(())
+}
+
 /// The failed requests of the first load phase and its confirmations.
 fn all_failures(report: &Report) -> BTreeMap<String, BTreeMap<String, u64>> {
     let mut failures = report.load.failures.clone();
     for phase in &report.confirmations {
-        for (group, kinds) in &phase.failures {
-            for (kind, count) in kinds {
-                let total = failures
-                    .entry(group.clone())
-                    .or_default()
-                    .entry(kind.clone())
-                    .or_insert(0);
-                *total = total.saturating_add(*count);
-            }
-        }
+        add_failures(&mut failures, &phase.failures);
     }
     failures
+}
+
+/// Adds the failure counts of `more` to `into`, by group and kind.
+pub(crate) fn add_failures(
+    into: &mut BTreeMap<String, BTreeMap<String, u64>>,
+    more: &BTreeMap<String, BTreeMap<String, u64>>,
+) {
+    for (group, kinds) in more {
+        for (kind, count) in kinds {
+            let total = into
+                .entry(group.clone())
+                .or_default()
+                .entry(kind.clone())
+                .or_insert(0);
+            *total = total.saturating_add(*count);
+        }
+    }
 }
 
 /// Judges the load metric `checks` of the first phase again on each of
@@ -400,37 +470,84 @@ fn baseline_checks(
             ));
             continue;
         };
-        let kind = metric.kind();
-        let tolerance = base.tolerance.of(kind);
-        let floor = base.noise.get(metric).copied().unwrap_or(1.0);
-        let (threshold, passed, rule) = if kind.lower_is_worse() {
-            let threshold = (reference * (1.0 - tolerance)).min(reference / floor);
-            let rule = format!(
-                "at least the baseline -{:.0} % (noise floor {floor:.2})",
-                tolerance * 100.0
-            );
-            (threshold, measured >= threshold, rule)
-        } else {
-            let threshold = (reference * (1.0 + tolerance)).max(reference * floor);
-            let rule = format!(
-                "at most the baseline +{:.0} % (noise floor {floor:.2})",
-                tolerance * 100.0
-            );
-            (threshold, measured <= threshold, rule)
-        };
+        let limit = Limit::new(
+            metric.kind(),
+            base.tolerance.of(metric.kind()),
+            base.noise.get(metric).copied().unwrap_or(1.0),
+        );
+        let passed = !limit.breached(*reference, measured);
         checks.push(Check {
             name: metric.to_string(),
             measured,
             reference: *reference,
-            threshold,
-            rule,
+            threshold: limit.threshold(*reference),
+            rule: limit.rule("the baseline"),
             passed,
             runs: 1,
             breached: u32::from(!passed),
+            ratio: None,
+            tolerance: None,
+            floor: None,
         });
     }
     for metric in metrics.keys().filter(|m| !base.metrics.contains_key(*m)) {
         warnings.push(format!("{metric} is not in the baseline; --update adds it"));
+    }
+}
+
+/// How far a metric may move from its reference: the larger of the
+/// product's tolerance and the noise floor, up for a metric where higher is
+/// worse and down for throughput.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Limit {
+    kind: Kind,
+    tolerance: f64,
+    floor: f64,
+    factor: f64,
+}
+
+impl Limit {
+    /// The limit of a metric of `kind` with `tolerance` and noise `floor`.
+    pub(crate) fn new(kind: Kind, tolerance: f64, floor: f64) -> Self {
+        let factor = if kind.lower_is_worse() {
+            (1.0 - tolerance).min(1.0 / floor)
+        } else {
+            (1.0 + tolerance).max(floor)
+        };
+        Self {
+            kind,
+            tolerance,
+            floor,
+            factor,
+        }
+    }
+
+    /// The worst value that still passes against `reference`.
+    pub(crate) fn threshold(&self, reference: f64) -> f64 {
+        reference * self.factor
+    }
+
+    /// Whether `measured` is worse than `reference` by more than the limit.
+    pub(crate) fn breached(&self, reference: f64, measured: f64) -> bool {
+        if self.kind.lower_is_worse() {
+            measured < self.threshold(reference)
+        } else {
+            measured > self.threshold(reference)
+        }
+    }
+
+    /// The rule for a reader, against `what` the metric is held to.
+    pub(crate) fn rule(&self, what: &str) -> String {
+        let (bound, sign) = if self.kind.lower_is_worse() {
+            ("at least", '-')
+        } else {
+            ("at most", '+')
+        };
+        format!(
+            "{bound} {what} {sign}{:.0} % (noise floor {:.2})",
+            self.tolerance * 100.0,
+            self.floor
+        )
     }
 }
 

@@ -133,6 +133,30 @@ impl Default for Tolerances {
 }
 
 impl Tolerances {
+    /// Checks that every tolerance is finite and not negative, and that
+    /// throughput's lies below one.
+    ///
+    /// # Errors
+    ///
+    /// The reason, naming the tolerance refused.
+    pub fn check(&self) -> Result<(), String> {
+        for (kind, value) in [
+            ("latency", self.latency),
+            ("throughput", self.throughput),
+            ("memory", self.memory),
+            ("cpu", self.cpu),
+            ("transactions", self.transactions),
+        ] {
+            if !(value.is_finite() && value >= 0.0) {
+                return Err(format!("tolerance.{kind} is {value}"));
+            }
+        }
+        if self.throughput >= 1.0 {
+            return Err("tolerance.throughput must be below 1".to_owned());
+        }
+        Ok(())
+    }
+
     /// The tolerance of `kind`.
     #[must_use]
     pub fn of(&self, kind: Kind) -> f64 {
@@ -355,25 +379,7 @@ impl Baseline {
 
     fn check(&self) -> Result<(), BaselineError> {
         let finite = |value: f64| value.is_finite() && value >= 0.0;
-        let t = &self.tolerance;
-        for (kind, value) in [
-            ("latency", t.latency),
-            ("throughput", t.throughput),
-            ("memory", t.memory),
-            ("cpu", t.cpu),
-            ("transactions", t.transactions),
-        ] {
-            if !finite(value) {
-                return Err(BaselineError::Invalid(format!(
-                    "tolerance.{kind} is {value}"
-                )));
-            }
-        }
-        if t.throughput >= 1.0 {
-            return Err(BaselineError::Invalid(
-                "tolerance.throughput must be below 1".to_owned(),
-            ));
-        }
+        self.tolerance.check().map_err(BaselineError::Invalid)?;
         if let Some((metric, value)) = self.metrics.iter().find(|(_, v)| !finite(**v)) {
             return Err(BaselineError::Invalid(format!(
                 "metrics.{metric} is {value}"

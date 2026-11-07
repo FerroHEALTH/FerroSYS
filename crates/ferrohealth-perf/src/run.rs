@@ -121,12 +121,12 @@ pub enum RunError {
 }
 
 /// The time now, RFC 3339 in UTC.
-fn now() -> String {
+pub(crate) fn now() -> String {
     jiff::Timestamp::now().to_string()
 }
 
 /// The UTC time as a file name stamp, `20261106T101500Z`.
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     jiff::Timestamp::now()
         .strftime("%Y%m%dT%H%M%SZ")
         .to_string()
@@ -134,12 +134,27 @@ fn stamp() -> String {
 
 /// The server and the database a run reads.
 #[derive(Debug)]
-struct Instruments {
-    probe: Probe,
-    database: Option<Transactions>,
+pub(crate) struct Instruments {
+    pub(crate) probe: Probe,
+    pub(crate) database: Option<Transactions>,
 }
 
 impl Instruments {
+    /// Reads `target` once, so a server that cannot be read refuses the run
+    /// before any phase, and connects to `database` when one is given.
+    pub(crate) async fn open(
+        target: &Target,
+        database: Option<&SecretUrl>,
+    ) -> Result<Self, RunError> {
+        let probe = Probe::new(target.clone());
+        probe.sample()?;
+        let database = match database {
+            Some(url) => Some(Transactions::connect(url).await?),
+            None => None,
+        };
+        Ok(Self { probe, database })
+    }
+
     async fn sample(&self) -> Result<Sample, RunError> {
         let probe = self.probe.clone();
         tokio::task::spawn_blocking(move || probe.sample())
@@ -166,6 +181,21 @@ impl Instruments {
     }
 }
 
+/// The server's URL, parsed; its credentials are redacted in the error.
+pub(crate) fn server_url(url: &SecretUrl) -> Result<Url, RunError> {
+    Url::parse(url.expose()).map_err(|source| RunError::BaseUrl(url.redacted(), source))
+}
+
+/// The credentials `plan` names and the HTTP client that presents them.
+pub(crate) fn client(plan: &Plan) -> Result<(Credentials, reqwest::Client), RunError> {
+    let credentials = Credentials::load(plan)?;
+    let client = credentials
+        .apply(reqwest::Client::builder().no_proxy())
+        .build()
+        .map_err(RunError::Client)?;
+    Ok((credentials, client))
+}
+
 /// The change in the transaction count from `before` to `after`.
 fn delta(before: Option<u64>, after: Option<u64>) -> Result<Option<u64>, RunError> {
     match (before, after) {
@@ -182,7 +212,10 @@ fn cpu_between(first: Sample, last: Sample) -> Option<Duration> {
     Some(last.cpu?.saturating_sub(first.cpu?))
 }
 
-async fn idle_phase(plan: &Plan, instruments: &Instruments) -> Result<IdleReport, RunError> {
+pub(crate) async fn idle_phase(
+    plan: &Plan,
+    instruments: &Instruments,
+) -> Result<IdleReport, RunError> {
     let idle = &plan.idle;
     sleep(Duration::from_secs(idle.settle_secs)).await;
     let first = instruments.sample().await?;
@@ -244,7 +277,7 @@ impl Peak {
     }
 }
 
-async fn load_phase(
+pub(crate) async fn load_phase(
     plan: &Plan,
     base: &Url,
     client: &reqwest::Client,
@@ -315,20 +348,9 @@ async fn load_phase(
 /// cannot be written.
 pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     let old = Baselines::read(&options.baseline)?;
-    let base = Url::parse(options.base_url.expose())
-        .map_err(|source| RunError::BaseUrl(options.base_url.redacted(), source))?;
-    let credentials = Credentials::load(&options.plan)?;
-    let client = credentials
-        .apply(reqwest::Client::builder().no_proxy())
-        .build()
-        .map_err(RunError::Client)?;
-    let probe = Probe::new(options.target.clone());
-    probe.sample()?;
-    let database = match &options.database_url {
-        Some(url) => Some(Transactions::connect(url).await?),
-        None => None,
-    };
-    let instruments = Instruments { probe, database };
+    let base = server_url(&options.base_url)?;
+    let (credentials, client) = client(&options.plan)?;
+    let instruments = Instruments::open(&options.target, options.database_url.as_ref()).await?;
     let started = now();
     let plan = &options.plan;
     let idle = idle_phase(plan, &instruments).await?;
@@ -408,7 +430,7 @@ pub fn conclude(
     options: &RunOptions,
 ) -> Result<RunResult, RunError> {
     let verdict = judge_file(&report, old, options.update)?;
-    let report_path = report.write(&options.out_dir, &stamp())?;
+    let report_path = crate::report::write(&report, &options.out_dir, &stamp())?;
     let mut text = summary::markdown(&report, &verdict);
     let mut changes = None;
     if options.update {

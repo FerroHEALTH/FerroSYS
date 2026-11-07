@@ -7,7 +7,9 @@ The performance gate of the FerroHEALTH servers, part of
 [FerroSYS](https://github.com/FerroHEALTH/FerroSYS). A product's CI job
 starts its server and its PostgreSQL, then runs `ferrohealth-perf` against
 them. The run fails when the server is busy at rest, or slower, heavier or
-busier under load than the baseline the product committed.
+busier under load than the base of the change, measured beside it on the
+same host ([A/B](#judging-a-change-against-its-base)), or than the
+baseline the product committed.
 
 ## What it measures
 
@@ -82,13 +84,15 @@ ferrohealth-perf compare --report target/perf/latest.json
 | `--update` | off | write the entry of the runner's host shape from a run that passes |
 | `--runs` | `5` | the load phases `--update` measures, at least 2 |
 
+`ferrohealth-perf ab ...` measures the base and the head of a change side
+by side ([Judging a change against its base](#judging-a-change-against-its-base)).
 `ferrohealth-perf merge --baseline perf/baseline.toml JOB...` merges the
 baseline files several `--update` jobs wrote into the committed one and
 contacts no server (see [Merging jobs](#merging-jobs)).
 
-Exit codes: **0** the run passed, **1** a limit or tolerance was breached
-or a request was answered other than expected, **2** the run cannot be
-judged (no baseline, no entry for the runner's host shape, a baseline of
+Exit codes, for `run`, `ab` and `compare` alike: **0** the run passed,
+**1** a limit or tolerance was breached or a request was answered other
+than expected, **2** the run cannot be judged (no baseline, no entry for the runner's host shape, a baseline of
 another plan, a metric the baseline holds and the run lacks, a lagging
 generator, an unsteady window, a stalled runner) or a harness error. The idle limits judge
 every run, so a busy server fails with 1 even where the load phase cannot
@@ -116,6 +120,13 @@ settle_secs = 11                   # wait after it, before the transaction count
 stall_ratio = 10.0                 # p99 over this times p50 on every route marks a stall
 # client_identity_file = "perf/client.pem"  # a certificate chain and its key, for mTLS
 # trust_roots_file = "perf/ca.pem"          # roots that verify an https target
+
+[tolerance]                        # how far the head may stray from the base, in ab
+latency = 0.25
+throughput = 0.2                   # the share throughput may fall
+memory = 0.2
+cpu = 0.25
+transactions = 0.1
 
 [[requests]]
 group = "metadata"
@@ -157,6 +168,70 @@ read from the working directory, and a file that cannot be read or parsed
 refuses the plan before any phase runs.
 Arrival `i` sends request `i` modulo the set, so repeat an entry to weight
 it.
+
+## Judging a change against its base
+
+Machines of one shape differ: on GitHub's hosted runners, two runners that
+report the same CPU model and memory measured one commit 25 to 45 % apart
+in p50 latency and CPU per request. A baseline stored on one machine then
+fails unchanged code on another. The `ab` mode measures the base of the
+change, built from `main`, and its head on the same runner in the same
+job, so the difference between machines cancels.
+
+The product starts both servers side by side, each with its own database,
+and hands them to the tool:
+
+```sh
+ferrohealth-perf ab --plan perf/plan.toml \
+  --base-url http://127.0.0.1:8081 --base-pid "$BASE_PID" \
+  --base-database-url "$BASE_DATABASE_URL" \
+  --head-url http://127.0.0.1:8080 --head-pid "$HEAD_PID" \
+  --head-database-url "$HEAD_DATABASE_URL"
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--plan` | `perf/plan.toml` | the head's plan: limits, load, tolerances and request set |
+| `--base-url`, `--head-url` | required | each server's base URL |
+| `--base-pid`, `--base-cgroup`, `--base-container` | one is required | the base server's process, cgroup or container |
+| `--head-pid`, `--head-cgroup`, `--head-container` | one is required | the head server's |
+| `--base-database-url` | `FERROHEALTH_PERF_BASE_DATABASE_URL` | the base's database |
+| `--head-database-url` | `FERROHEALTH_PERF_HEAD_DATABASE_URL` | the head's database, also held to the idle limit |
+| `--pairs` | `3` | the pairs of load phases, at least 2 |
+| `--cgroup-root`, `--out-dir`, `--summary` | as for `run` | |
+
+1. **Idle.** The head's idle phase is held to the plan's absolute limits,
+   as in `run`. The base is not judged at rest.
+2. **Load, alternating.** Each pair runs one load phase against each
+   server, each after its own warm-up: the base first in the first pair,
+   the head first in the second, and so on. A drift over the job, a
+   neighbour's load or a disk that slows, reaches both arms alike, and the
+   report records the order of every pair.
+3. **Judgement.** Each load metric is the median of the arm's phases. Its
+   noise floor is the worse of the two arms' spread, how far an arm's
+   worst phase strayed from its median. A metric breaches when the head's
+   median is worse than the base's by more than the larger of the plan's
+   `[tolerance]` and that floor, and it fails only when the head also
+   breaches against the base in most of the pairs, so a stall in one phase
+   clears and a regression, which repeats, fails.
+4. **What cannot be judged.** A phase that stalled, whose generator lagged
+   or whose window was not steady makes the run exit 2, so the product's
+   job can retry it on a fresh runner; a stalled phase is left out of the
+   medians and the pairs. A base that falls behind the schedule exits 2
+   too, while a head that falls behind where the base kept up fails.
+   Requests the head answered other than expected fail the run; those the
+   base answered other than expected (a route the change adds, say) are
+   noted, and a metric only one arm measured is noted and not judged.
+
+The JSON report, `report-<UTC time>.json` and `latest.json`, holds the
+head's idle phase, every pair with its order, the tolerances and the
+verdict, and `compare --report` judges it again offline. The Markdown
+summary shows, per metric, the base, the head, their ratio, the tolerance,
+the floor, the threshold and in how many pairs the head breached.
+
+A pair takes about two load windows with their warm-ups and settles, so
+three pairs of a 60-second window with a 10-second warm-up add about
+eight minutes to the idle phase.
 
 ## The baseline, `perf/baseline.toml`
 
@@ -299,6 +374,10 @@ perf:
           target/perf/
           perf/baseline.toml
 ```
+
+For the A/B mode, the job builds the base from the pull request's merge
+base with `main` beside the head, starts both, and runs `ferrohealth-perf
+ab` in place of `run`; it needs no baseline file.
 
 For a server in a container, pass `--container "$(docker inspect -f
 '{{.Id}}' <name>)"` in place of `--pid`. Commit `perf/plan.toml` first. To

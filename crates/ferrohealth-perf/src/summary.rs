@@ -9,6 +9,7 @@
 //! GitHub Flavored Markdown ("Adding a job summary", GitHub Actions
 //! documentation).
 
+use crate::ab::AbReport;
 use crate::compare::{Check, Outcome, Verdict};
 use crate::quantile::{Quantile, QuantileName};
 use crate::report::Report;
@@ -17,14 +18,9 @@ use crate::report::Report;
 #[must_use]
 pub fn markdown(report: &Report, verdict: &Verdict) -> String {
     let mut out = String::new();
-    let headline = match verdict.outcome {
-        Outcome::Pass => "passed",
-        Outcome::Fail => "failed",
-        Outcome::Invalid => "could not be judged",
-    };
     line(
         &mut out,
-        &format!("## ferrohealth-perf: the run {headline}"),
+        &format!("## ferrohealth-perf: the run {}", headline(verdict)),
     );
     line(&mut out, "");
     line(
@@ -58,18 +54,7 @@ pub fn markdown(report: &Report, verdict: &Verdict) -> String {
         line(&mut out, "");
         table(&mut out, &breaches);
     }
-    if !verdict.failures.is_empty() {
-        line(&mut out, "### Requests answered other than expected");
-        line(&mut out, "");
-        line(&mut out, "| Group | Failure | Count |");
-        line(&mut out, "| --- | --- | ---: |");
-        for (group, kinds) in &verdict.failures {
-            for (kind, count) in kinds {
-                line(&mut out, &format!("| {group} | {kind} | {count} |"));
-            }
-        }
-        line(&mut out, "");
-    }
+    failures(&mut out, verdict);
     line(&mut out, "### Checks");
     line(&mut out, "");
     let all: Vec<&Check> = verdict.checks.iter().collect();
@@ -107,6 +92,116 @@ pub fn markdown(report: &Report, verdict: &Verdict) -> String {
     }
     list(&mut out, "Notes", &verdict.warnings);
     out
+}
+
+/// The summary of the A/B run `report` judged as `verdict`: the head's idle
+/// limits, then each load metric with the base, the head, their ratio, the
+/// tolerance and the noise floor.
+#[must_use]
+pub fn ab_markdown(report: &AbReport, verdict: &Verdict) -> String {
+    let mut out = String::new();
+    line(
+        &mut out,
+        &format!("## ferrohealth-perf: the A/B run {}", headline(verdict)),
+    );
+    line(&mut out, "");
+    let order: Vec<String> = report
+        .pairs
+        .iter()
+        .map(|pair| format!("{} then {}", pair.first, pair.first.other()))
+        .collect();
+    line(
+        &mut out,
+        &format!(
+            "The head, {} against `{}`, judged against the base, {} against `{}`, over {} \
+             pairs of load phases ({}), measured on {} {} from {} to {}.",
+            report.head.process,
+            report.head.base_url,
+            report.base.process,
+            report.base.base_url,
+            report.pairs.len(),
+            order.join("; "),
+            report.host.os,
+            report.host.arch,
+            report.started,
+            report.finished
+        ),
+    );
+    line(&mut out, "");
+    list(&mut out, "Why it could not be judged", &verdict.problems);
+    let (compared, limits): (Vec<&Check>, Vec<&Check>) = verdict
+        .checks
+        .iter()
+        .partition(|check| check.tolerance.is_some());
+    let breaches: Vec<&Check> = compared.iter().copied().filter(|c| !c.passed).collect();
+    if !breaches.is_empty() {
+        line(&mut out, "### Breaches");
+        line(&mut out, "");
+        ab_table(&mut out, &breaches);
+    }
+    failures(&mut out, verdict);
+    line(&mut out, "### The head at rest and under load");
+    line(&mut out, "");
+    table(&mut out, &limits);
+    line(&mut out, "### The head over the base");
+    line(&mut out, "");
+    ab_table(&mut out, &compared);
+    list(&mut out, "Notes", &verdict.warnings);
+    out
+}
+
+fn headline(verdict: &Verdict) -> &'static str {
+    match verdict.outcome {
+        Outcome::Pass => "passed",
+        Outcome::Fail => "failed",
+        Outcome::Invalid => "could not be judged",
+    }
+}
+
+fn failures(out: &mut String, verdict: &Verdict) {
+    if verdict.failures.is_empty() {
+        return;
+    }
+    line(out, "### Requests answered other than expected");
+    line(out, "");
+    line(out, "| Group | Failure | Count |");
+    line(out, "| --- | --- | ---: |");
+    for (group, kinds) in &verdict.failures {
+        for (kind, count) in kinds {
+            line(out, &format!("| {group} | {kind} | {count} |"));
+        }
+    }
+    line(out, "");
+}
+
+fn ab_table(out: &mut String, checks: &[&Check]) {
+    line(
+        out,
+        "| Metric | Base | Head | Ratio | Tolerance | Floor | Threshold | Breached | Result |",
+    );
+    line(
+        out,
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    );
+    for check in checks {
+        let optional =
+            |value: Option<f64>| value.map_or_else(|| "n/a".to_owned(), |v| format!("{v:.2}"));
+        let row = format!(
+            "| {} | {} | {} | {} | {:.0} % | {} | {} | {} of {} pairs | {} |",
+            check.name,
+            number(check.reference),
+            number(check.measured),
+            optional(check.ratio),
+            check.tolerance.unwrap_or(0.0) * 100.0,
+            optional(check.floor),
+            number(check.threshold),
+            check.breached,
+            check.runs,
+            if check.passed { "pass" } else { "FAIL" }
+        );
+        line(out, &row);
+    }
+    line(out, "");
 }
 
 fn line(out: &mut String, text: &str) {
