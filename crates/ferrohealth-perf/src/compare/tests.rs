@@ -532,3 +532,25 @@ fn a_run_on_another_memory_size_has_no_entry_and_names_its_shape() {
         judge_file(&known, Some(&file), false).unwrap().outcome
     );
 }
+
+#[test]
+fn a_stalled_run_names_the_stall_alone_and_asks_for_a_re_run() {
+    let mut known = fixture::report();
+    known.host.cpu_model = Some("AMD EPYC 9V74 80-Core Processor".to_owned());
+    let file = file_of(vec![baseline_of(&known)]);
+    let mut stalled = known.clone();
+    stalled.load = fixture::tailed(10, 500, 1000);
+    for verdict in [
+        judge_file(&stalled, Some(&file), false).unwrap(),
+        judge(&stalled, None, false).unwrap(),
+    ] {
+        assert_eq!(Outcome::Invalid, verdict.outcome);
+        assert_eq!(1, verdict.problems.len(), "{:?}", verdict.problems);
+        let problem = &verdict.problems[0];
+        assert!(problem.contains("the runner stalled"), "{problem}");
+        assert!(
+            problem.contains("re-run the job on a fresh runner"),
+            "{problem}"
+        );
+    }
+}

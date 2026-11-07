@@ -165,8 +165,9 @@ pub fn judge(
     }
     phase_problems(report, &mut problems)?;
     let metrics = crate::metric::of(load)?;
-    let baseline = baseline.filter(|_| !load.stalled());
     match baseline {
+        // NOTE: no specification governs this: our own design; a stalled first phase is named by its own problem, never as a missing baseline.
+        _ if load.stalled() => {}
         None if writing => {}
         None => problems.push(NO_BASELINE.to_owned()),
         Some(base) if base.remeasure && base.plan == report.plan => {
@@ -330,7 +331,7 @@ fn phase_problems(report: &Report, problems: &mut Vec<String>) -> Result<(), Rep
         if phase.stalled() {
             problems.push(format!(
                 "the runner stalled in load phase {}: every route's p99 is over {} times its p50 \
-                 at once, so the phase is not judged",
+                 at once, so the phase is not judged; re-run the job on a fresh runner",
                 index + 1,
                 phase.stall_ratio.unwrap_or(0.0)
             ));
