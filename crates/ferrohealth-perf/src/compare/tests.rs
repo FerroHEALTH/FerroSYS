@@ -523,7 +523,7 @@ fn a_run_on_another_memory_size_has_no_entry_and_names_its_shape() {
     let verdict = judge_file(&other, Some(&file), false).unwrap();
     assert_eq!(Outcome::Invalid, verdict.outcome);
     assert!(
-        verdict.problems[0].contains("`EPYC 9V45` with 8192 MiB of memory"),
+        verdict.problems[0].contains("`EPYC 9V45` with 8 GiB of memory"),
         "{:?}",
         verdict.problems
     );
