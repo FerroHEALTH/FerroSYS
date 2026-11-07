@@ -13,6 +13,12 @@
 //! the clock the limit reads, does not limit at all: its interval would be
 //! zero. No specification governs the rest: our own design.
 //!
+//! A product that decides on a caller's rate outside the middleware, such as
+//! right after its authentication and before it reads anything for the
+//! request, takes the request with [`CallerLimit::take`] and answers a
+//! refusal with [`refusal`]; the middleware does the same through the same
+//! calls, so both share one state and one rule.
+//!
 //! ```
 //! use axum::Router;
 //! use axum::routing::get;
@@ -77,9 +83,31 @@ impl CallerLimit {
         }
     }
 
-    /// Takes one request of `caller` at `now`: `Ok` when it may be served,
-    /// and the wait until it may otherwise.
-    fn take(&self, caller: &CallerKey, now: Instant) -> Result<(), Duration> {
+    /// Takes one request of `caller` from its allowance at `now`.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use ferrohealth_server::caller_rate::{CallerKey, CallerLimit};
+    /// use ferrohealth_server::section::CallerRate;
+    /// use tokio::time::Instant;
+    ///
+    /// let limit = CallerLimit::new(CallerRate {
+    ///     requests_per_second: 1.try_into()?,
+    ///     burst: 1.try_into()?,
+    /// });
+    /// let caller = CallerKey(Arc::from("partner-app"));
+    /// let now = Instant::now();
+    /// assert!(limit.take(&caller, now).is_ok());
+    /// assert!(limit.take(&caller, now).is_err(), "the burst of one is spent");
+    /// # Ok::<(), std::num::TryFromIntError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The wait until `caller` may send its next request, when this one is
+    /// over its rate; the request is then not counted.
+    pub fn take(&self, caller: &CallerKey, now: Instant) -> Result<(), Duration> {
         // NOTE: no specification governs this: our own design; a zero interval
         // would leave no tolerance for a request whose clock read precedes a
         // concurrent one's.
@@ -110,19 +138,27 @@ pub async fn limit(State(limit): State<CallerLimit>, request: Request, next: Nex
     };
     match limit.take(caller, Instant::now()) {
         Ok(()) => next.run(request).await,
-        Err(wait) => {
-            tracing::warn!("a request was refused: its caller sent more than its rate");
-            let mut response = crate::refusal::refused(
-                StatusCode::TOO_MANY_REQUESTS,
-                "too many requests from this caller; retry later",
-            );
-            response.headers_mut().insert(
-                header::RETRY_AFTER,
-                HeaderValue::from(crate::overload::retry_seconds(wait)),
-            );
-            response
-        }
+        Err(wait) => refusal(wait),
     }
+}
+
+/// The answer to a request over its caller's rate, `wait` before the next.
+///
+/// It is `429 Too Many Requests` with `Retry-After` in whole seconds, rounded
+/// up (RFC 6585 §4, RFC 9110 §10.2.3), which the stack renders as it renders
+/// its own refusals.
+#[must_use]
+pub fn refusal(wait: Duration) -> Response {
+    tracing::warn!("a request was refused: its caller sent more than its rate");
+    let mut response = crate::refusal::refused(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too many requests from this caller; retry later",
+    );
+    response.headers_mut().insert(
+        header::RETRY_AFTER,
+        HeaderValue::from(crate::overload::retry_seconds(wait)),
+    );
+    response
 }
 
 #[cfg(test)]
@@ -199,6 +235,47 @@ mod tests {
             "one request refilled"
         );
         assert_eq!(StatusCode::TOO_MANY_REQUESTS, call(&app, Some("a")).await.0);
+    }
+
+    #[test]
+    fn a_take_admits_within_the_burst_refuses_with_the_wait_and_refills() {
+        let limit = limit_of(2, 2);
+        let caller = CallerKey(Arc::from("a"));
+        let now = tokio::time::Instant::now();
+        assert_eq!(Ok(()), limit.take(&caller, now));
+        assert_eq!(Ok(()), limit.take(&caller, now));
+        assert_eq!(
+            Err(Duration::from_millis(500)),
+            limit.take(&caller, now),
+            "the burst is spent: one request refills every half second"
+        );
+        assert_eq!(
+            Err(Duration::from_millis(500)),
+            limit.take(&caller, now),
+            "a refused take is not counted"
+        );
+        let later = now + Duration::from_millis(500);
+        assert_eq!(Ok(()), limit.take(&caller, later), "one request refilled");
+        assert_eq!(Err(Duration::from_millis(500)), limit.take(&caller, later));
+        let other = CallerKey(Arc::from("b"));
+        assert_eq!(
+            Ok(()),
+            limit.take(&other, now),
+            "each caller has its own allowance"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_429_with_the_wait_rounded_up_to_whole_seconds() {
+        let response = super::refusal(Duration::from_millis(1500));
+        assert_eq!(StatusCode::TOO_MANY_REQUESTS, response.status());
+        assert_eq!(
+            Some("2"),
+            response
+                .headers()
+                .get(http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+        );
     }
 
     fn limit_of(requests_per_second: u32, burst: u32) -> CallerLimit {
