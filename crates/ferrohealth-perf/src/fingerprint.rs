@@ -67,7 +67,8 @@ impl Fingerprint {
         if self.cpu_model != other.cpu_model {
             names.push("cpu_model");
         }
-        if self.total_memory_bytes != other.total_memory_bytes {
+        let gib = |bytes| crate::baseline::Shape::new(None, bytes).memory_bytes;
+        if gib(self.total_memory_bytes) != gib(other.total_memory_bytes) {
             names.push("total_memory_bytes");
         }
         names
@@ -126,6 +127,23 @@ mod tests {
         assert_eq!(
             vec!["os", "available_parallelism"],
             host.differences(&other)
+        );
+    }
+
+    #[test]
+    fn memory_sizes_of_one_gib_are_no_difference() {
+        let host = |bytes| Fingerprint {
+            arch: "x86_64".to_owned(),
+            os: "linux".to_owned(),
+            available_parallelism: Some(4),
+            cpu_model: Some("AMD EPYC 9V74 80-Core Processor".to_owned()),
+            total_memory_bytes: Some(bytes),
+        };
+        let one = host(16_760_340_480);
+        assert_eq!(Vec::<&str>::new(), one.differences(&host(16_760_344_576)));
+        assert_eq!(
+            vec!["total_memory_bytes"],
+            one.differences(&host(8_317_927_424))
         );
     }
 }

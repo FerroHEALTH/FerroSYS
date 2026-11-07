@@ -10,6 +10,17 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-07
+
+### Fixed
+
+- A run whose first load phase stalled names the stall alone and says to
+  re-run the job on a fresh runner (#272); 0.4.0 and 0.4.1 also said "there
+  is no baseline" although the file held the runner's entry.
+- The host comparison treats two memory sizes of one rounded GiB as one
+  host, so a run no longer warns of a memory difference from its own
+  entry (#272).
+
 ## [0.4.1] - 2026-11-07
 
 ### Fixed
