@@ -15,9 +15,16 @@ use crate::report::{
 /// A load phase whose one group, `read`, answered `n` requests per half at
 /// `latency_ms`, over a measured window of ten seconds.
 pub(crate) fn load(latency_ms: u64, n: u64) -> LoadReport {
+    tailed(latency_ms, latency_ms, n)
+}
+
+/// A load phase like [`load`] whose slowest one in fifty requests of each
+/// half took `tail_ms`, so its p99 moves while its p50 and p95 hold.
+pub(crate) fn tailed(latency_ms: u64, tail_ms: u64, n: u64) -> LoadReport {
     let mut half = histogram::empty();
-    for _ in 0..n {
-        histogram::record(&mut half, Duration::from_millis(latency_ms));
+    for i in 0..n {
+        let ms = if i % 50 == 0 { tail_ms } else { latency_ms };
+        histogram::record(&mut half, Duration::from_millis(ms));
     }
     LoadReport {
         measured_secs: 10.0,
@@ -73,6 +80,6 @@ pub(crate) fn report() -> Report {
             memory_end_bytes: Some(90_000_000),
         },
         load: load(10, 250),
-        calibration: None,
+        calibration: Vec::new(),
     }
 }

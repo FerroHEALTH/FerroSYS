@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: Cadasto B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! One run against a server: the idle phase, the load phase, and with
-//! `--update` a second load phase for the A/A noise floor; then the
-//! judgement, the report files and the baseline.
+//! One run against a server: the idle phase, the load phase, the
+//! judgement, the report files and, with `--update`, the baseline.
+//!
+//! An update measures further load phases, each after its own warm-up, and
+//! writes the entry from their medians and spread.
 //!
 //! `--update` writes the baseline entry of the runner's CPU model only from
 //! a run that passes, and leaves every other entry as it was: a breach or a
@@ -51,7 +53,13 @@ pub struct RunOptions {
     pub out_dir: PathBuf,
     /// Whether the run writes the baseline.
     pub update: bool,
+    /// The load phases an update measures, at least two: the entry takes
+    /// their median and their spread is its noise floor.
+    pub runs: u32,
 }
+
+/// The load phases an update measures unless told otherwise.
+pub const DEFAULT_RUNS: u32 = 5;
 
 /// What a run produced.
 #[derive(Debug, Clone)]
@@ -317,11 +325,12 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     let plan = &options.plan;
     let idle = idle_phase(plan, &instruments).await?;
     let load = load_phase(plan, &base, &client, &instruments).await?;
-    let calibration = if options.update {
-        Some(load_phase(plan, &base, &client, &instruments).await?)
-    } else {
-        None
-    };
+    let mut calibration = Vec::new();
+    if options.update {
+        for _ in 1..options.runs.max(2) {
+            calibration.push(load_phase(plan, &base, &client, &instruments).await?);
+        }
+    }
     let report = Report {
         schema: SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_owned(),
@@ -371,11 +380,11 @@ pub fn conclude(
     let mut changes = None;
     if options.update {
         if verdict.outcome == Outcome::Pass {
-            let metrics = metric::of(&report.load)?;
-            let noise = match &report.calibration {
-                Some(second) => baseline::noise_floor(&metrics, &metric::of(second)?),
-                None => std::collections::BTreeMap::new(),
-            };
+            let phases = std::iter::once(&report.load)
+                .chain(report.calibration.iter())
+                .map(metric::of)
+                .collect::<Result<Vec<_>, _>>()?;
+            let (metrics, noise) = baseline::across(&phases);
             let written = now();
             let entry = old.and_then(|file| file.entry(report.host.cpu_model.as_deref()));
             let (baseline, done) = baseline::updated(
@@ -412,7 +421,8 @@ pub fn conclude(
 
 fn changes_markdown(path: &Path, model: &str, changes: &[Change]) -> String {
     let mut text = format!(
-        "### Baseline\n\nThe entry for the CPU model {model}, written to `{}`:\n\n",
+        "### Baseline\n\nThe entry for the CPU model {model}, the median of the update's load \
+         phases, written to `{}`:\n\n",
         path.display()
     );
     for change in changes {
@@ -423,6 +433,9 @@ fn changes_markdown(path: &Path, model: &str, changes: &[Change]) -> String {
             }
             Change::Kept(metric, value) => format!("{metric} kept at {value:.3}"),
             Change::Rewritten => "written afresh for the new plan".to_owned(),
+            Change::Remeasured => {
+                "measured again across runs, replacing the entry measured within one run".to_owned()
+            }
         };
         text.push_str("- ");
         text.push_str(&item);
@@ -449,6 +462,7 @@ mod tests {
             baseline: dir.join("perf/baseline.toml"),
             out_dir: dir.join("reports"),
             update: true,
+            runs: 2,
         }
     }
 
@@ -456,7 +470,7 @@ mod tests {
         let mut report = fixture::report();
         report.host.cpu_model = Some(model.to_owned());
         report.load = fixture::load(latency_ms, 250);
-        report.calibration = Some(fixture::load(latency_ms, 250));
+        report.calibration = vec![fixture::load(latency_ms, 250)];
         report
     }
 

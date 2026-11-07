@@ -10,6 +10,28 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-07
+
+### Changed
+
+- Breaking: `--update` measures the noise floor across runs (#261). It runs
+  `--runs` load phases (5 by default, at least 2), each after its own
+  warm-up, writes each metric as their median, and writes as its noise
+  floor how far the worst phase strayed from that median. The ratchet
+  tightens a metric only when a new update's median is better, never from
+  one lucky phase. A metric still fails past the larger of its tolerance
+  and that floor, so no tolerance is loosened: a p99 tail that moves within
+  what the runs showed passes, and a regression past it fails. The baseline
+  file moves to schema 3. A schema-2 or older entry keeps its values marked
+  `remeasure = true`; it judges no load phase (the run exits 2 asking for
+  an update, the idle limits still judging), and the next `--update` on its
+  model measures it afresh. Re-measure every committed entry after the
+  upgrade. The JSON report moves to schema 2, with `calibration` a list of
+  the update's further phases, and `compare` still reads a schema-1 report.
+  In the library, `baseline::noise_floor` is replaced by `baseline::across`,
+  `Baseline` gains `remeasure`, `Change` gains `Remeasured`, and
+  `RunOptions` gains `runs`.
+
 ## [0.2.0] - 2026-11-07
 
 ### Changed

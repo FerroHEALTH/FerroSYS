@@ -70,6 +70,7 @@ ferrohealth-perf compare --report target/perf/latest.json
 | `--out-dir` | `target/perf` | where the JSON reports go |
 | `--summary` | none | a file the Markdown summary is also written to |
 | `--update` | off | write the entry of the runner's CPU model from a run that passes |
+| `--runs` | `5` | the load phases `--update` measures, at least 2 |
 
 Exit codes: **0** the run passed, **1** a limit or tolerance was breached
 or a request was answered other than expected, **2** the run cannot be
@@ -129,19 +130,26 @@ run is judged against the entry for its own model. A model with no entry
 cannot be judged: the run exits 2, naming the model and the models the file
 holds, and the idle limits still judge it.
 
-`--update` writes the entry of the runner's model: one load phase is judged
-like any run, a second one measures the A/A noise floor, and only a run
-that passes is written. Every other entry is left as it was. On the same
-plan each metric of the entry moves only to the better of the entry and the
-run, so the entry is a ratchet; a raise is a hand edit in a change that
-says why. A plan with another rate, window or request set writes the entry
-afresh.
+`--update` writes the entry of the runner's model from `--runs` load phases
+(5 by default), each after its own warm-up. The first is judged like any
+run, and only a run that passes is written. Each metric of the entry is the
+median of the phases, and its noise floor is how far the worst phase strayed
+from that median. A p99 tail moves from run to run far more than a p50: on
+FerroPIX one commit measured a p99 30 to 96 % apart on the same CPU model,
+and a floor taken across runs is what lets the gate tell that noise from a
+regression. Every other entry is left as it was. On the same plan each
+metric of the entry moves only to the better of the entry and the new
+median, so the entry is a ratchet that one lucky phase cannot tighten; a
+raise is a hand edit in a change that says why. A plan with another rate,
+window or request set writes the entry afresh. An update takes about
+`--runs` times the load window, so five phases of a 60-second window with a
+10-second warm-up add about six minutes to the job.
 
 ```toml
-schema = 2
+schema = 3
 
 [[baseline]]
-tool = "0.2.0"
+tool = "0.3.0"
 written = "2026-11-07T10:00:00Z"
 
 [baseline.plan]          # the plan it was measured with
@@ -173,8 +181,8 @@ transactions_per_request = 2.0
 "metadata.p95_ms" = 4.1
 "metadata.p99_ms" = 7.3
 
-[baseline.noise]         # the A/A floor, a ratio per metric
-"metadata.p95_ms" = 1.08
+[baseline.noise]         # the floor across the update's phases, a ratio per metric
+"metadata.p95_ms" = 1.31
 
 [[baseline]]             # the next model, with its own values
 # ...
@@ -183,7 +191,10 @@ transactions_per_request = 2.0
 A metric fails when it is worse than its entry by more than the larger of
 its tolerance and its noise floor. The `schema` key lets a later version
 migrate an older file before it reads it: a schema-1 file, the single
-baseline of 0.1, is read as one entry of the model its host names.
+baseline of 0.1, is read as one entry of the model its host names. An entry
+of schema 2 or older was measured within one run, so it is kept marked
+`remeasure = true`: it judges no load phase, the run exits 2 asking for an
+update, and the next `--update` on that model measures it afresh.
 
 ## The report
 
