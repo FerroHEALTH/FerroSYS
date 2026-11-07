@@ -5,6 +5,7 @@
 
 use std::time::Duration;
 
+use ferrohealth_perf::credentials::Credentials;
 use ferrohealth_perf::load::drive;
 use ferrohealth_perf::plan::Plan;
 use tokio::time::Instant;
@@ -43,9 +44,15 @@ async fn every_group_is_recorded_and_a_wrong_status_is_a_failure() {
         &format!("{OK}{broken}"),
     );
     let base = Url::parse(&server.uri()).unwrap();
-    let outcome = drive(&plan, &base, &reqwest::Client::new(), Instant::now())
-        .await
-        .unwrap();
+    let outcome = drive(
+        &plan,
+        &base,
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        Instant::now(),
+    )
+    .await
+    .unwrap();
     assert_eq!(80, outcome.planned);
     assert_eq!(80, outcome.sent);
     assert!(!outcome.saturated, "a quick server keeps up");
@@ -75,9 +82,15 @@ async fn the_warm_up_is_sent_and_not_recorded() {
     let server = server(Duration::from_millis(1)).await;
     let plan = plan("rate = 20.0\nwarmup_secs = 1\nduration_secs = 1", OK);
     let base = Url::parse(&server.uri()).unwrap();
-    let outcome = drive(&plan, &base, &reqwest::Client::new(), Instant::now())
-        .await
-        .unwrap();
+    let outcome = drive(
+        &plan,
+        &base,
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        Instant::now(),
+    )
+    .await
+    .unwrap();
     assert_eq!(40, outcome.sent);
     assert_eq!(20, outcome.groups["read"].answered);
 }
@@ -93,9 +106,15 @@ async fn a_stalled_server_raises_the_latency_of_every_request_it_held_back() {
         OK,
     );
     let base = Url::parse(&server.uri()).unwrap();
-    let outcome = drive(&plan, &base, &reqwest::Client::new(), Instant::now())
-        .await
-        .unwrap();
+    let outcome = drive(
+        &plan,
+        &base,
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        Instant::now(),
+    )
+    .await
+    .unwrap();
     let read = &outcome.groups["read"];
     assert_eq!(10, read.answered);
     let slowest = read.first.max().max(read.second.max());
@@ -116,9 +135,15 @@ async fn a_server_that_holds_every_slot_saturates_the_run() {
     );
     let base = Url::parse(&server.uri()).unwrap();
     let started = Instant::now();
-    let outcome = drive(&plan, &base, &reqwest::Client::new(), started)
-        .await
-        .unwrap();
+    let outcome = drive(
+        &plan,
+        &base,
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        started,
+    )
+    .await
+    .unwrap();
     assert!(outcome.saturated, "the second arrival waited past 200 ms");
     assert!(outcome.sent < outcome.planned, "the run stopped early");
 }
@@ -131,9 +156,15 @@ async fn a_request_past_its_timeout_is_a_failure() {
         OK,
     );
     let base = Url::parse(&server.uri()).unwrap();
-    let outcome = drive(&plan, &base, &reqwest::Client::new(), Instant::now())
-        .await
-        .unwrap();
+    let outcome = drive(
+        &plan,
+        &base,
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        Instant::now(),
+    )
+    .await
+    .unwrap();
     assert_eq!(5, outcome.failures["read"]["timeout"]);
     assert_eq!(0, outcome.groups["read"].answered);
 }

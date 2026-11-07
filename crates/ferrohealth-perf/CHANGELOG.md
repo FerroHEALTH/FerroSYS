@@ -43,6 +43,14 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   median over the jobs and the committed entry, and as the noise floor the
   larger of their spread and every job's own floor, so the floor holds the
   spread between runners and not only within one (#265).
+- A load phase presents the bindings of a sender-constrained token (#264):
+  `[load] client_identity_file`, a certificate chain and key presented on
+  every TLS connection (RFC 8705 §3), with `[load] trust_roots_file` for an
+  `https` target, and per request `dpop_key_file`, a P-256 key that signs a
+  fresh `DPoP` proof for every send (RFC 9449 §4.2), with `ath` over the
+  request's bearer token and the token under the `DPoP` scheme. A credential
+  file that cannot be read or parsed refuses the plan. In the library,
+  `load::drive` takes the `credentials::Credentials` it presents.
 
 ## [0.3.0] - 2026-11-07
 

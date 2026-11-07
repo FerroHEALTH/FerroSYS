@@ -25,6 +25,7 @@ use url::Url;
 
 use crate::baseline::{self, BaselineError, Baselines, Change, Update};
 use crate::compare::{Outcome, Verdict, judge_file};
+use crate::credentials::{CredentialError, Credentials};
 use crate::database::{DatabaseError, Transactions, WITNESS_INTERVAL};
 use crate::fingerprint::Fingerprint;
 use crate::load::{self, LoadError};
@@ -89,6 +90,9 @@ pub enum RunError {
     /// The baseline could not be read or written.
     #[error(transparent)]
     Baseline(#[from] BaselineError),
+    /// A credential file of the plan could not be used.
+    #[error(transparent)]
+    Credential(#[from] CredentialError),
     /// The server's process or cgroup could not be read.
     #[error(transparent)]
     Process(#[from] ProcessError),
@@ -244,6 +248,7 @@ async fn load_phase(
     plan: &Plan,
     base: &Url,
     client: &reqwest::Client,
+    credentials: &Credentials,
     instruments: &Instruments,
 ) -> Result<LoadReport, RunError> {
     let load = &plan.load;
@@ -268,7 +273,7 @@ async fn load_phase(
         instruments.probe.clone(),
         Duration::from_millis(load.sample_ms),
     );
-    let driven = load::drive(plan, base, client, start).await;
+    let driven = load::drive(plan, base, client, credentials, start).await;
     let peak = peak.finish()?;
     let outcome = driven?;
     let sample = |handle: tokio::task::JoinHandle<_>| async move {
@@ -312,8 +317,9 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     let old = Baselines::read(&options.baseline)?;
     let base = Url::parse(options.base_url.expose())
         .map_err(|source| RunError::BaseUrl(options.base_url.redacted(), source))?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
+    let credentials = Credentials::load(&options.plan)?;
+    let client = credentials
+        .apply(reqwest::Client::builder().no_proxy())
         .build()
         .map_err(RunError::Client)?;
     let probe = Probe::new(options.target.clone());
@@ -326,11 +332,11 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     let started = now();
     let plan = &options.plan;
     let idle = idle_phase(plan, &instruments).await?;
-    let load = load_phase(plan, &base, &client, &instruments).await?;
+    let load = load_phase(plan, &base, &client, &credentials, &instruments).await?;
     let mut calibration = Vec::new();
     if options.update {
         for _ in 1..options.runs.max(2) {
-            calibration.push(load_phase(plan, &base, &client, &instruments).await?);
+            calibration.push(load_phase(plan, &base, &client, &credentials, &instruments).await?);
         }
     }
     let mut report = Report {
@@ -353,7 +359,7 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     while !options.update && needs_confirmation(&report, old.as_ref())? {
         report
             .confirmations
-            .push(load_phase(plan, &base, &client, &instruments).await?);
+            .push(load_phase(plan, &base, &client, &credentials, &instruments).await?);
         report.finished = now();
     }
     conclude(report, old.as_ref(), options)

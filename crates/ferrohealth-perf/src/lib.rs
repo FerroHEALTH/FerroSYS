@@ -32,6 +32,7 @@
 
 pub mod baseline;
 pub mod compare;
+pub mod credentials;
 pub mod database;
 pub mod fingerprint;
 pub mod histogram;

@@ -854,21 +854,26 @@ dependencies = [
 name = "ferrohealth-perf"
 version = "0.4.0"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "clap",
  "ferrohealth-secret",
  "hdrhistogram",
  "http",
  "jiff",
+ "rcgen",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "toml",
  "url",
+ "uuid",
  "wiremock",
 ]
 
