@@ -81,6 +81,7 @@ ferrohealth-perf compare --report target/perf/latest.json
 | `--database-url` | `FERROHEALTH_PERF_DATABASE_URL` | the database whose transactions are counted |
 | `--out-dir` | `target/perf` | where the JSON reports go |
 | `--summary` | none | a file the Markdown summary is also written to |
+| `--mllp-address` | the plan's `[mllp] address` | the server's MLLP listener, `host:port` |
 | `--update` | off | write the entry of the runner's host shape from a run that passes |
 | `--runs` | `5` | the load phases `--update` measures, at least 2 |
 
@@ -143,7 +144,42 @@ body = '{"resourceType":"Patient"}'
 headers = { content-type = "application/fhir+json" }
 ```
 
-Every key but `requests` has the default shown; an unknown key is refused.
+Every key has the default shown; an unknown key is refused. A plan holds
+at least one request or message.
+
+### HL7 v2 over MLLP
+
+A product that takes HL7 v2 messages, such as an ITI-8 feed, sends them as
+load beside the HTTP requests:
+
+```toml
+[mllp]
+address = "127.0.0.1:2575"         # host:port; --mllp-address names another
+# tls = true                       # with [load] client_identity_file and trust_roots_file
+# server_name = "pix.example"      # the name the certificate is verified against
+
+[[messages]]
+group = "iti-8"
+file = "perf/messages/a01.hl7"     # one HL7 v2 message, segments ended by CR or LF
+```
+
+Each round sends the requests, then the messages, so arrival `i` takes
+entry `i` modulo the requests and the messages together. A send is framed by
+the Minimal Lower Layer Protocol, Release 1 (a start block `0x0B`, the
+message, an end block `0x1C` and a carriage return `0x0D`) and waits for the
+acknowledgment on the same connection; its latency runs to the
+acknowledgment from the instant the send was due, as for a request.
+Connections are kept and reused, one message at a time each, and a kept
+connection the listener closed is replaced once.
+
+A receiver answers a repeated MSH-10 from what it stored, so every send
+carries a fresh MSH-10 of 20 characters and the acknowledgment must echo
+it in MSA-2. MSA-1 `AA` or `CA` answers the message; `AE`, `AR`, `CE`, `CR`
+or the echo of another MSH-10 counts as a failed request, named by the code
+in the report. A message file that cannot be read or holds no MSH-10
+refuses the plan before any phase runs. Under `tls = true` the listener is
+verified against the platform's roots and the plan's `trust_roots_file`,
+and the connection presents the plan's `client_identity_file`.
 
 ### Sender-constrained tokens
 
@@ -197,6 +233,7 @@ ferrohealth-perf ab --plan perf/plan.toml \
 | `--head-pid`, `--head-cgroup`, `--head-container` | one is required | the head server's |
 | `--base-database-url` | `FERROHEALTH_PERF_BASE_DATABASE_URL` | the base's database |
 | `--head-database-url` | `FERROHEALTH_PERF_HEAD_DATABASE_URL` | the head's database, also held to the idle limit |
+| `--base-mllp-address`, `--head-mllp-address` | the plan's `[mllp] address` | each server's MLLP listener |
 | `--pairs` | `3` | the pairs of load phases, at least 2 |
 | `--cgroup-root`, `--out-dir`, `--summary` | as for `run` | |
 

@@ -31,6 +31,7 @@ fn ab(base: &[u64], head: &[u64]) -> AbReport {
             process: "process 2".to_owned(),
             base_url: "http://127.0.0.1:8081".to_owned(),
             database: Some("base".to_owned()),
+            mllp: None,
         },
         head: run.target,
         idle: run.idle,

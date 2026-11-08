@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use ferrohealth_perf::credentials::Credentials;
-use ferrohealth_perf::load::drive;
+use ferrohealth_perf::load::{Endpoints, drive};
 use ferrohealth_perf::plan::Plan;
 use tokio::time::Instant;
 use url::Url;
@@ -46,7 +46,7 @@ async fn every_group_is_recorded_and_a_wrong_status_is_a_failure() {
     let base = Url::parse(&server.uri()).unwrap();
     let outcome = drive(
         &plan,
-        &base,
+        &Endpoints::new(&plan, base.clone(), None).unwrap(),
         &reqwest::Client::new(),
         &Credentials::default(),
         Instant::now(),
@@ -84,7 +84,7 @@ async fn the_warm_up_is_sent_and_not_recorded() {
     let base = Url::parse(&server.uri()).unwrap();
     let outcome = drive(
         &plan,
-        &base,
+        &Endpoints::new(&plan, base.clone(), None).unwrap(),
         &reqwest::Client::new(),
         &Credentials::default(),
         Instant::now(),
@@ -108,7 +108,7 @@ async fn a_stalled_server_raises_the_latency_of_every_request_it_held_back() {
     let base = Url::parse(&server.uri()).unwrap();
     let outcome = drive(
         &plan,
-        &base,
+        &Endpoints::new(&plan, base.clone(), None).unwrap(),
         &reqwest::Client::new(),
         &Credentials::default(),
         Instant::now(),
@@ -137,7 +137,7 @@ async fn a_server_that_holds_every_slot_saturates_the_run() {
     let started = Instant::now();
     let outcome = drive(
         &plan,
-        &base,
+        &Endpoints::new(&plan, base.clone(), None).unwrap(),
         &reqwest::Client::new(),
         &Credentials::default(),
         started,
@@ -158,7 +158,7 @@ async fn a_request_past_its_timeout_is_a_failure() {
     let base = Url::parse(&server.uri()).unwrap();
     let outcome = drive(
         &plan,
-        &base,
+        &Endpoints::new(&plan, base.clone(), None).unwrap(),
         &reqwest::Client::new(),
         &Credentials::default(),
         Instant::now(),

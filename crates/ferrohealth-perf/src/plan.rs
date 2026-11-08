@@ -35,6 +35,13 @@
 //! status = 201
 //! body = '{"resourceType":"Patient"}'
 //! headers = { content-type = "application/fhir+json" }
+//!
+//! [mllp]
+//! address = "127.0.0.1:2575"
+//!
+//! [[messages]]
+//! group = "iti-8"
+//! file = "perf/messages/a01.hl7"
 //! ```
 
 use std::collections::BTreeMap;
@@ -61,8 +68,40 @@ pub struct Plan {
     /// the base with; a run against a baseline takes the entry's own.
     #[serde(default)]
     pub tolerance: Tolerances,
-    /// The request set, sent in order and round again for every arrival.
+    /// The HTTP request set, sent in order and round again for every
+    /// arrival, before the messages.
+    #[serde(default)]
     pub requests: Vec<Request>,
+    /// The MLLP listener the messages go to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mllp: Option<MllpSettings>,
+    /// The HL7 v2 messages, sent over MLLP after the requests in each round.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<Hl7Message>,
+}
+
+/// The MLLP listener the plan's messages go to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MllpSettings {
+    /// The listener, `host:port`; a run's command line may name another.
+    pub address: Option<String>,
+    /// Whether the listener speaks TLS, with `[load] client_identity_file`
+    /// and `trust_roots_file` as the HTTP requests take them.
+    pub tls: bool,
+    /// The name the listener's certificate is verified against; the host of
+    /// the address by default.
+    pub server_name: Option<String>,
+}
+
+/// One HL7 v2 message of the set, sent over MLLP.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hl7Message {
+    /// The group its latency is recorded under, as for a request.
+    pub group: String,
+    /// The file holding the message, read when the plan is.
+    pub file: PathBuf,
 }
 
 /// The idle phase: no request is sent, and the server must do close to
@@ -222,6 +261,9 @@ pub enum PlanError {
     /// A credential file the plan names cannot be used.
     #[error("the plan is refused: a credential file cannot be used")]
     Credential(#[from] crate::credentials::CredentialError),
+    /// An HL7 v2 message file the plan names cannot be used.
+    #[error("the plan is refused: an HL7 v2 message cannot be used")]
+    Message(#[from] crate::mllp::MllpError),
 }
 
 impl Plan {
@@ -230,9 +272,10 @@ impl Plan {
     /// # Errors
     ///
     /// [`PlanError::Read`] when the file cannot be read, [`PlanError::Parse`]
-    /// when it is not a plan, and [`PlanError::Invalid`] for a value
-    /// [`Plan::parse`] refuses, and [`PlanError::Credential`] for a credential
-    /// file that cannot be read or parsed.
+    /// when it is not a plan, [`PlanError::Invalid`] for a value
+    /// [`Plan::parse`] refuses, [`PlanError::Credential`] for a credential
+    /// file that cannot be read or parsed, and [`PlanError::Message`] for an
+    /// HL7 v2 message file that cannot be read or holds no MSH-10.
     pub fn read(path: &Path) -> Result<Self, PlanError> {
         let shown = path.display().to_string();
         let text = std::fs::read_to_string(path).map_err(|source| PlanError::Read {
@@ -247,6 +290,9 @@ impl Plan {
             other => other,
         })?;
         crate::credentials::Credentials::load(&plan)?;
+        for message in &plan.messages {
+            crate::mllp::Message::read(&message.file)?;
+        }
         Ok(plan)
     }
 
@@ -269,7 +315,7 @@ impl Plan {
 
     fn check(&self) -> Result<(), PlanError> {
         let invalid = |text: String| Err(PlanError::Invalid(text));
-        if self.requests.is_empty() {
+        if self.requests.is_empty() && self.messages.is_empty() {
             return invalid("the request set is empty".to_owned());
         }
         let load = &self.load;
@@ -317,32 +363,46 @@ impl Plan {
                 .check()
                 .map_err(|reason| PlanError::Invalid(format!("request {index}: {reason}")))?;
         }
+        for (index, message) in self.messages.iter().enumerate() {
+            check_group(&message.group)
+                .map_err(|reason| PlanError::Invalid(format!("message {index}: {reason}")))?;
+        }
         Ok(())
     }
 
     /// The request groups, sorted and without repeats.
     #[must_use]
     pub fn groups(&self) -> Vec<String> {
-        let mut groups: Vec<String> = self.requests.iter().map(|r| r.group.clone()).collect();
+        let mut groups: Vec<String> = self
+            .requests
+            .iter()
+            .map(|r| r.group.clone())
+            .chain(self.messages.iter().map(|m| m.group.clone()))
+            .collect();
         groups.sort();
         groups.dedup();
         groups
     }
 }
 
+/// Checks a group name: lower-case letters, digits, `-` and `_`.
+fn check_group(group: &str) -> Result<(), String> {
+    let group_ok = !group.is_empty()
+        && group
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if group_ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "group {group:?} must be lower-case letters, digits, '-' and '_'"
+        ))
+    }
+}
+
 impl Request {
     fn check(&self) -> Result<(), String> {
-        let group_ok = !self.group.is_empty()
-            && self
-                .group
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
-        if !group_ok {
-            return Err(format!(
-                "group {:?} must be lower-case letters, digits, '-' and '_'",
-                self.group
-            ));
-        }
+        check_group(&self.group)?;
         self.method()?;
         if !self.path.starts_with('/') {
             return Err(format!("path {:?} must start with '/'", self.path));

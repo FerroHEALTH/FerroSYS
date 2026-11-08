@@ -24,8 +24,9 @@
 //! - [`process`] and [`database`]: the server's CPU and memory from `/proc`
 //!   or its cgroup, and the database's transactions from
 //!   `pg_stat_database`.
-//! - [`load`]: the open-loop generator, with [`histogram`] and
-//!   [`quantile`] for the latencies.
+//! - [`load`]: the open-loop generator of HTTP requests and, through
+//!   [`mllp`], HL7 v2 messages, with [`histogram`] and [`quantile`] for the
+//!   latencies.
 //! - [`report`], [`metric`] and [`fingerprint`]: the JSON report and what
 //!   it measured on which host.
 //! - [`baseline`] and [`compare`]: `perf/baseline.toml` and the judgement.
@@ -43,6 +44,7 @@ pub mod fingerprint;
 pub mod histogram;
 pub mod load;
 pub mod metric;
+pub mod mllp;
 pub mod plan;
 pub mod process;
 pub mod quantile;

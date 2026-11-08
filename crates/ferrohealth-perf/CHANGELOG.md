@@ -34,12 +34,26 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   `compare` judges a saved A/B report again.
 - `[tolerance]` in the plan, the tolerance of each metric kind an A/B run
   judges with (#278). A run against a baseline keeps the entry's own.
+- HL7 v2 messages over MLLP as load, beside the HTTP requests, in `run` and
+  in `ab` (#279). `[[messages]]` names each message file and its group,
+  and `[mllp]` the listener (`address`, `tls`, `server_name`); the command
+  line's `--mllp-address`, `--base-mllp-address` and `--head-mllp-address`
+  name it per server. Each send is framed by MLLP Release 1, carries a
+  fresh MSH-10 and waits for its acknowledgment on the same connection,
+  and its latency runs to the acknowledgment from the instant the send was
+  due. An acknowledgment other than `AA` or `CA`, or one that echoes
+  another MSH-10, counts as a failed request. Connections are kept, and a
+  TLS listener takes the plan's client identity and trust roots.
 
 ### Changed
 
 - Breaking: `compare::Check` gains `ratio`, `tolerance` and `floor`, set
-  by an A/B run, and `plan::Plan` gains `tolerance` (#278). A report that
-  0.4 wrote still reads.
+  by an A/B run, and `plan::Plan` gains `tolerance` (#278), `mllp` and
+  `messages` (#279). A report that 0.4 wrote still reads, and a plan with
+  no requests is accepted when it sends messages.
+- Breaking: `load::drive` takes `load::Endpoints`, the server's URL and its
+  MLLP listener, in place of the base URL, and `run::RunOptions` gains
+  `mllp_address` (#279).
 - Breaking: `Report::write` is now the free function `report::write`,
   which writes an A/B report too (#278).
 

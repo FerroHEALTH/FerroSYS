@@ -18,7 +18,7 @@ use aws_lc_rs::signature::{
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ferrohealth_perf::credentials::Credentials;
-use ferrohealth_perf::load::drive;
+use ferrohealth_perf::load::{Endpoints, drive};
 use ferrohealth_perf::plan::{Plan, PlanError};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
 use rustls::RootCertStore;
@@ -34,23 +34,23 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const LOAD: &str = "[load]\nrate = 10.0\nwarmup_secs = 0\nduration_secs = 2\n";
 
-fn write(dir: &Path, name: &str, text: &str) -> String {
+pub(crate) fn write(dir: &Path, name: &str, text: &str) -> String {
     let path = dir.join(name);
     std::fs::write(&path, text).unwrap();
     path.to_str().unwrap().to_owned()
 }
 
 /// A CA, a `localhost` server certificate and a client certificate of it.
-struct Pki {
-    ca: CertificateDer<'static>,
-    ca_pem: String,
-    server_chain: Vec<CertificateDer<'static>>,
-    server_key: PrivateKeyDer<'static>,
-    client: CertificateDer<'static>,
-    client_pem: String,
+pub(crate) struct Pki {
+    pub(crate) ca: CertificateDer<'static>,
+    pub(crate) ca_pem: String,
+    pub(crate) server_chain: Vec<CertificateDer<'static>>,
+    pub(crate) server_key: PrivateKeyDer<'static>,
+    pub(crate) client: CertificateDer<'static>,
+    pub(crate) client_pem: String,
 }
 
-fn pki() -> Pki {
+pub(crate) fn pki() -> Pki {
     let ca_key = KeyPair::generate().unwrap();
     let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -149,7 +149,7 @@ async fn the_client_identity_is_presented_on_every_connection() {
         .unwrap();
     let outcome = drive(
         &plan,
-        &Url::parse(&base).unwrap(),
+        &Endpoints::new(&plan, Url::parse(&base).unwrap(), None).unwrap(),
         &client,
         &credentials,
         Instant::now(),
@@ -182,7 +182,7 @@ async fn the_client_identity_is_presented_on_every_connection() {
         .unwrap();
     let outcome = drive(
         &anonymous,
-        &Url::parse(&base).unwrap(),
+        &Endpoints::new(&anonymous, Url::parse(&base).unwrap(), None).unwrap(),
         &client,
         &credentials,
         Instant::now(),
@@ -315,7 +315,7 @@ async fn every_request_carries_a_fresh_proof_that_verifies() {
     let credentials = Credentials::load(&plan).unwrap();
     let outcome = drive(
         &plan,
-        &Url::parse(&server.uri()).unwrap(),
+        &Endpoints::new(&plan, Url::parse(&server.uri()).unwrap(), None).unwrap(),
         &reqwest::Client::new(),
         &credentials,
         Instant::now(),
