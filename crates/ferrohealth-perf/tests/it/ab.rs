@@ -123,7 +123,7 @@ async fn a_slower_head_fails_and_compare_judges_the_report_again() {
 }
 
 #[test]
-fn ab_needs_both_servers_and_at_least_two_pairs() {
+fn ab_needs_both_servers_and_an_even_count_of_pairs() {
     let dir = tempfile::tempdir().unwrap();
     let step = dir.path().join("s.md");
     let both = [
@@ -154,4 +154,20 @@ fn ab_needs_both_servers_and_at_least_two_pairs() {
         "{}",
         text(&one.stderr)
     );
+    for odd in ["3", "5"] {
+        let refused = perf(
+            &[
+                &both[..],
+                &["--base-pid", "1", "--head-pid", "1", "--pairs", odd],
+            ]
+            .concat(),
+            &step,
+        );
+        assert_eq!(Some(2), refused.status.code());
+        let stderr = text(&refused.stderr);
+        assert!(
+            stderr.contains("--pairs") && stderr.contains("not an even count of at least 2"),
+            "{stderr}"
+        );
+    }
 }

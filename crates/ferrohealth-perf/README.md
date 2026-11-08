@@ -234,7 +234,7 @@ ferrohealth-perf ab --plan perf/plan.toml \
 | `--base-database-url` | `FERROHEALTH_PERF_BASE_DATABASE_URL` | the base's database |
 | `--head-database-url` | `FERROHEALTH_PERF_HEAD_DATABASE_URL` | the head's database, also held to the idle limit |
 | `--base-mllp-address`, `--head-mllp-address` | the plan's `[mllp] address` | each server's MLLP listener |
-| `--pairs` | `3` | the pairs of load phases, at least 2 |
+| `--pairs` | `4` | the pairs of load phases, an even count of at least 2 |
 | `--cgroup-root`, `--out-dir`, `--summary` | as for `run` | |
 
 1. **Idle.** The head's idle phase is held to the plan's absolute limits,
@@ -243,7 +243,10 @@ ferrohealth-perf ab --plan perf/plan.toml \
    server, each after its own warm-up: the base first in the first pair,
    the head first in the second, and so on. A drift over the job, a
    neighbour's load or a disk that slows, reaches both arms alike, and the
-   report records the order of every pair.
+   report records the order of every pair. The count is even: with an odd
+   count the head runs second in one pair more than it runs first, so a
+   drift that grows over the job leans against the head in most of the
+   pairs, and `--pairs` refuses it.
 3. **Judgement.** Each load metric is the median of the arm's phases. Its
    noise floor is the worse of the two arms' spread, how far an arm's
    worst phase strayed from its median. A metric breaches when the head's
@@ -267,8 +270,8 @@ summary shows, per metric, the base, the head, their ratio, the tolerance,
 the floor, the threshold and in how many pairs the head breached.
 
 A pair takes about two load windows with their warm-ups and settles, so
-three pairs of a 60-second window with a 10-second warm-up add about
-eight minutes to the idle phase.
+four pairs of a 60-second window with a 10-second warm-up add about
+eleven minutes to the idle phase.
 
 ## The baseline, `perf/baseline.toml`
 
