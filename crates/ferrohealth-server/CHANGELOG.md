@@ -12,6 +12,21 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ### Added
 
+- The stack sets the security headers of an API response outermost, so
+  the request timeout `408`, the body limit `413`, the overload `503`,
+  the panic `500` and the health routes carry them as well as a product's
+  routes: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Cross-Origin-Resource-Policy: same-site`, `X-Frame-Options: DENY` and
+  `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
+  from the OWASP Secure Headers Project. Each is set only when the response
+  lacks it, so a route that sets its own policy or caching keeps it, and
+  an operator console keeps every header of `console::headers`.
+  `Strict-Transport-Security: max-age=31536000` is added only when the
+  section's listener serves TLS itself (RFC 6797 §7.2). A route tree that
+  answers with headers of its own design opts out with
+  `api_headers::exempt`; the stack's refusals in front of it keep the set
+  (#293).
 - `tls_client::TlsClient::platform_config` (feature `platform-verifier`)
   gives the rustls configuration that verifies a server through the
   platform's verifier, with the extra roots of `trust_roots_file` beside the
