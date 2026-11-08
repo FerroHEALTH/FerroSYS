@@ -279,3 +279,13 @@ fn a_report_round_trips_through_its_file() {
     std::fs::write(&path, newer.to_string()).unwrap();
     assert!(matches!(AbReport::read(&path), Err(ReportError::Schema(9))));
 }
+
+#[test]
+fn a_run_measures_an_even_count_of_pairs() {
+    assert_eq!(
+        vec![2, 2, 2, 4, 4, 6, 6],
+        [0, 1, 2, 3, 4, 5, 6].map(even_pairs).to_vec()
+    );
+    assert_eq!(u32::MAX - 1, even_pairs(u32::MAX));
+    assert!(DEFAULT_PAIRS.is_multiple_of(2));
+}

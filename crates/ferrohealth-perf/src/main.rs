@@ -183,8 +183,9 @@ struct AbArgs {
     /// Where the cgroup v2 hierarchy is mounted.
     #[arg(long, value_name = "DIR", default_value = "/sys/fs/cgroup")]
     cgroup_root: PathBuf,
-    /// The pairs of load phases, one per server each, in alternating order.
-    #[arg(long, value_name = "N", default_value_t = DEFAULT_PAIRS, value_parser = clap::value_parser!(u32).range(2..))]
+    /// The pairs of load phases, one per server each, in alternating order:
+    /// an even count of at least two.
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_PAIRS, value_parser = even_pairs)]
     pairs: u32,
     /// The directory the JSON reports are written to.
     #[arg(long, value_name = "DIR", default_value = "target/perf")]
@@ -201,6 +202,22 @@ struct CompareArgs {
     report: PathBuf,
     #[command(flatten)]
     output: Output,
+}
+
+/// Parses `--pairs`: an even count of at least two, so the head runs first in
+/// as many pairs as the base and a drift over the job leans on neither (#283).
+fn even_pairs(value: &str) -> Result<u32, String> {
+    let pairs: u32 = value
+        .parse()
+        .map_err(|error| format!("{value} is not a count of pairs: {error}"))?;
+    if pairs >= 2 && pairs.is_multiple_of(2) {
+        Ok(pairs)
+    } else {
+        Err(format!(
+            "{pairs} is not an even count of at least 2: an odd count runs the head second in \
+             most of the pairs, so a drift over the job leans against it"
+        ))
+    }
 }
 
 fn main() -> ExitCode {

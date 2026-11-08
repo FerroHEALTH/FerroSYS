@@ -10,6 +10,19 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ferrohealth-perf ab` measures 4 pairs by default and refuses an odd
+  `--pairs` (#283). The pairs alternate (base first, then head first), so
+  with an odd count the head ran second in one pair more than it ran first,
+  and a drift that grows over the job (a runner warming up, a neighbour
+  arriving) leaned against the head in most of the pairs, which is the
+  count the judge fails on. With an even count the head's phases and the
+  base's sit symmetrically in the job, so a linear drift moves both arms
+  alike. `ab::run` raises an odd count to the next even one. Upgrade: a
+  product that passes an odd `--pairs` passes an even one. A run of four
+  pairs takes about a third longer than one of three.
+
 ## [0.5.0] - 2026-11-08
 
 ### Added

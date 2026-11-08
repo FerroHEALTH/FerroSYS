@@ -10,9 +10,10 @@
 //! side by side, and the run measures both: the idle phase against the
 //! head, held to the plan's absolute limits, then pairs of load phases,
 //! one per arm, each after its own warm-up. The first pair runs the base
-//! first, the next the head first, and so on (AB, BA, AB), so a drift over
-//! the job reaches both arms alike and the order is recorded with each
-//! pair.
+//! first, the next the head first, and so on (AB, BA, AB, BA), and the
+//! count of pairs is even, so a linear drift over the job reaches both arms
+//! alike: with an odd count the head runs second in most of the pairs and
+//! the drift leans against it (#283). The order is recorded with each pair.
 //!
 //! Each load metric is judged as the head's median over its phases against
 //! the base's. The limit is the larger of the plan's `[tolerance]` and the
@@ -47,8 +48,9 @@ use crate::summary;
 /// The schema of the A/B report this version writes and reads.
 pub const SCHEMA: u32 = 1;
 
-/// The pairs of load phases a run measures unless told otherwise.
-pub const DEFAULT_PAIRS: u32 = 3;
+/// The pairs of load phases a run measures unless told otherwise, an even
+/// count.
+pub const DEFAULT_PAIRS: u32 = 4;
 
 /// One of the two servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -114,7 +116,9 @@ pub struct AbOptions {
     pub base: Server,
     /// The server built from the change.
     pub head: Server,
-    /// The pairs of load phases, at least two.
+    /// The pairs of load phases, an even count of at least two; [`run`]
+    /// measures one pair more for an odd count, and two for a count under
+    /// two.
     pub pairs: u32,
     /// The directory the reports are written to.
     pub out_dir: PathBuf,
@@ -232,7 +236,8 @@ async fn arm(plan: &Plan, server: &Server) -> Result<(Endpoints, Instruments), R
 }
 
 /// Carries out one A/B run: the head's idle phase, then `pairs` pairs of
-/// load phases in alternating order, the judgement and the report files.
+/// load phases in alternating order, raised to an even count of at least
+/// two, the judgement and the report files.
 ///
 /// # Errors
 ///
@@ -249,7 +254,7 @@ pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
     let started = now();
     let idle = idle_phase(plan, &arms.head.1).await?;
     let mut pairs = Vec::new();
-    for index in 0..options.pairs.max(2) {
+    for index in 0..even_pairs(options.pairs) {
         let first = Arm::first_of(index);
         let (url, instruments) = arms.of(first);
         let one = load_phase(plan, url, &client, &credentials, instruments).await?;
@@ -292,6 +297,12 @@ pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
         report_path,
         summary,
     })
+}
+
+/// `pairs` raised to an even count of at least two, so the head runs first
+/// in as many pairs as the base.
+fn even_pairs(pairs: u32) -> u32 {
+    pairs.max(2).saturating_add(1) & !1
 }
 
 /// The metrics of every phase of `arm` that did not stall, and of each
