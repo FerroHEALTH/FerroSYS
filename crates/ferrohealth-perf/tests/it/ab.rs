@@ -171,3 +171,158 @@ fn ab_needs_both_servers_and_an_even_count_of_pairs() {
         );
     }
 }
+
+/// A server that answers `GET /item/<id>` and nothing else.
+async fn item_server(id: &str) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/item/{id}")))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_arm_reads_the_id_its_own_values_name() {
+    let (base, head) = (item_server("b-1").await, item_server("h-1").await);
+    let (base_process, head_process) =
+        (Planted::start("quiet", None), Planted::start("quiet", None));
+    let dir = tempfile::tempdir().unwrap();
+    let plan = dir.path().join("plan.toml");
+    std::fs::write(
+        &plan,
+        support::plan(&support::request("item", "/item/@ITEM_ID@", 200)),
+    )
+    .unwrap();
+    let reports = dir.path().join("reports");
+    let (base_pid, head_pid) = (
+        base_process.pid().to_string(),
+        head_process.pid().to_string(),
+    );
+    let (base_uri, head_uri) = (base.uri(), head.uri());
+    let output = perf(
+        &[
+            "ab",
+            "--plan",
+            plan.to_str().unwrap(),
+            "--base-url",
+            &base_uri,
+            "--base-pid",
+            &base_pid,
+            "--base-var",
+            "ITEM_ID=b-1",
+            "--head-url",
+            &head_uri,
+            "--head-pid",
+            &head_pid,
+            "--head-var",
+            "ITEM_ID=h-1",
+            "--pairs",
+            "2",
+            "--out-dir",
+            reports.to_str().unwrap(),
+        ],
+        &dir.path().join("step.md"),
+    );
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        Some(0),
+        output.status.code(),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(
+        stdout.contains("The base's plan values: `ITEM_ID` = `b-1`.")
+            && stdout.contains("The head's plan values: `ITEM_ID` = `h-1`."),
+        "{stdout}"
+    );
+    let latest = reports.join("latest.json");
+    let report = AbReport::read(&latest).unwrap();
+    assert!(
+        report
+            .pairs
+            .iter()
+            .all(|pair| pair.head.failures.is_empty() && pair.base.failures.is_empty())
+    );
+    let values = ferrohealth_perf::ab::recorded_values(&latest).unwrap();
+    assert_eq!(Some("b-1"), values.base.get("ITEM_ID"));
+    assert_eq!(Some("h-1"), values.head.get("ITEM_ID"));
+
+    let again = perf(
+        &["compare", "--report", latest.to_str().unwrap()],
+        &dir.path().join("step.md"),
+    );
+    assert_eq!(Some(0), again.status.code(), "{}", text(&again.stderr));
+    assert!(text(&again.stdout).contains("The head's plan values: `ITEM_ID` = `h-1`."));
+}
+
+#[test]
+fn a_placeholder_one_arm_leaves_unfilled_refuses_the_run_before_any_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = dir.path().join("plan.toml");
+    std::fs::write(
+        &plan,
+        support::plan(&support::request("item", "/item/@ITEM_ID@", 200)),
+    )
+    .unwrap();
+    let reports = dir.path().join("reports");
+    let base = [
+        "ab",
+        "--plan",
+        plan.to_str().unwrap(),
+        "--base-url",
+        "http://127.0.0.1:9",
+        "--base-pid",
+        "1",
+        "--head-url",
+        "http://127.0.0.1:9",
+        "--head-pid",
+        "1",
+        "--out-dir",
+        reports.to_str().unwrap(),
+    ];
+    let step = dir.path().join("s.md");
+    for (extra, words) in [
+        (
+            vec!["--base-var", "ITEM_ID=b-1"],
+            vec![
+                "the head's plan values are refused",
+                "@ITEM_ID@ has no value",
+            ],
+        ),
+        (
+            vec!["--head-var", "ITEM_ID=h-1"],
+            vec![
+                "the base's plan values are refused",
+                "@ITEM_ID@ has no value",
+            ],
+        ),
+        (
+            vec![
+                "--base-var",
+                "ITEM_ID=b-1",
+                "--base-var",
+                "OTHER=x",
+                "--head-var",
+                "ITEM_ID=h-1",
+            ],
+            vec![
+                "the base's plan values are refused",
+                "OTHER fills no placeholder",
+            ],
+        ),
+        (
+            vec!["--base-var", "item_id=b-1"],
+            vec!["--base-var", "is not NAME=VALUE"],
+        ),
+    ] {
+        let refused = perf(&[&base[..], extra.as_slice()].concat(), &step);
+        let stderr = text(&refused.stderr);
+        assert_eq!(Some(2), refused.status.code(), "{extra:?}: {stderr}");
+        for word in words {
+            assert!(stderr.contains(word), "{extra:?}: {stderr}");
+        }
+        assert!(!reports.exists(), "{extra:?}: no phase ran");
+    }
+}

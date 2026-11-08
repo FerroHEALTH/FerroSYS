@@ -22,7 +22,11 @@
 //! breaches it in most of the pairs, so a stall in one phase does not fail
 //! the gate and a real regression, which repeats, does. A phase that
 //! stalled, lagged or was not steady makes the run one that cannot be
-//! judged, exit 2, as in a run against a baseline; a breach outranks it. No
+//! judged, exit 2, as in a run against a baseline; a breach outranks it.
+//!
+//! [`run_with`] fills each arm's copy of the plan with that arm's
+//! [`Values`], so a request can name an id each arm's server assigned on
+//! its own (#286); the report records the values of both. No
 //! specification governs the mode: our own design (#278).
 
 use std::collections::BTreeMap;
@@ -31,6 +35,7 @@ use std::path::{Path, PathBuf};
 
 use ferrohealth_secret::secret_url::SecretUrl;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::baseline::{Tolerances, across};
 use crate::compare::{Check, Findings, Limit, Verdict, add_failures, schedule_problems};
@@ -44,6 +49,7 @@ use crate::run::{
     Instruments, RunError, client, identity, idle_phase, load_phase, now, server_url, stamp,
 };
 use crate::summary;
+use crate::values::{Values, ValuesError};
 
 /// The schema of the A/B report this version writes and reads.
 pub const SCHEMA: u32 = 1;
@@ -187,7 +193,10 @@ impl AbReport {
     /// [`ReportError::Io`], [`ReportError::Parse`] for a file that is not an
     /// A/B report, or [`ReportError::Schema`] for a newer schema.
     pub fn read(path: &Path) -> Result<Self, ReportError> {
-        let (value, parse) = crate::report::read_json(path)?;
+        let (mut value, parse) = crate::report::read_json(path)?;
+        if let Some(object) = value.as_object_mut() {
+            object.remove(VALUES);
+        }
         let report: Self = serde_json::from_value(value).map_err(parse)?;
         if report.schema == SCHEMA {
             Ok(report)
@@ -195,6 +204,53 @@ impl AbReport {
             Err(ReportError::Schema(report.schema))
         }
     }
+}
+
+/// The plan values of each arm, [`crate::values`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArmValues {
+    /// The base's.
+    #[serde(default)]
+    pub base: Values,
+    /// The head's.
+    #[serde(default)]
+    pub head: Values,
+}
+
+impl ArmValues {
+    /// The values of `arm`.
+    #[must_use]
+    pub fn of(&self, arm: Arm) -> &Values {
+        match arm {
+            Arm::Base => &self.base,
+            Arm::Head => &self.head,
+        }
+    }
+
+    /// Whether neither arm has a value.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty() && self.head.is_empty()
+    }
+}
+
+/// An A/B run with plan values that could not be carried out.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum AbError {
+    /// An arm's values cannot fill the plan; no load was sent.
+    #[error("the {arm}'s plan values are refused")]
+    Values {
+        /// The arm.
+        arm: Arm,
+        /// Why.
+        #[source]
+        source: ValuesError,
+    },
+    /// The run failed.
+    #[error(transparent)]
+    Run(#[from] RunError),
 }
 
 /// What an A/B run produced.
@@ -210,29 +266,73 @@ pub struct AbResult {
     pub summary: String,
 }
 
-/// The two servers, each with its URL and its instruments.
+/// One server's filled plan, its endpoints and its instruments.
+#[derive(Debug)]
+struct Side {
+    plan: Plan,
+    endpoints: Endpoints,
+    instruments: Instruments,
+}
+
+/// The two servers.
 #[derive(Debug)]
 struct Arms {
-    base: (Endpoints, Instruments),
-    head: (Endpoints, Instruments),
+    base: Side,
+    head: Side,
 }
 
 impl Arms {
-    fn of(&self, arm: Arm) -> (&Endpoints, &Instruments) {
-        let (url, instruments) = match arm {
+    fn of(&self, arm: Arm) -> &Side {
+        match arm {
             Arm::Base => &self.base,
             Arm::Head => &self.head,
-        };
-        (url, instruments)
+        }
     }
 }
 
-/// The endpoints and the instruments of `server`.
-async fn arm(plan: &Plan, server: &Server) -> Result<(Endpoints, Instruments), RunError> {
+/// The side of `server` over `plan`, its message files filled with
+/// `values` when there are any.
+async fn side(plan: Plan, server: &Server, values: Option<&Values>) -> Result<Side, RunError> {
     let url = server_url(&server.url)?;
-    let endpoints = Endpoints::new(plan, url, server.mllp_address.as_deref())?;
+    let mllp = server.mllp_address.as_deref();
+    let endpoints = match values {
+        Some(values) => Endpoints::filled(&plan, url, mllp, values)?,
+        None => Endpoints::new(&plan, url, mllp)?,
+    };
     let instruments = Instruments::open(&server.target, server.database_url.as_ref()).await?;
-    Ok((endpoints, instruments))
+    Ok(Side {
+        plan,
+        endpoints,
+        instruments,
+    })
+}
+
+/// The report as written: the run, and the plan values of each arm when
+/// there are any.
+#[derive(Serialize)]
+struct Written<'a> {
+    #[serde(flatten)]
+    report: &'a AbReport,
+    #[serde(skip_serializing_if = "ArmValues::is_empty")]
+    values: &'a ArmValues,
+}
+
+/// The key of the written report that holds the plan values.
+const VALUES: &str = "values";
+
+/// The plan values the A/B report at `path` records, none for a run that
+/// had none.
+///
+/// # Errors
+///
+/// [`ReportError::Io`], or [`ReportError::Parse`] for values that do not
+/// read.
+pub fn recorded_values(path: &Path) -> Result<ArmValues, ReportError> {
+    let (value, parse) = crate::report::read_json(path)?;
+    match value.get(VALUES) {
+        Some(values) => serde_json::from_value(values.clone()).map_err(parse),
+        None => Ok(ArmValues::default()),
+    }
 }
 
 /// Carries out one A/B run: the head's idle phase, then `pairs` pairs of
@@ -245,34 +345,66 @@ async fn arm(plan: &Plan, server: &Server) -> Result<(Endpoints, Instruments), R
 /// URL, a server or database that cannot be read, a load phase that fails,
 /// or a report that cannot be written.
 pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
+    let plans = (options.plan.clone(), options.plan.clone());
+    carry_out(options, plans, None).await
+}
+
+/// Carries out the A/B run of [`run`], each arm's plan filled with its
+/// `values`.
+///
+/// Every placeholder of the requests and the message files needs a value
+/// for both arms, and every value a placeholder.
+///
+/// # Errors
+///
+/// [`AbError::Values`] before any phase when an arm's values cannot fill
+/// the plan, naming the arm, and [`AbError::Run`] for every error of
+/// [`run`].
+pub async fn run_with(options: &AbOptions, values: &ArmValues) -> Result<AbResult, AbError> {
+    let fill = |arm| {
+        values
+            .of(arm)
+            .fill_plan(&options.plan)
+            .map_err(|source| AbError::Values { arm, source })
+    };
+    let plans = (fill(Arm::Base)?, fill(Arm::Head)?);
+    Ok(carry_out(options, plans, Some(values)).await?)
+}
+
+async fn carry_out(
+    options: &AbOptions,
+    (base_plan, head_plan): (Plan, Plan),
+    values: Option<&ArmValues>,
+) -> Result<AbResult, RunError> {
     let plan = &options.plan;
     let (credentials, client) = client(plan)?;
     let arms = Arms {
-        base: arm(plan, &options.base).await?,
-        head: arm(plan, &options.head).await?,
+        base: side(base_plan, &options.base, values.map(|v| &v.base)).await?,
+        head: side(head_plan, &options.head, values.map(|v| &v.head)).await?,
     };
     let started = now();
-    let idle = idle_phase(plan, &arms.head.1).await?;
+    let idle = idle_phase(plan, &arms.head.instruments).await?;
     let mut pairs = Vec::new();
     for index in 0..even_pairs(options.pairs) {
         let first = Arm::first_of(index);
-        let (url, instruments) = arms.of(first);
-        let one = load_phase(plan, url, &client, &credentials, instruments).await?;
-        let (url, instruments) = arms.of(first.other());
-        let two = load_phase(plan, url, &client, &credentials, instruments).await?;
+        let one = phase(arms.of(first), &client, &credentials).await?;
+        let two = phase(arms.of(first.other()), &client, &credentials).await?;
         let (base, head) = match first {
             Arm::Base => (one, two),
             Arm::Head => (two, one),
         };
         pairs.push(Pair { first, base, head });
     }
-    let describe =
-        |server: &Server, (endpoints, instruments): &(Endpoints, Instruments)| TargetInfo {
-            process: server.target.describe(),
-            base_url: server.url.redacted(),
-            database: instruments.database.as_ref().map(|d| d.name().to_owned()),
-            mllp: endpoints.mllp_address().map(str::to_owned),
-        };
+    let describe = |server: &Server, side: &Side| TargetInfo {
+        process: server.target.describe(),
+        base_url: server.url.redacted(),
+        database: side
+            .instruments
+            .database
+            .as_ref()
+            .map(|d| d.name().to_owned()),
+        mllp: side.endpoints.mllp_address().map(str::to_owned),
+    };
     let mut report = AbReport {
         schema: SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_owned(),
@@ -289,14 +421,36 @@ pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
     };
     let verdict = judge(&report)?;
     report.verdict = Some(verdict.clone());
-    let report_path = crate::report::write(&report, &options.out_dir, &stamp())?;
-    let summary = summary::ab_markdown(&report, &verdict);
+    let none = ArmValues::default();
+    let values = values.unwrap_or(&none);
+    let written = Written {
+        report: &report,
+        values,
+    };
+    let report_path = crate::report::write(&written, &options.out_dir, &stamp())?;
+    let summary = summary::ab_markdown_with_values(&report, &verdict, values);
     Ok(AbResult {
         report,
         verdict,
         report_path,
         summary,
     })
+}
+
+/// One load phase of `side`.
+async fn phase(
+    side: &Side,
+    client: &reqwest::Client,
+    credentials: &crate::credentials::Credentials,
+) -> Result<LoadReport, RunError> {
+    load_phase(
+        &side.plan,
+        &side.endpoints,
+        client,
+        credentials,
+        &side.instruments,
+    )
+    .await
 }
 
 /// `pairs` raised to an even count of at least two, so the head runs first

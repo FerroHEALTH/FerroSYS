@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use ferrohealth_perf::ab::{AbOptions, AbReport, DEFAULT_PAIRS, Server};
+use ferrohealth_perf::ab::{AbOptions, AbReport, ArmValues, DEFAULT_PAIRS, Server};
 use ferrohealth_perf::baseline::Baselines;
 use ferrohealth_perf::compare::judge_file;
 use ferrohealth_perf::plan::Plan;
@@ -30,6 +30,7 @@ use ferrohealth_perf::process::{Target, container_cgroup};
 use ferrohealth_perf::report::{Report, ReportError};
 use ferrohealth_perf::run::{DEFAULT_RUNS, RunOptions, run};
 use ferrohealth_perf::summary;
+use ferrohealth_perf::values::Values;
 use ferrohealth_secret::secret_url::SecretUrl;
 
 /// The exit code of a harness or setup error.
@@ -187,6 +188,14 @@ struct AbArgs {
     /// an even count of at least two.
     #[arg(long, value_name = "N", default_value_t = DEFAULT_PAIRS, value_parser = even_pairs)]
     pairs: u32,
+    /// A value of the base's plan, `NAME=VALUE`, filling each `@NAME@` of
+    /// its request paths, header values, bodies and message files; repeat
+    /// it for each name.
+    #[arg(long = "base-var", value_name = "NAME=VALUE")]
+    base_vars: Vec<String>,
+    /// A value of the head's plan, as `--base-var` is of the base's.
+    #[arg(long = "head-var", value_name = "NAME=VALUE")]
+    head_vars: Vec<String>,
     /// The directory the JSON reports are written to.
     #[arg(long, value_name = "DIR", default_value = "target/perf")]
     out_dir: PathBuf,
@@ -308,6 +317,10 @@ fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
 }
 
 fn ab_command(args: AbArgs) -> Result<u8, Box<dyn Error>> {
+    let values = ArmValues {
+        base: Values::parse(&args.base_vars).map_err(|e| format!("--base-var: {e}"))?,
+        head: Values::parse(&args.head_vars).map_err(|e| format!("--head-var: {e}"))?,
+    };
     let options = AbOptions {
         plan: Plan::read(&args.plan)?,
         base: Server {
@@ -335,7 +348,7 @@ fn ab_command(args: AbArgs) -> Result<u8, Box<dyn Error>> {
         pairs: args.pairs,
         out_dir: args.out_dir,
     };
-    let result = runtime()?.block_on(ferrohealth_perf::ab::run(&options))?;
+    let result = runtime()?.block_on(ferrohealth_perf::ab::run_with(&options, &values))?;
     publish(&result.summary, args.summary.as_deref())?;
     println!("report: {}", result.report_path.display());
     Ok(result.verdict.outcome.code())
@@ -347,9 +360,10 @@ fn compare_command(args: &CompareArgs) -> Result<u8, Box<dyn Error>> {
         // NOTE: no specification governs this: our own design; a file that is no run report is read as an A/B report, and its own error names it when it is neither.
         Err(ReportError::Parse { .. }) => {
             let report = AbReport::read(&args.report)?;
+            let values = ferrohealth_perf::ab::recorded_values(&args.report)?;
             let verdict = ferrohealth_perf::ab::judge(&report)?;
             publish(
-                &summary::ab_markdown(&report, &verdict),
+                &summary::ab_markdown_with_values(&report, &verdict, &values),
                 args.output.summary.as_deref(),
             )?;
             return Ok(verdict.outcome.code());

@@ -78,6 +78,22 @@ pub enum MllpError {
     Credential(#[from] crate::credentials::CredentialError),
 }
 
+/// The bytes of the message file at `path`.
+fn raw(path: &Path) -> Result<Vec<u8>, MllpError> {
+    std::fs::read(path).map_err(|source| MllpError::Read {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+/// The refusal of the message file at `path`.
+fn refused(path: &Path, reason: &'static str) -> MllpError {
+    MllpError::Message {
+        path: path.display().to_string(),
+        reason,
+    }
+}
+
 /// One HL7 v2 message of the plan, split around its MSH-10.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
@@ -92,15 +108,22 @@ impl Message {
     ///
     /// [`MllpError::Read`] and every error of [`Message::parse`].
     pub fn read(path: &Path) -> Result<Self, MllpError> {
-        let shown = path.display().to_string();
-        let bytes = std::fs::read(path).map_err(|source| MllpError::Read {
-            path: shown.clone(),
-            source,
-        })?;
-        Self::parse(&bytes).map_err(|reason| MllpError::Message {
-            path: shown,
-            reason,
-        })
+        let bytes = raw(path)?;
+        Self::parse(&bytes).map_err(|reason| refused(path, reason))
+    }
+
+    /// Reads the message at `path` with every placeholder filled from
+    /// `values` ([`crate::values`]).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Message::read`], and [`MllpError::Message`] for a
+    /// placeholder with no value.
+    pub fn read_filled(path: &Path, values: &crate::values::Values) -> Result<Self, MllpError> {
+        let filled = values
+            .fill_bytes(&raw(path)?)
+            .map_err(|_missing| refused(path, "a placeholder of it has no value"))?;
+        Self::parse(&filled).map_err(|reason| refused(path, reason))
     }
 
     /// Parses one message. Line feeds and carriage-return line feeds end a
@@ -289,6 +312,29 @@ impl Sender {
     /// [`MllpError::Credential`] or [`MllpError::Tls`] for TLS settings that
     /// cannot be used.
     pub fn new(plan: &Plan, address: Option<&str>) -> Result<Option<Self>, MllpError> {
+        Self::build(plan, address, Message::read)
+    }
+
+    /// The sender of [`Sender::new`], each message file filled with `values`
+    /// as it is read.
+    ///
+    /// # Errors
+    ///
+    /// Every error of [`Sender::new`], and [`MllpError::Message`] for a
+    /// placeholder of a message file with no value.
+    pub fn filled(
+        plan: &Plan,
+        address: Option<&str>,
+        values: &crate::values::Values,
+    ) -> Result<Option<Self>, MllpError> {
+        Self::build(plan, address, |path| Message::read_filled(path, values))
+    }
+
+    fn build(
+        plan: &Plan,
+        address: Option<&str>,
+        read: impl Fn(&Path) -> Result<Message, MllpError>,
+    ) -> Result<Option<Self>, MllpError> {
         if plan.messages.is_empty() {
             return Ok(None);
         }
@@ -306,7 +352,7 @@ impl Sender {
         let messages = plan
             .messages
             .iter()
-            .map(|message| Message::read(&message.file).map(Arc::new))
+            .map(|message| read(&message.file).map(Arc::new))
             .collect::<Result<Vec<_>, _>>()?;
         let nonce = uuid::Uuid::new_v4().simple().to_string();
         Ok(Some(Self {

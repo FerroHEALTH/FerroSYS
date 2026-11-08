@@ -202,6 +202,22 @@ impl Endpoints {
         Ok(Self { url, mllp })
     }
 
+    /// The endpoints of [`Endpoints::new`], with every message file filled
+    /// with `values` ([`crate::values`]).
+    ///
+    /// # Errors
+    ///
+    /// Every [`MllpError`] of [`Sender::filled`].
+    pub fn filled(
+        plan: &Plan,
+        url: Url,
+        mllp_address: Option<&str>,
+        values: &crate::values::Values,
+    ) -> Result<Self, MllpError> {
+        let mllp = Sender::filled(plan, mllp_address, values)?.map(Arc::new);
+        Ok(Self { url, mllp })
+    }
+
     /// The MLLP listener's address, when the plan sends messages.
     #[must_use]
     pub fn mllp_address(&self) -> Option<&str> {
