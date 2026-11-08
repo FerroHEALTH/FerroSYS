@@ -115,13 +115,13 @@ pub fn ab_markdown_with_values(report: &AbReport, verdict: &Verdict, values: &Ar
     let order: Vec<String> = report
         .pairs
         .iter()
-        .map(|pair| format!("{} then {}", pair.first, pair.first.other()))
+        .map(|pair| format!("the {} leads", pair.first))
         .collect();
     line(
         &mut out,
         &format!(
             "The head, {} against `{}`, judged against the base, {} against `{}`, over {} \
-             pairs of load phases ({}), measured on {} {} from {} to {}.",
+             pairs of load phases, the two of a pair run at once ({}), measured on {} {} from {} to {}.",
             report.head.process,
             report.head.base_url,
             report.base.process,

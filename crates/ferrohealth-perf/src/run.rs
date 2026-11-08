@@ -284,18 +284,25 @@ impl Peak {
     }
 }
 
+/// An instant 50 ms from now, when a load phase can start on time.
+pub(crate) fn soon() -> Instant {
+    Instant::now()
+        .checked_add(Duration::from_millis(50))
+        .unwrap_or_else(Instant::now)
+}
+
+/// One load phase whose schedule starts at `start`, with its warm-up, its
+/// measured window and its settle.
 pub(crate) async fn load_phase(
     plan: &Plan,
     endpoints: &Endpoints,
     client: &reqwest::Client,
     credentials: &Credentials,
     instruments: &Instruments,
+    start: Instant,
 ) -> Result<LoadReport, RunError> {
     let load = &plan.load;
     let before = instruments.transactions().await?;
-    let start = Instant::now()
-        .checked_add(Duration::from_millis(50))
-        .unwrap_or_else(Instant::now);
     let measured_start = start.checked_add(load.warmup()).unwrap_or(start);
     let measured_end = measured_start
         .checked_add(load.duration())
@@ -365,11 +372,12 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     let started = now();
     let plan = &options.plan;
     let idle = idle_phase(plan, &instruments).await?;
-    let load = load_phase(plan, &base, &client, &credentials, &instruments).await?;
+    let load = load_phase(plan, &base, &client, &credentials, &instruments, soon()).await?;
     let mut calibration = Vec::new();
     if options.update {
         for _ in 1..options.runs.max(2) {
-            calibration.push(load_phase(plan, &base, &client, &credentials, &instruments).await?);
+            calibration
+                .push(load_phase(plan, &base, &client, &credentials, &instruments, soon()).await?);
         }
     }
     let mut report = Report {
@@ -393,7 +401,7 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     while !options.update && needs_confirmation(&report, old.as_ref())? {
         report
             .confirmations
-            .push(load_phase(plan, &base, &client, &credentials, &instruments).await?);
+            .push(load_phase(plan, &base, &client, &credentials, &instruments, soon()).await?);
         report.finished = now();
     }
     conclude(report, old.as_ref(), options)
