@@ -247,7 +247,7 @@ ferrohealth-perf ab --plan perf/plan.toml \
    every moment reaches both. Phases run one after the other did not
    cancel it: on GitHub's hosted runners the latency of unchanged code
    moved by up to a third from one phase to the next, and four phases an
-   arm put the head of an unchanged change 0.66 to 1.21 of its base. The
+   arm put the head of an unchanged change 0.66 to 1.27 of its base in p50. The
    base leads in the first pair, the head in the second, and so on, with
    an even count of pairs, and the report records the arm that leads
    each pair as its `first`.

@@ -30,9 +30,11 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 - `ferrohealth-perf ab` runs the two load phases of a pair at once, each
   arm at the plan's rate with its arrivals half an interval after the
   other's (#287). On unchanged code, phases run one after the other put
-  the head 0.66 to 1.21 of its base in p50 on GitHub's AMD EPYC 9V74 and
-  9V45 runners, because the runner's speed moved by up to a third from one
-  phase to the next; side by side, the same builds measured 0.95 to 1.02.
+  the head 0.66 to 1.27 of its base in p50 over eight GitHub runners
+  (AMD EPYC 9V74, 9V45 and 7763, Intel Xeon 8370C and 8573C), because the
+  runner's speed moved by up to a third from one phase to the next; side by
+  side on the same runners, the same builds measured 0.95 to 1.03 in p50
+  and 0.96 to 1.02 in CPU per request.
   The arm that leads alternates by pair and is recorded as the pair's
   `first`. A run takes about half as long, and the runner carries twice
   the plan's rate during a pair.
