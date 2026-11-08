@@ -25,6 +25,18 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   as `ab::ArmValues` of `values::Values`, and `ab::run` sends the plan as
   written, as before.
 
+### Fixed
+
+- `ferrohealth-perf ab` runs the two load phases of a pair at once, each
+  arm at the plan's rate with its arrivals half an interval after the
+  other's (#287). On unchanged code, phases run one after the other put
+  the head 0.66 to 1.21 of its base in p50 on GitHub's AMD EPYC 9V74 and
+  9V45 runners, because the runner's speed moved by up to a third from one
+  phase to the next; side by side, the same builds measured 0.95 to 1.02.
+  The arm that leads alternates by pair and is recorded as the pair's
+  `first`. A run takes about half as long, and the runner carries twice
+  the plan's rate during a pair.
+
 ## [0.5.1] - 2026-11-08
 
 ### Fixed

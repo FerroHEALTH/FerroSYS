@@ -240,14 +240,17 @@ ferrohealth-perf ab --plan perf/plan.toml \
 
 1. **Idle.** The head's idle phase is held to the plan's absolute limits,
    as in `run`. The base is not judged at rest.
-2. **Load, alternating.** Each pair runs one load phase against each
-   server, each after its own warm-up: the base first in the first pair,
-   the head first in the second, and so on. A drift over the job, a
-   neighbour's load or a disk that slows, reaches both arms alike, and the
-   report records the order of every pair. The count is even: with an odd
-   count the head runs second in one pair more than it runs first, so a
-   drift that grows over the job leans against the head in most of the
-   pairs, and `--pairs` refuses it.
+2. **Load, side by side.** Each pair runs one load phase against each
+   server, each after its own warm-up, and the two phases run at once:
+   each arm at the plan's rate, the arrivals of one arm half an interval
+   after the other's, so the servers take turns and the runner's state at
+   every moment reaches both. Phases run one after the other did not
+   cancel it: on GitHub's hosted runners the latency of unchanged code
+   moved by up to a third from one phase to the next, and four phases an
+   arm put the head of an unchanged change 0.66 to 1.21 of its base. The
+   base leads in the first pair, the head in the second, and so on, with
+   an even count of pairs, and the report records the arm that leads
+   each pair as its `first`.
 3. **Judgement.** Each load metric is the median of the arm's phases. Its
    noise floor is the worse of the two arms' spread, how far an arm's
    worst phase strayed from its median. A metric breaches when the head's
@@ -298,9 +301,10 @@ verdict, and `compare --report` judges it again offline. The Markdown
 summary shows, per metric, the base, the head, their ratio, the tolerance,
 the floor, the threshold and in how many pairs the head breached.
 
-A pair takes about two load windows with their warm-ups and settles, so
-four pairs of a 60-second window with a 10-second warm-up add about
-eleven minutes to the idle phase.
+A pair takes about one load window with its warm-up and settle, so four
+pairs of a 60-second window with a 10-second warm-up add about six minutes
+to the idle phase. Both servers are under load at once, so the runner
+carries twice the plan's rate during a pair.
 
 ## The baseline, `perf/baseline.toml`
 
