@@ -3,8 +3,10 @@
 
 //! `ferrohealth-perf`: the performance gate a product's CI job runs.
 //!
-//! `run` measures a server and judges it against the baseline; `compare`
-//! judges a saved report again and contacts nothing. Both print the
+//! `run` measures a server and judges it against the baseline; `ab`
+//! measures the base and the head of a change side by side and judges the
+//! head over the base; `compare` judges a saved report again and contacts
+//! nothing. Each prints the
 //! Markdown summary, append it to `$GITHUB_STEP_SUMMARY` when that is set,
 //! and exit 0 for a pass, 1 for a breach and 2 for a run that cannot be
 //! judged or a harness error.
@@ -20,11 +22,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+use ferrohealth_perf::ab::{AbOptions, AbReport, DEFAULT_PAIRS, Server};
 use ferrohealth_perf::baseline::Baselines;
 use ferrohealth_perf::compare::judge_file;
 use ferrohealth_perf::plan::Plan;
 use ferrohealth_perf::process::{Target, container_cgroup};
-use ferrohealth_perf::report::Report;
+use ferrohealth_perf::report::{Report, ReportError};
 use ferrohealth_perf::run::{DEFAULT_RUNS, RunOptions, run};
 use ferrohealth_perf::summary;
 use ferrohealth_secret::secret_url::SecretUrl;
@@ -44,7 +47,11 @@ struct Cli {
 enum Command {
     /// Measures a running server and judges it against the baseline.
     Run(RunArgs),
-    /// Judges a saved report against the baseline; contacts no server.
+    /// Measures the head of a change and its base side by side on this
+    /// host and judges the head over the base.
+    Ab(AbArgs),
+    /// Judges a saved report against the baseline, or a saved A/B report
+    /// again; contacts no server.
     Compare(CompareArgs),
     /// Merges the baselines several `--update` jobs wrote into the
     /// committed one, so each host shape's noise floor holds the spread
@@ -117,6 +124,67 @@ struct RunArgs {
 }
 
 #[derive(Debug, Args)]
+struct AbArgs {
+    /// The plan: limits, load, tolerances and request set.
+    #[arg(long, value_name = "PATH", default_value = "perf/plan.toml")]
+    plan: PathBuf,
+    /// The base server's base URL.
+    #[arg(long, value_name = "URL")]
+    base_url: String,
+    /// The base server's process id.
+    #[arg(long, value_name = "PID", group = "base", required_unless_present_any = ["base_cgroup", "base_container"])]
+    base_pid: Option<u32>,
+    /// The base server's cgroup v2 directory.
+    #[arg(long, value_name = "DIR", group = "base")]
+    base_cgroup: Option<PathBuf>,
+    /// The base server's container id, full or leading.
+    #[arg(long, value_name = "ID", group = "base")]
+    base_container: Option<String>,
+    /// The base server's PostgreSQL database, whose transactions are
+    /// counted.
+    #[arg(
+        long,
+        value_name = "URL",
+        env = "FERROHEALTH_PERF_BASE_DATABASE_URL",
+        hide_env_values = true
+    )]
+    base_database_url: Option<String>,
+    /// The head server's base URL.
+    #[arg(long, value_name = "URL")]
+    head_url: String,
+    /// The head server's process id.
+    #[arg(long, value_name = "PID", group = "head", required_unless_present_any = ["head_cgroup", "head_container"])]
+    head_pid: Option<u32>,
+    /// The head server's cgroup v2 directory.
+    #[arg(long, value_name = "DIR", group = "head")]
+    head_cgroup: Option<PathBuf>,
+    /// The head server's container id, full or leading.
+    #[arg(long, value_name = "ID", group = "head")]
+    head_container: Option<String>,
+    /// The head server's PostgreSQL database, whose transactions are
+    /// counted and held to the idle limit.
+    #[arg(
+        long,
+        value_name = "URL",
+        env = "FERROHEALTH_PERF_HEAD_DATABASE_URL",
+        hide_env_values = true
+    )]
+    head_database_url: Option<String>,
+    /// Where the cgroup v2 hierarchy is mounted.
+    #[arg(long, value_name = "DIR", default_value = "/sys/fs/cgroup")]
+    cgroup_root: PathBuf,
+    /// The pairs of load phases, one per server each, in alternating order.
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_PAIRS, value_parser = clap::value_parser!(u32).range(2..))]
+    pairs: u32,
+    /// The directory the JSON reports are written to.
+    #[arg(long, value_name = "DIR", default_value = "target/perf")]
+    out_dir: PathBuf,
+    /// A file the Markdown summary is also written to.
+    #[arg(long, value_name = "PATH")]
+    summary: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 struct CompareArgs {
     /// The saved JSON report.
     #[arg(long, value_name = "PATH")]
@@ -146,6 +214,7 @@ fn main() -> ExitCode {
 fn dispatch(command: Command) -> Result<u8, Box<dyn Error>> {
     match command {
         Command::Run(args) => run_command(args),
+        Command::Ab(args) => ab_command(args),
         Command::Compare(args) => compare_command(&args),
         Command::Merge(args) => merge_command(&args),
     }
@@ -172,12 +241,7 @@ fn merge_command(args: &MergeArgs) -> Result<u8, Box<dyn Error>> {
 
 fn run_command(args: RunArgs) -> Result<u8, Box<dyn Error>> {
     let plan = Plan::read(&args.plan)?;
-    let target = match (args.pid, args.cgroup, args.container) {
-        (Some(pid), _, _) => Target::Pid(pid),
-        (_, Some(dir), _) => Target::Cgroup(dir),
-        (_, _, Some(id)) => Target::Cgroup(container_cgroup(&args.cgroup_root, &id)?),
-        (None, None, None) => return Err("give --pid, --cgroup or --container".into()),
-    };
+    let target = target(args.pid, args.cgroup, args.container, &args.cgroup_root)?;
     let options = RunOptions {
         plan,
         target,
@@ -188,17 +252,80 @@ fn run_command(args: RunArgs) -> Result<u8, Box<dyn Error>> {
         update: args.update,
         runs: args.runs.unwrap_or(DEFAULT_RUNS),
     };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let result = runtime.block_on(run(&options))?;
+    let result = runtime()?.block_on(run(&options))?;
     publish(&result.summary, args.output.summary.as_deref())?;
     println!("report: {}", result.report_path.display());
     Ok(result.verdict.outcome.code())
 }
 
+/// The server a process id, a cgroup or a container id names.
+fn target(
+    pid: Option<u32>,
+    cgroup: Option<PathBuf>,
+    container: Option<String>,
+    cgroup_root: &Path,
+) -> Result<Target, Box<dyn Error>> {
+    Ok(match (pid, cgroup, container) {
+        (Some(pid), _, _) => Target::Pid(pid),
+        (_, Some(dir), _) => Target::Cgroup(dir),
+        (_, _, Some(id)) => Target::Cgroup(container_cgroup(cgroup_root, &id)?),
+        (None, None, None) => return Err("give a process id, a cgroup or a container".into()),
+    })
+}
+
+fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+}
+
+fn ab_command(args: AbArgs) -> Result<u8, Box<dyn Error>> {
+    let options = AbOptions {
+        plan: Plan::read(&args.plan)?,
+        base: Server {
+            target: target(
+                args.base_pid,
+                args.base_cgroup,
+                args.base_container,
+                &args.cgroup_root,
+            )?,
+            url: SecretUrl::new(args.base_url),
+            database_url: args.base_database_url.map(SecretUrl::new),
+        },
+        head: Server {
+            target: target(
+                args.head_pid,
+                args.head_cgroup,
+                args.head_container,
+                &args.cgroup_root,
+            )?,
+            url: SecretUrl::new(args.head_url),
+            database_url: args.head_database_url.map(SecretUrl::new),
+        },
+        pairs: args.pairs,
+        out_dir: args.out_dir,
+    };
+    let result = runtime()?.block_on(ferrohealth_perf::ab::run(&options))?;
+    publish(&result.summary, args.summary.as_deref())?;
+    println!("report: {}", result.report_path.display());
+    Ok(result.verdict.outcome.code())
+}
+
 fn compare_command(args: &CompareArgs) -> Result<u8, Box<dyn Error>> {
-    let report = Report::read(&args.report)?;
+    let report = match Report::read(&args.report) {
+        Ok(report) => report,
+        // NOTE: no specification governs this: our own design; a file that is no run report is read as an A/B report, and its own error names it when it is neither.
+        Err(ReportError::Parse { .. }) => {
+            let report = AbReport::read(&args.report)?;
+            let verdict = ferrohealth_perf::ab::judge(&report)?;
+            publish(
+                &summary::ab_markdown(&report, &verdict),
+                args.output.summary.as_deref(),
+            )?;
+            return Ok(verdict.outcome.code());
+        }
+        Err(error) => return Err(error.into()),
+    };
     let baseline = Baselines::read(&args.output.baseline)?;
     let verdict = judge_file(&report, baseline.as_ref(), false)?;
     publish(

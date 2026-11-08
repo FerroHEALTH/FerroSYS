@@ -10,6 +10,39 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-08
+
+### Added
+
+- `ferrohealth-perf ab` judges the head of a change against its base,
+  both servers measured on one host in one job (#278). Runners that report
+  the same CPU model and memory differ by 25 to 45 % in latency and CPU
+  per request, so a baseline stored on one machine failed unchanged code
+  on another. The product starts the base and the head side by side and
+  names both (`--base-url` with `--base-pid`, `--base-cgroup` or
+  `--base-container`, the same for `--head-*`, and an optional database
+  per arm). The run holds the head's idle phase to the plan's absolute
+  limits, then measures `--pairs` pairs of load phases (3 by default) in
+  alternating order, base first in the first pair and head first in the
+  next. Each load metric fails when the head's median over its phases is
+  worse than the base's by more than the larger of the plan's tolerance
+  and the noise floor measured within the two arms, and the head breaches
+  in most of the pairs. A phase that stalled, lagged or was not steady
+  still makes the run one that cannot be judged, exit 2. The JSON report
+  and the Markdown summary show the base, the head, their ratio, the
+  tolerance and the floor of every metric, and the order of every pair;
+  `compare` judges a saved A/B report again.
+- `[tolerance]` in the plan, the tolerance of each metric kind an A/B run
+  judges with (#278). A run against a baseline keeps the entry's own.
+
+### Changed
+
+- Breaking: `compare::Check` gains `ratio`, `tolerance` and `floor`, set
+  by an A/B run, and `plan::Plan` gains `tolerance` (#278). A report that
+  0.4 wrote still reads.
+- Breaking: `Report::write` is now the free function `report::write`,
+  which writes an A/B report too (#278).
+
 ## [0.4.2] - 2026-11-07
 
 ### Fixed

@@ -327,16 +327,7 @@ impl Report {
     ///
     /// [`ReportError::Io`], [`ReportError::Parse`] or [`ReportError::Schema`].
     pub fn read(path: &Path) -> Result<Self, ReportError> {
-        let shown = path.display().to_string();
-        let text = std::fs::read_to_string(path).map_err(|source| ReportError::Io {
-            path: shown.clone(),
-            source,
-        })?;
-        let parse = |source| ReportError::Parse {
-            path: shown.clone(),
-            source,
-        };
-        let mut value: serde_json::Value = serde_json::from_str(&text).map_err(parse)?;
+        let (mut value, parse) = read_json(path)?;
         let schema = value
             .get("schema")
             .and_then(serde_json::Value::as_u64)
@@ -365,32 +356,51 @@ impl Report {
         }
         serde_json::from_value(value).map_err(parse)
     }
+}
 
-    /// Writes the report into `dir` as `report-<stamp>.json`, then replaces
-    /// `latest.json` with a copy through a rename; returns the dated path.
-    ///
-    /// # Errors
-    ///
-    /// [`ReportError::Io`] when the directory or a file cannot be written,
-    /// and [`ReportError::Parse`] if the report does not serialize.
-    pub fn write(&self, dir: &Path, stamp: &str) -> Result<PathBuf, ReportError> {
-        let io = |path: &Path| {
-            let path = path.display().to_string();
-            move |source| ReportError::Io { path, source }
-        };
-        std::fs::create_dir_all(dir).map_err(io(dir))?;
-        let text = serde_json::to_string_pretty(self).map_err(|source| ReportError::Parse {
-            path: dir.display().to_string(),
-            source,
-        })?;
-        let dated = dir.join(format!("report-{stamp}.json"));
-        std::fs::write(&dated, &text).map_err(io(&dated))?;
-        let partial = dir.join(".latest.json.partial");
-        std::fs::write(&partial, &text).map_err(io(&partial))?;
-        let latest = dir.join("latest.json");
-        std::fs::rename(&partial, &latest).map_err(io(&latest))?;
-        Ok(dated)
-    }
+/// The JSON of the report file at `path`, and the error a value of it that
+/// does not deserialize is reported as.
+pub(crate) fn read_json(
+    path: &Path,
+) -> Result<(serde_json::Value, impl Fn(serde_json::Error) -> ReportError), ReportError> {
+    let shown = path.display().to_string();
+    let text = std::fs::read_to_string(path).map_err(|source| ReportError::Io {
+        path: shown.clone(),
+        source,
+    })?;
+    let parse = move |source| ReportError::Parse {
+        path: shown.clone(),
+        source,
+    };
+    let value = serde_json::from_str(&text).map_err(&parse)?;
+    Ok((value, parse))
+}
+
+/// Writes `report` into `dir` as `report-<stamp>.json`, then replaces
+/// `latest.json` with a copy through a rename, so a reader never sees half a
+/// file; returns the dated path.
+///
+/// # Errors
+///
+/// [`ReportError::Io`] when the directory or a file cannot be written, and
+/// [`ReportError::Parse`] if the report does not serialize.
+pub fn write<T: Serialize>(report: &T, dir: &Path, stamp: &str) -> Result<PathBuf, ReportError> {
+    let io = |path: &Path| {
+        let path = path.display().to_string();
+        move |source| ReportError::Io { path, source }
+    };
+    std::fs::create_dir_all(dir).map_err(io(dir))?;
+    let text = serde_json::to_string_pretty(report).map_err(|source| ReportError::Parse {
+        path: dir.display().to_string(),
+        source,
+    })?;
+    let dated = dir.join(format!("report-{stamp}.json"));
+    std::fs::write(&dated, &text).map_err(io(&dated))?;
+    let partial = dir.join(".latest.json.partial");
+    std::fs::write(&partial, &text).map_err(io(&partial))?;
+    let latest = dir.join("latest.json");
+    std::fs::rename(&partial, &latest).map_err(io(&latest))?;
+    Ok(dated)
 }
 
 #[cfg(test)]

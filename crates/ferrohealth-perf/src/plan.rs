@@ -19,6 +19,9 @@
 //! warmup_secs = 10
 //! duration_secs = 60
 //!
+//! [tolerance]
+//! latency = 0.25
+//!
 //! [[requests]]
 //! group = "metadata"
 //! method = "GET"
@@ -42,6 +45,8 @@ use http::{HeaderName, HeaderValue, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::baseline::Tolerances;
+
 /// The plan file, parsed and checked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +57,10 @@ pub struct Plan {
     /// The load phase.
     #[serde(default)]
     pub load: LoadSettings,
+    /// The tolerance of each metric kind an A/B run judges the head over
+    /// the base with; a run against a baseline takes the entry's own.
+    #[serde(default)]
+    pub tolerance: Tolerances,
     /// The request set, sent in order and round again for every arrival.
     pub requests: Vec<Request>,
 }
@@ -302,6 +311,7 @@ impl Plan {
         if idle.duration_secs == 0 {
             return invalid("idle.duration_secs must be at least 1".to_owned());
         }
+        self.tolerance.check().map_err(PlanError::Invalid)?;
         for (index, request) in self.requests.iter().enumerate() {
             request
                 .check()
@@ -417,6 +427,25 @@ mod tests {
         }
         let text = format!("[load]\nstall_ratio = 6.0\n{ONE}");
         assert!((Plan::parse(&text).unwrap().load.stall_ratio - 6.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_tolerance_takes_the_defaults_and_refuses_a_bad_value() {
+        assert_eq!(Tolerances::default(), Plan::parse(ONE).unwrap().tolerance);
+        let text = format!("[tolerance]\nlatency = 0.1\n{ONE}");
+        let plan = Plan::parse(&text).unwrap();
+        assert!((plan.tolerance.latency - 0.1).abs() < f64::EPSILON);
+        assert!(
+            (plan.tolerance.cpu - 0.25).abs() < f64::EPSILON,
+            "a default"
+        );
+        for bad in ["latency = -0.1", "throughput = 1.0", "cpu = nan"] {
+            let text = format!("[tolerance]\n{bad}\n{ONE}");
+            assert!(
+                matches!(Plan::parse(&text), Err(PlanError::Invalid(reason)) if reason.contains("tolerance")),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

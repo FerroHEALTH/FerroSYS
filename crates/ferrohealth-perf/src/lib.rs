@@ -14,6 +14,10 @@
 //!    per request and transactions per request are compared with the
 //!    committed baseline, each within its tolerance.
 //!
+//! The A/B mode ([`ab`]) measures the base of a change and its head side by
+//! side on one host instead, and judges the head over the base, so no
+//! baseline from another machine takes part.
+//!
 //! The modules, in the order a run uses them:
 //!
 //! - [`plan`]: `perf/plan.toml`, the limits, the load and the request set.
@@ -26,10 +30,11 @@
 //!   it measured on which host.
 //! - [`baseline`] and [`compare`]: `perf/baseline.toml` and the judgement.
 //! - [`summary`]: the Markdown step summary.
-//! - [`run`]: one run, end to end.
+//! - [`run`]: one run, end to end, and [`ab`]: one A/B run.
 //!
 //! No specification governs the gate: our own design (#249).
 
+pub mod ab;
 pub mod baseline;
 pub mod compare;
 pub mod credentials;

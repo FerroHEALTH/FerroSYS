@@ -1,0 +1,157 @@
+// SPDX-FileCopyrightText: Cadasto B.V.
+// SPDX-License-Identifier: BUSL-1.1
+
+//! The binary's A/B mode: two servers side by side, the head judged over
+//! the base, the report re-judged offline.
+
+use std::path::Path;
+use std::process::{Command, Output};
+use std::time::Duration;
+
+use ferrohealth_perf::ab::{AbReport, Arm};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+use crate::support::{self, Planted};
+
+async fn server(delay_ms: u64) -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/ok"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(delay_ms)))
+        .mount(&server)
+        .await;
+    server
+}
+
+fn perf(args: &[&str], step_summary: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_ferrohealth-perf"))
+        .args(args)
+        .env("GITHUB_STEP_SUMMARY", step_summary)
+        .env_remove("FERROHEALTH_PERF_BASE_DATABASE_URL")
+        .env_remove("FERROHEALTH_PERF_HEAD_DATABASE_URL")
+        .output()
+        .unwrap()
+}
+
+/// Runs `ab` with the base answering after `base_ms` and the head after
+/// `head_ms`, over two pairs; returns the output and the report.
+async fn ab(base_ms: u64, head_ms: u64) -> (Output, AbReport, tempfile::TempDir) {
+    let (base, head) = (server(base_ms).await, server(head_ms).await);
+    let (base_process, head_process) =
+        (Planted::start("quiet", None), Planted::start("quiet", None));
+    let dir = tempfile::tempdir().unwrap();
+    let plan = dir.path().join("plan.toml");
+    std::fs::write(&plan, support::plan(&support::request("ok", "/ok", 200))).unwrap();
+    let reports = dir.path().join("reports");
+    let (base_pid, head_pid) = (
+        base_process.pid().to_string(),
+        head_process.pid().to_string(),
+    );
+    let (base_uri, head_uri) = (base.uri(), head.uri());
+    let output = perf(
+        &[
+            "ab",
+            "--plan",
+            plan.to_str().unwrap(),
+            "--base-url",
+            &base_uri,
+            "--base-pid",
+            &base_pid,
+            "--head-url",
+            &head_uri,
+            "--head-pid",
+            &head_pid,
+            "--pairs",
+            "2",
+            "--out-dir",
+            reports.to_str().unwrap(),
+        ],
+        &dir.path().join("step.md"),
+    );
+    let report = AbReport::read(&reports.join("latest.json")).unwrap();
+    (output, report, dir)
+}
+
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_head_as_fast_as_its_base_passes() {
+    let (output, report, _dir) = ab(40, 40).await;
+    assert_eq!(
+        Some(0),
+        output.status.code(),
+        "{}{}",
+        text(&output.stdout),
+        text(&output.stderr)
+    );
+    assert!(text(&output.stdout).contains("## ferrohealth-perf: the A/B run passed"));
+    assert_eq!(2, report.pairs.len());
+    assert_eq!(
+        vec![Arm::Base, Arm::Head],
+        report.pairs.iter().map(|p| p.first).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slower_head_fails_and_compare_judges_the_report_again() {
+    let (output, report, dir) = ab(20, 80).await;
+    let stdout = text(&output.stdout);
+    assert_eq!(
+        Some(1),
+        output.status.code(),
+        "{stdout}{}",
+        text(&output.stderr)
+    );
+    assert!(stdout.contains("### The head over the base"), "{stdout}");
+    assert!(stdout.contains("| ok.p50_ms |"), "{stdout}");
+    let verdict = report.verdict.unwrap();
+    assert!(
+        verdict.breaches().any(|c| c.name == "ok.p50_ms"),
+        "{verdict:?}"
+    );
+
+    let latest = dir.path().join("reports/latest.json");
+    let again = perf(
+        &["compare", "--report", latest.to_str().unwrap()],
+        &dir.path().join("step.md"),
+    );
+    assert_eq!(Some(1), again.status.code(), "{}", text(&again.stderr));
+    assert!(text(&again.stdout).contains("the A/B run failed"));
+}
+
+#[test]
+fn ab_needs_both_servers_and_at_least_two_pairs() {
+    let dir = tempfile::tempdir().unwrap();
+    let step = dir.path().join("s.md");
+    let both = [
+        "ab",
+        "--base-url",
+        "http://127.0.0.1:9",
+        "--head-url",
+        "http://127.0.0.1:9",
+    ];
+    let missing = perf(&[&both[..], &["--base-pid", "1"]].concat(), &step);
+    assert_eq!(Some(2), missing.status.code());
+    assert!(
+        text(&missing.stderr).contains("--head-pid"),
+        "{}",
+        text(&missing.stderr)
+    );
+    let one = perf(
+        &[
+            &both[..],
+            &["--base-pid", "1", "--head-pid", "1", "--pairs", "1"],
+        ]
+        .concat(),
+        &step,
+    );
+    assert_eq!(Some(2), one.status.code());
+    assert!(
+        text(&one.stderr).contains("--pairs"),
+        "{}",
+        text(&one.stderr)
+    );
+}
