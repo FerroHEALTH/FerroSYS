@@ -86,6 +86,18 @@ impl fmt::Debug for RevocationCheck {
     }
 }
 
+/// The material a check is built from, borrowed from PEM read here or from
+/// a [`TlsClient`](crate::tls_client::TlsClient).
+#[derive(Clone, Copy)]
+pub(crate) struct Parts<'a> {
+    /// The trust roots, the platform's left out.
+    pub(crate) roots: &'a [CertificateDer<'static>],
+    /// The client certificate chain and its private key.
+    pub(crate) identity: Option<(&'a [CertificateDer<'static>], &'a PrivateKeyDer<'static>)>,
+    /// The oldest TLS version the link speaks.
+    pub(crate) min_version: TlsVersion,
+}
+
 /// TLS material a check cannot be built from.
 ///
 /// No variant carries any part of a certificate or a key.
@@ -282,13 +294,55 @@ impl RevocationCheck {
         if roots.is_empty() {
             return Err(RevocationSetupError::NoRoots);
         }
+        let identity = identity.map(client_identity).transpose()?;
+        Self::build(Parts {
+            roots: &roots,
+            identity: identity
+                .as_ref()
+                .map(|(chain, key)| (chain.as_slice(), key)),
+            min_version,
+        })
+    }
+
+    /// The check over the material `client` read: its extra roots are the
+    /// trust roots the link trusts the peer by (the platform's left out),
+    /// its identity is presented when one is set, and the link speaks TLS
+    /// from its `min_version` on.
+    ///
+    /// A product that reads a table through
+    /// [`TlsClient`](crate::tls_client::TlsClient) builds the check from what
+    /// it read, without reading the files a second time.
+    ///
+    /// # Errors
+    ///
+    /// [`RevocationSetupError::NoRoots`] when `client` holds no extra root,
+    /// and another [`RevocationSetupError`] for a root or an identity rustls
+    /// refuses; it never carries the key.
+    pub fn from_tls_client(
+        client: &crate::tls_client::TlsClient,
+    ) -> Result<Self, RevocationSetupError> {
+        Self::build(client.parts())
+    }
+
+    /// The check over `parts`, the one build both constructors share.
+    fn build(parts: Parts<'_>) -> Result<Self, RevocationSetupError> {
+        let Parts {
+            roots,
+            identity,
+            min_version,
+        } = parts;
+        if roots.is_empty() {
+            return Err(RevocationSetupError::NoRoots);
+        }
         let mut store = RootCertStore::empty();
         let mut anchors = Vec::with_capacity(roots.len());
         for root in roots {
-            anchors.push(Certificate::from_der(&root).map_err(RevocationSetupError::RootDer)?);
-            store.add(root).map_err(RevocationSetupError::Root)?;
+            anchors.push(Certificate::from_der(root).map_err(RevocationSetupError::RootDer)?);
+            store
+                .add(root.clone())
+                .map_err(RevocationSetupError::Root)?;
         }
-        let identity = identity.map(client_identity).transpose()?;
+        let identity = identity.map(|(chain, key)| (chain.to_vec(), key.clone_key()));
         let provider = crate::tls::provider();
         let webpki = WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider.clone())
             .build()

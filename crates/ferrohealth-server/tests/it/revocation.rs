@@ -15,6 +15,7 @@ use ferrohealth_server::revocation::{
     RevocationCheck, RevocationError, RevocationSetupError, StatusError,
 };
 use ferrohealth_server::section::TlsVersion;
+use ferrohealth_server::tls_client::{TlsClient, TlsClientSection};
 use url::Url;
 
 use self::front::{Front, Source, Standing};
@@ -260,6 +261,64 @@ async fn an_endpoint_that_is_no_https_url_is_refused() {
         matches!(checked, Err(RevocationError::Endpoint)),
         "an http endpoint is refused: {checked:?}"
     );
+}
+
+/// The front's roots and identity, written to files and read as a table.
+fn tls_client(front: &Front, dir: &std::path::Path) -> TlsClient {
+    let roots = dir.join("roots.pem");
+    let identity = dir.join("identity.pem");
+    std::fs::write(&roots, front.trust_roots()).expect("the roots are written");
+    std::fs::write(&identity, front.client_identity()).expect("the identity is written");
+    let section = TlsClientSection {
+        client_identity_file: Some(identity),
+        trust_roots_file: Some(roots),
+        ..TlsClientSection::default()
+    };
+    TlsClient::read("xcpd.tls", &section).expect("the material reads")
+}
+
+#[tokio::test]
+async fn a_check_built_from_a_tls_client_clears_and_presents_its_identity() {
+    let front = Front::start(Source::Crl, Standing::Good).await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let check = RevocationCheck::from_tls_client(&tls_client(&front, dir.path()))
+        .expect("the check builds");
+    let url = ping(&front);
+    check.clear(&url, WITHIN).await.expect("the chain clears");
+    let status = check
+        .http_client()
+        .expect("the client builds")
+        .get(url)
+        .send()
+        .await
+        .expect("the front answers")
+        .status();
+    assert_eq!(
+        http::StatusCode::OK,
+        status,
+        "the front admits the identity"
+    );
+    assert_eq!(1, front.requests(), "the request reached the front");
+}
+
+#[tokio::test]
+async fn a_check_built_from_a_tls_client_refuses_a_revoked_chain() {
+    let front = Front::start(Source::Ocsp, Standing::Revoked).await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let check = RevocationCheck::from_tls_client(&tls_client(&front, dir.path()))
+        .expect("the check builds");
+    assert!(check.clear(&ping(&front), WITHIN).await.is_err());
+    assert_eq!(0, front.requests(), "nothing reached the front");
+}
+
+#[test]
+fn a_tls_client_without_roots_is_refused() {
+    let client =
+        TlsClient::read("xcpd.tls", &TlsClientSection::default()).expect("nothing to read");
+    assert!(matches!(
+        RevocationCheck::from_tls_client(&client),
+        Err(RevocationSetupError::NoRoots)
+    ));
 }
 
 #[test]

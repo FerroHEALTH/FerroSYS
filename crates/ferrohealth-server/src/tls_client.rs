@@ -216,6 +216,20 @@ impl TlsClient {
             .and_then(|identity| identity.chain.first())
     }
 
+    /// The extra roots, the identity's chain and key, and the minimum
+    /// version, for a crate module that builds its own TLS over them.
+    #[cfg(feature = "revocation")]
+    pub(crate) fn parts(&self) -> crate::revocation::Parts<'_> {
+        crate::revocation::Parts {
+            roots: &self.roots,
+            identity: self
+                .identity
+                .as_ref()
+                .map(|identity| (identity.chain.as_slice(), &identity.key)),
+            min_version: self.min_version,
+        }
+    }
+
     /// The rustls configuration that trusts `platform_roots` and the extra
     /// roots, and presents the client identity when one is set.
     ///
