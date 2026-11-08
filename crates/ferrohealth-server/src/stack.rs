@@ -14,6 +14,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
 use tower_http::limit::RequestBodyLimitLayer;
 
+use crate::api_headers;
 use crate::client_address::Forwarding;
 use crate::edge::{self, EdgeLayer, IdentifyLayer};
 use crate::health::{self, Health};
@@ -54,11 +55,12 @@ impl Default for StackPolicy {
 
 /// Wraps `product` and the health routes in the stack, under the base path.
 ///
-/// From the outside in: the request id, the request log, the client
-/// address, the refusal rendering, the panic rendering, the panic catch,
-/// the request timeout (`408`), the body limit (`413`, and the same ceiling
-/// for every extractor), the response compression when it is on, then the
-/// routes, the product's behind the overload bound when one is configured.
+/// From the outside in: the API security headers ([`crate::api_headers`]),
+/// the request id, the request log, the client address, the refusal
+/// rendering, the panic rendering, the panic catch, the request timeout
+/// (`408`), the body limit (`413`, and the same ceiling for every
+/// extractor), the response compression when it is on, then the routes,
+/// the product's behind the overload bound when one is configured.
 /// Every request leaves one request line, a refusal and a panic included.
 ///
 /// It is [`Stack::new`] with nothing beside the base path, and a request no
@@ -236,7 +238,14 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         timeout: section.request_timeout(),
         body_limit: section.body_limit_bytes,
     });
+    let transport = api_headers::Transport {
+        tls: section.tls.is_some(),
+    };
     let outer = ServiceBuilder::new()
+        .layer(axum::middleware::from_fn_with_state(
+            transport,
+            api_headers::set,
+        ))
         .layer(IdentifyLayer)
         .layer(policy.request_log)
         .layer(edge)
