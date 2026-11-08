@@ -197,7 +197,7 @@ pub(crate) fn server_url(url: &SecretUrl) -> Result<Url, RunError> {
 pub(crate) fn client(plan: &Plan) -> Result<(Credentials, reqwest::Client), RunError> {
     let credentials = Credentials::load(plan)?;
     let client = credentials
-        .apply(reqwest::Client::builder().no_proxy())
+        .apply(reqwest::Client::builder().no_proxy())?
         .build()
         .map_err(RunError::Client)?;
     Ok((credentials, client))

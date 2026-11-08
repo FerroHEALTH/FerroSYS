@@ -852,12 +852,13 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-perf"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
  "clap",
  "ferrohealth-secret",
+ "ferrohealth-server",
  "hdrhistogram",
  "http",
  "jiff",

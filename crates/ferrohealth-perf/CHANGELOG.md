@@ -10,6 +10,26 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-08
+
+### Changed
+
+- Breaking: the load client and the MLLP sender read `[load]
+  client_identity_file` and `trust_roots_file` through
+  `ferrohealth-server`'s `tls_client::TlsClient`, the reader of every
+  FerroHEALTH product's outbound TLS keys. The HTTP client takes them
+  through `TlsClient::apply`, and the MLLP connector through
+  `TlsClient::platform_config`, which verifies through the platform's
+  verifier with the extra roots, as the HTTP client does. Both speak TLS 1.3
+  unless the new `[load] min_version` lowers it to `"1.2"`. Until now the
+  MLLP sender also spoke TLS 1.2 by default, so a plan against a TLS 1.2
+  peer sets `min_version = "1.2"`. A refused identity or roots file names
+  the `load.client_identity` or `load.trust_roots_file` key. In the library,
+  `credentials::Credentials::apply` returns a `Result`,
+  `credentials::CredentialError` gains `Tls` with the family's
+  `TlsClientError`, and `plan::LoadSettings` gains `min_version` and
+  `tls()` (#295).
+
 ## [0.5.2] - 2026-11-08
 
 ### Added

@@ -121,6 +121,7 @@ settle_secs = 11                   # wait after it, before the transaction count
 stall_ratio = 10.0                 # p99 over this times p50 on every route marks a stall
 # client_identity_file = "perf/client.pem"  # a certificate chain and its key, for mTLS
 # trust_roots_file = "perf/ca.pem"          # roots that verify an https target
+min_version = "1.3"                # the oldest TLS version spoken; "1.2" lowers it
 
 [tolerance]                        # how far the head may stray from the base, in ab
 latency = 0.25
@@ -189,7 +190,11 @@ RFC 9700 §2.2, and the load phase presents either:
 - `[load] client_identity_file`: a PEM file holding a certificate chain and
   its private key, presented on every TLS connection to the target, for a
   certificate-bound token (RFC 8705 §3). `[load] trust_roots_file` holds the
-  roots that verify an `https` target, beside the platform's.
+  roots that verify an `https` target, beside the platform's. Both are read
+  by `ferrohealth-server`'s `TlsClient`, the reader every FerroHEALTH
+  product uses for its outbound TLS keys, so a file that holds no
+  certificate refuses the plan. The load client and the MLLP sender speak
+  TLS 1.3 unless `[load] min_version` lowers it to `"1.2"`.
 - `dpop_key_file` on a request: a P-256 private key in PKCS#8 PEM. Every send
   of that request carries a fresh `DPoP` proof (RFC 9449 §4.2) with a new
   `jti`, `htm` and `htu` from the request, `iat` now, and `ath` over the

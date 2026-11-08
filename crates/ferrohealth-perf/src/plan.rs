@@ -48,6 +48,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ferrohealth_server::section::TlsVersion;
+use ferrohealth_server::tls_client::TlsClientSection;
 use http::{HeaderName, HeaderValue, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -172,6 +174,10 @@ pub struct LoadSettings {
     /// platform's.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_roots_file: Option<PathBuf>,
+    /// The oldest TLS version the load client and the MLLP sender speak:
+    /// `"1.3"` unless lowered to `"1.2"`, as for every FerroHEALTH outbound
+    /// TLS table.
+    pub min_version: TlsVersion,
 }
 
 impl Default for LoadSettings {
@@ -190,11 +196,24 @@ impl Default for LoadSettings {
             stall_ratio: 10.0,
             client_identity_file: None,
             trust_roots_file: None,
+            min_version: TlsVersion::default(),
         }
     }
 }
 
 impl LoadSettings {
+    /// The outbound TLS table the client identity, the trust roots and the
+    /// oldest version make, as `ferrohealth-server` reads it.
+    #[must_use]
+    pub fn tls(&self) -> TlsClientSection {
+        TlsClientSection {
+            client_identity_file: self.client_identity_file.clone(),
+            trust_roots_file: self.trust_roots_file.clone(),
+            min_version: self.min_version,
+            ..TlsClientSection::default()
+        }
+    }
+
     /// The warm-up.
     #[must_use]
     pub fn warmup(&self) -> Duration {
@@ -473,6 +492,19 @@ mod tests {
     #[test]
     fn an_unknown_key_is_refused() {
         let text = format!("[idle]\nmax_cpu = 3.0\n{ONE}");
+        assert!(matches!(Plan::parse(&text), Err(PlanError::Parse { .. })));
+    }
+
+    #[test]
+    fn the_oldest_tls_version_is_1_3_unless_lowered_to_1_2() {
+        assert_eq!(
+            TlsVersion::Tls13,
+            Plan::parse(ONE).unwrap().load.min_version
+        );
+        let text = format!("[load]\nmin_version = \"1.2\"\n{ONE}");
+        let plan = Plan::parse(&text).unwrap();
+        assert_eq!(TlsVersion::Tls12, plan.load.tls().min_version);
+        let text = format!("[load]\nmin_version = \"1.1\"\n{ONE}");
         assert!(matches!(Plan::parse(&text), Err(PlanError::Parse { .. })));
     }
 
