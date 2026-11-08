@@ -30,11 +30,11 @@ use std::path::{Path, PathBuf};
 
 use ferrohealth_secret::secret_url::SecretUrl;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 use crate::baseline::{Tolerances, across};
 use crate::compare::{Check, Findings, Limit, Verdict, add_failures, schedule_problems};
 use crate::fingerprint::Fingerprint;
+use crate::load::Endpoints;
 use crate::metric::{self, Metric};
 use crate::plan::Plan;
 use crate::process::Target;
@@ -100,6 +100,9 @@ pub struct Server {
     pub url: SecretUrl,
     /// Its database, when its transactions are counted.
     pub database_url: Option<SecretUrl>,
+    /// Its MLLP listener, `host:port`, in place of the plan's `[mllp]
+    /// address`.
+    pub mllp_address: Option<String>,
 }
 
 /// What an A/B run is given.
@@ -206,18 +209,26 @@ pub struct AbResult {
 /// The two servers, each with its URL and its instruments.
 #[derive(Debug)]
 struct Arms {
-    base: (Url, Instruments),
-    head: (Url, Instruments),
+    base: (Endpoints, Instruments),
+    head: (Endpoints, Instruments),
 }
 
 impl Arms {
-    fn of(&self, arm: Arm) -> (&Url, &Instruments) {
+    fn of(&self, arm: Arm) -> (&Endpoints, &Instruments) {
         let (url, instruments) = match arm {
             Arm::Base => &self.base,
             Arm::Head => &self.head,
         };
         (url, instruments)
     }
+}
+
+/// The endpoints and the instruments of `server`.
+async fn arm(plan: &Plan, server: &Server) -> Result<(Endpoints, Instruments), RunError> {
+    let url = server_url(&server.url)?;
+    let endpoints = Endpoints::new(plan, url, server.mllp_address.as_deref())?;
+    let instruments = Instruments::open(&server.target, server.database_url.as_ref()).await?;
+    Ok((endpoints, instruments))
 }
 
 /// Carries out one A/B run: the head's idle phase, then `pairs` pairs of
@@ -232,14 +243,8 @@ pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
     let plan = &options.plan;
     let (credentials, client) = client(plan)?;
     let arms = Arms {
-        base: (
-            server_url(&options.base.url)?,
-            Instruments::open(&options.base.target, options.base.database_url.as_ref()).await?,
-        ),
-        head: (
-            server_url(&options.head.url)?,
-            Instruments::open(&options.head.target, options.head.database_url.as_ref()).await?,
-        ),
+        base: arm(plan, &options.base).await?,
+        head: arm(plan, &options.head).await?,
     };
     let started = now();
     let idle = idle_phase(plan, &arms.head.1).await?;
@@ -256,11 +261,13 @@ pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
         };
         pairs.push(Pair { first, base, head });
     }
-    let describe = |server: &Server, instruments: &Instruments| TargetInfo {
-        process: server.target.describe(),
-        base_url: server.url.redacted(),
-        database: instruments.database.as_ref().map(|d| d.name().to_owned()),
-    };
+    let describe =
+        |server: &Server, (endpoints, instruments): &(Endpoints, Instruments)| TargetInfo {
+            process: server.target.describe(),
+            base_url: server.url.redacted(),
+            database: instruments.database.as_ref().map(|d| d.name().to_owned()),
+            mllp: endpoints.mllp_address().map(str::to_owned),
+        };
     let mut report = AbReport {
         schema: SCHEMA,
         tool: env!("CARGO_PKG_VERSION").to_owned(),
@@ -269,8 +276,8 @@ pub async fn run(options: &AbOptions) -> Result<AbResult, RunError> {
         host: Fingerprint::detect(),
         plan: identity(plan),
         tolerance: plan.tolerance,
-        base: describe(&options.base, &arms.base.1),
-        head: describe(&options.head, &arms.head.1),
+        base: describe(&options.base, &arms.base),
+        head: describe(&options.head, &arms.head),
         idle,
         pairs,
         verdict: None,

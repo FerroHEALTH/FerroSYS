@@ -63,6 +63,7 @@ pub(crate) fn report() -> Report {
             process: "process 1".to_owned(),
             base_url: "http://127.0.0.1:8080".to_owned(),
             database: Some("app".to_owned()),
+            mllp: None,
         },
         plan: PlanIdentity {
             rate: 50.0,

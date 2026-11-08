@@ -96,6 +96,10 @@ x509-ocsp = { version = "0.3.0-rc.0", default-features = false }
 hdrhistogram = { version = "7.6.0", default-features = false, features = ["serialization"] }
 base64 = "0.22.1"
 tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime"] }
+# ferrohealth-perf's MLLP client verifies a TLS listener against the
+# platform's roots beside the plan's, as reqwest does for its HTTP requests,
+# on the line reqwest resolves. Verified against crates.io on 2026-11-08.
+rustls-platform-verifier = { version = "0.7.1", default-features = false }
 # tools/forwarders: the parser of the forwarder ratchet, on the lines the
 # workspace already locks. Verified against crates.io on 2026-11-04.
 anyhow = "1.0.104"

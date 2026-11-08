@@ -31,6 +31,7 @@ use url::Url;
 
 use crate::credentials::Credentials;
 use crate::histogram;
+use crate::mllp::{Message, MllpError, Sender};
 use crate::plan::{LoadSettings, Plan, Request};
 use crate::quantile::exact_f64;
 
@@ -84,6 +85,10 @@ pub enum LoadError {
     /// A `DPoP` proof could not be signed.
     #[error(transparent)]
     Proof(crate::credentials::CredentialError),
+    /// The plan sends HL7 v2 messages and the endpoints hold no MLLP
+    /// listener for them.
+    #[error("the plan sends HL7 v2 messages and no MLLP listener was set up for them")]
+    NoListener,
 }
 
 /// A fresh `DPoP` proof for request `position` of the plan sent to `url`,
@@ -177,26 +182,127 @@ pub fn request_url(base: &Url, request: &Request) -> Result<Url, LoadError> {
     })
 }
 
-/// Drives the load phase of `plan` against `base`, starting at `start`.
+/// Where a load phase sends: the server's base URL, and its MLLP listener
+/// when the plan sends HL7 v2 messages.
+#[derive(Debug, Clone)]
+pub struct Endpoints {
+    url: Url,
+    mllp: Option<Arc<Sender>>,
+}
+
+impl Endpoints {
+    /// The endpoints of `plan` at `url`, with its messages sent to
+    /// `mllp_address` or the plan's own `[mllp] address`.
+    ///
+    /// # Errors
+    ///
+    /// Every [`MllpError`] of [`Sender::new`].
+    pub fn new(plan: &Plan, url: Url, mllp_address: Option<&str>) -> Result<Self, MllpError> {
+        let mllp = Sender::new(plan, mllp_address)?.map(Arc::new);
+        Ok(Self { url, mllp })
+    }
+
+    /// The MLLP listener's address, when the plan sends messages.
+    #[must_use]
+    pub fn mllp_address(&self) -> Option<&str> {
+        self.mllp.as_deref().map(Sender::address)
+    }
+}
+
+/// One entry of the set an arrival takes.
+#[derive(Debug)]
+enum Item<'a> {
+    Http {
+        position: usize,
+        request: &'a Request,
+        url: Url,
+    },
+    Mllp {
+        group: &'a str,
+        sender: Arc<Sender>,
+        message: Arc<Message>,
+    },
+}
+
+impl<'a> Item<'a> {
+    /// The group and the exchange of one send of this item.
+    fn exchange(
+        &self,
+        client: &Client,
+        credentials: &Credentials,
+    ) -> Result<(&'a str, Exchange), LoadError> {
+        Ok(match self {
+            Self::Http {
+                position,
+                request,
+                url,
+            } => {
+                // NOTE: RFC 9449 §4.2: a proof is fresh per request; it is signed before the intended instant, outside the timed window.
+                let proof = sign(credentials, *position, request, url)?;
+                let call = HttpCall {
+                    client: client.clone(),
+                    request: (*request).clone(),
+                    url: url.clone(),
+                    proof,
+                };
+                (request.group.as_str(), Exchange::Http(Box::new(call)))
+            }
+            Self::Mllp {
+                group,
+                sender,
+                message,
+            } => {
+                let exchange = Exchange::Mllp {
+                    sender: Arc::clone(sender),
+                    message: Arc::clone(message),
+                };
+                (*group, exchange)
+            }
+        })
+    }
+}
+
+/// The set of `plan` at `endpoints`: the requests, then the messages.
+fn items<'a>(plan: &'a Plan, endpoints: &Endpoints) -> Result<Vec<Item<'a>>, LoadError> {
+    let mut items = Vec::with_capacity(plan.requests.len().saturating_add(plan.messages.len()));
+    for (position, request) in plan.requests.iter().enumerate() {
+        let url = request_url(&endpoints.url, request)?;
+        items.push(Item::Http {
+            position,
+            request,
+            url,
+        });
+    }
+    for (index, entry) in plan.messages.iter().enumerate() {
+        let sender = endpoints.mllp.as_ref().ok_or(LoadError::NoListener)?;
+        let message = sender.message(index).ok_or(LoadError::NoListener)?;
+        items.push(Item::Mllp {
+            group: &entry.group,
+            sender: Arc::clone(sender),
+            message: Arc::clone(message),
+        });
+    }
+    Ok(items)
+}
+
+/// Drives the load phase of `plan` against `endpoints`, starting at
+/// `start`.
 ///
 /// # Errors
 ///
 /// [`LoadError::Url`] for a request that forms no URL,
+/// [`LoadError::NoListener`] for messages with no MLLP listener,
 /// [`LoadError::Schedule`] for a schedule too long to place, and
 /// [`LoadError::Task`] when a request task panics.
 pub async fn drive(
     plan: &Plan,
-    base: &Url,
+    endpoints: &Endpoints,
     client: &Client,
     credentials: &Credentials,
     start: Instant,
 ) -> Result<LoadOutcome, LoadError> {
     let load = &plan.load;
-    let urls = plan
-        .requests
-        .iter()
-        .map(|request| request_url(base, request))
-        .collect::<Result<Vec<_>, _>>()?;
+    let items = items(plan, endpoints)?;
     let record = || GroupRecord {
         first: histogram::empty(),
         second: histogram::empty(),
@@ -218,18 +324,17 @@ pub async fn drive(
     let mut tasks = JoinSet::new();
     let mut sent: u64 = 0;
     let mut saturated = false;
-    let mut order = plan.requests.iter().zip(urls.iter()).enumerate().cycle();
+    let mut order = items.iter().cycle();
     for index in 0..planned {
         let offset = Duration::try_from_secs_f64(exact_f64(index) / load.rate)
             .map_err(|_too_long| LoadError::Schedule(planned))?;
         let intended = start
             .checked_add(offset)
             .ok_or(LoadError::Schedule(planned))?;
-        let Some((position, (request, url))) = order.next() else {
+        let Some(item) = order.next() else {
             break;
         };
-        // NOTE: RFC 9449 §4.2: a proof is fresh per request; it is signed before the intended instant, outside the timed window.
-        let proof = sign(credentials, position, request, url)?;
+        let (group, exchange) = item.exchange(client, credentials)?;
         sleep_until(intended).await;
         let permit = if let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() {
             permit
@@ -246,18 +351,16 @@ pub async fn drive(
             histogram::record(&mut lag, Instant::now().saturating_duration_since(intended));
         }
         let call = Call {
-            client: client.clone(),
-            request: request.clone(),
-            url: url.clone(),
+            group: group.to_owned(),
+            exchange,
             intended,
             window,
             request_timeout,
-            proof,
         };
         shared
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .pending(&request.group, true);
+            .pending(group, true);
         let shared = Arc::clone(&shared);
         tasks.spawn(async move {
             call.send(&shared).await;
@@ -311,27 +414,47 @@ fn arrivals(span: Duration, rate: f64) -> u64 {
     planned
 }
 
+/// One HTTP request of an arrival, with its `DPoP` proof.
 #[derive(Debug)]
-struct Call {
+struct HttpCall {
     client: Client,
     request: Request,
     url: Url,
+    proof: Option<String>,
+}
+
+/// What one arrival sends.
+#[derive(Debug)]
+enum Exchange {
+    Http(Box<HttpCall>),
+    Mllp {
+        sender: Arc<Sender>,
+        message: Arc<Message>,
+    },
+}
+
+#[derive(Debug)]
+struct Call {
+    group: String,
+    exchange: Exchange,
     intended: Instant,
     window: Window,
     request_timeout: Duration,
-    proof: Option<String>,
 }
 
 impl Call {
     async fn send(self, shared: &Mutex<Shared>) {
-        let outcome = self.exchange().await;
+        let outcome = match &self.exchange {
+            Exchange::Http(call) => call.send(self.request_timeout).await,
+            Exchange::Mllp { sender, message } => sender.send(message, self.request_timeout).await,
+        };
         let done = Instant::now();
         let mut shared = shared.lock().unwrap_or_else(PoisonError::into_inner);
-        shared.pending(&self.request.group, false);
+        shared.pending(&self.group, false);
         match outcome {
             Ok(()) => {
                 let latency = done.saturating_duration_since(self.intended);
-                let Some(record) = shared.groups.get_mut(&self.request.group) else {
+                let Some(record) = shared.groups.get_mut(&self.group) else {
                     return;
                 };
                 match self.window {
@@ -346,20 +469,25 @@ impl Call {
                     }
                 }
             }
-            Err(kind) => shared.fail(&self.request.group, kind),
+            Err(kind) => shared.fail(&self.group, kind),
         }
     }
+}
 
-    /// Sends the request and reads the whole answer; the failure kind when
-    /// the answer is not the expected one.
-    async fn exchange(&self) -> Result<(), String> {
-        let method = self.request.method()?;
-        let mut builder = self
-            .client
-            .request(method, self.url.clone())
-            .timeout(self.request_timeout);
-        for (name, value) in &self.request.headers {
-            match (&self.proof, bearer(&self.request)) {
+impl HttpCall {
+    /// Sends the request and reads the whole answer; the failure kind when the
+    /// answer is not the expected one.
+    async fn send(&self, request_timeout: Duration) -> Result<(), String> {
+        let HttpCall {
+            client,
+            request,
+            url,
+            proof,
+        } = self;
+        let method = request.method()?;
+        let mut builder = client.request(method, url.clone()).timeout(request_timeout);
+        for (name, value) in &request.headers {
+            match (proof, bearer(request)) {
                 // NOTE: RFC 9449 §7.1: a DPoP-bound token goes out under the DPoP scheme.
                 (Some(_), Some(token)) if name.eq_ignore_ascii_case("authorization") => {
                     builder = builder.header(name, format!("DPoP {token}"));
@@ -367,10 +495,10 @@ impl Call {
                 _ => builder = builder.header(name, value),
             }
         }
-        if let Some(proof) = &self.proof {
-            builder = builder.header("dpop", proof);
+        if let Some(proof) = proof {
+            builder = builder.header("dpop", proof.as_str());
         }
-        if let Some(body) = &self.request.body {
+        if let Some(body) = &request.body {
             builder = builder.body(body.clone());
         }
         let kind = |error: &reqwest::Error| {
@@ -383,7 +511,7 @@ impl Call {
         let response = builder.send().await.map_err(|error| kind(&error))?;
         let status = response.status();
         response.bytes().await.map_err(|error| kind(&error))?;
-        let expected = self.request.expected()?;
+        let expected = request.expected()?;
         if status == expected {
             Ok(())
         } else {

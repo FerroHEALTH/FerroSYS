@@ -71,6 +71,10 @@ pub struct TargetInfo {
     /// The database whose transactions were counted, when one was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
+    /// The MLLP listener the plan's HL7 v2 messages went to, when it sends
+    /// any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mllp: Option<String>,
 }
 
 /// What makes two runs comparable: the load and the request set.

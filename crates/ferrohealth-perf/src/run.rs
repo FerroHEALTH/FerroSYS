@@ -28,8 +28,9 @@ use crate::compare::{Outcome, Verdict, judge_file};
 use crate::credentials::{CredentialError, Credentials};
 use crate::database::{DatabaseError, Transactions, WITNESS_INTERVAL};
 use crate::fingerprint::Fingerprint;
-use crate::load::{self, LoadError};
+use crate::load::{self, Endpoints, LoadError};
 use crate::metric;
+use crate::mllp::MllpError;
 use crate::plan::Plan;
 use crate::process::{Probe, ProcessError, Sample, Target};
 use crate::quantile::{QuantileName, quantile};
@@ -47,6 +48,9 @@ pub struct RunOptions {
     pub target: Target,
     /// The server's base URL.
     pub base_url: SecretUrl,
+    /// The server's MLLP listener, `host:port`, in place of the plan's
+    /// `[mllp] address`.
+    pub mllp_address: Option<String>,
     /// The server's database, when its transactions are counted.
     pub database_url: Option<SecretUrl>,
     /// The baseline file.
@@ -102,6 +106,9 @@ pub enum RunError {
     /// The load phase failed.
     #[error(transparent)]
     Load(#[from] LoadError),
+    /// The MLLP listener of the plan's messages cannot be used.
+    #[error(transparent)]
+    Mllp(#[from] MllpError),
     /// The report could not be built or written.
     #[error(transparent)]
     Report(#[from] ReportError),
@@ -279,7 +286,7 @@ impl Peak {
 
 pub(crate) async fn load_phase(
     plan: &Plan,
-    base: &Url,
+    endpoints: &Endpoints,
     client: &reqwest::Client,
     credentials: &Credentials,
     instruments: &Instruments,
@@ -306,7 +313,7 @@ pub(crate) async fn load_phase(
         instruments.probe.clone(),
         Duration::from_millis(load.sample_ms),
     );
-    let driven = load::drive(plan, base, client, credentials, start).await;
+    let driven = load::drive(plan, endpoints, client, credentials, start).await;
     let peak = peak.finish()?;
     let outcome = driven?;
     let sample = |handle: tokio::task::JoinHandle<_>| async move {
@@ -348,7 +355,11 @@ pub(crate) async fn load_phase(
 /// cannot be written.
 pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
     let old = Baselines::read(&options.baseline)?;
-    let base = server_url(&options.base_url)?;
+    let base = Endpoints::new(
+        &options.plan,
+        server_url(&options.base_url)?,
+        options.mllp_address.as_deref(),
+    )?;
     let (credentials, client) = client(&options.plan)?;
     let instruments = Instruments::open(&options.target, options.database_url.as_ref()).await?;
     let started = now();
@@ -371,6 +382,7 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
             process: options.target.describe(),
             base_url: options.base_url.redacted(),
             database: instruments.database.as_ref().map(|d| d.name().to_owned()),
+            mllp: base.mllp_address().map(str::to_owned),
         },
         plan: identity(plan),
         idle,
@@ -412,7 +424,8 @@ pub fn identity(plan: &Plan) -> PlanIdentity {
         rate: plan.load.rate,
         warmup_secs: plan.load.warmup_secs,
         duration_secs: plan.load.duration_secs,
-        requests: u64::try_from(plan.requests.len()).unwrap_or(u64::MAX),
+        requests: u64::try_from(plan.requests.len().saturating_add(plan.messages.len()))
+            .unwrap_or(u64::MAX),
         groups: plan.groups(),
     }
 }
@@ -513,6 +526,7 @@ mod tests {
             .unwrap(),
             target: Target::Pid(1),
             base_url: SecretUrl::new("http://127.0.0.1:8080".to_owned()),
+            mllp_address: None,
             database_url: None,
             baseline: dir.join("perf/baseline.toml"),
             out_dir: dir.join("reports"),

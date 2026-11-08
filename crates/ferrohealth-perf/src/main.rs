@@ -100,6 +100,10 @@ struct RunArgs {
     /// The server's base URL.
     #[arg(long, value_name = "URL")]
     base_url: String,
+    /// The server's MLLP listener, `host:port`, in place of the plan's
+    /// `[mllp] address`.
+    #[arg(long, value_name = "HOST:PORT")]
+    mllp_address: Option<String>,
     /// The server's PostgreSQL database, whose transactions are counted.
     #[arg(
         long,
@@ -149,6 +153,9 @@ struct AbArgs {
         hide_env_values = true
     )]
     base_database_url: Option<String>,
+    /// The base server's MLLP listener, `host:port`.
+    #[arg(long, value_name = "HOST:PORT")]
+    base_mllp_address: Option<String>,
     /// The head server's base URL.
     #[arg(long, value_name = "URL")]
     head_url: String,
@@ -170,6 +177,9 @@ struct AbArgs {
         hide_env_values = true
     )]
     head_database_url: Option<String>,
+    /// The head server's MLLP listener, `host:port`.
+    #[arg(long, value_name = "HOST:PORT")]
+    head_mllp_address: Option<String>,
     /// Where the cgroup v2 hierarchy is mounted.
     #[arg(long, value_name = "DIR", default_value = "/sys/fs/cgroup")]
     cgroup_root: PathBuf,
@@ -246,6 +256,7 @@ fn run_command(args: RunArgs) -> Result<u8, Box<dyn Error>> {
         plan,
         target,
         base_url: SecretUrl::new(args.base_url),
+        mllp_address: args.mllp_address,
         database_url: args.database_url.map(SecretUrl::new),
         baseline: args.output.baseline.clone(),
         out_dir: args.out_dir,
@@ -291,6 +302,7 @@ fn ab_command(args: AbArgs) -> Result<u8, Box<dyn Error>> {
             )?,
             url: SecretUrl::new(args.base_url),
             database_url: args.base_database_url.map(SecretUrl::new),
+            mllp_address: args.base_mllp_address,
         },
         head: Server {
             target: target(
@@ -301,6 +313,7 @@ fn ab_command(args: AbArgs) -> Result<u8, Box<dyn Error>> {
             )?,
             url: SecretUrl::new(args.head_url),
             database_url: args.head_database_url.map(SecretUrl::new),
+            mllp_address: args.head_mllp_address,
         },
         pairs: args.pairs,
         out_dir: args.out_dir,

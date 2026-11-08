@@ -102,6 +102,7 @@ async fn measure(target: Target, database: Option<String>, update: bool) -> RunR
         plan,
         target,
         base_url: SecretUrl::new(server.uri()),
+        mllp_address: None,
         database_url: database.map(SecretUrl::new),
         baseline: dir.path().join("perf/baseline.toml"),
         out_dir: dir.path().join("reports"),
