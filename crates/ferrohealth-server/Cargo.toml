@@ -26,6 +26,9 @@ console = ["dep:url"]
 # `tls_client::TlsClient::apply`, which sets the outbound TLS material on a
 # reqwest client.
 reqwest = ["dep:reqwest"]
+# `tls_client::TlsClient::platform_config`, the outbound rustls
+# configuration over the platform's verifier and the extra roots.
+platform-verifier = ["dep:rustls-platform-verifier"]
 # `revocation::RevocationCheck`, the outbound TLS that checks every
 # certificate a peer presents by CRL, then OCSP, before any data is sent.
 revocation = ["reqwest", "dep:aws-lc-rs", "dep:der", "dep:jiff", "dep:url", "dep:x509-cert", "dep:x509-ocsp"]
@@ -46,6 +49,7 @@ jiff = { workspace = true, optional = true }
 pin-project-lite.workspace = true
 reqwest = { workspace = true, optional = true }
 rustls.workspace = true
+rustls-platform-verifier = { workspace = true, optional = true }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

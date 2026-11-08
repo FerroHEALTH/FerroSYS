@@ -10,6 +10,16 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `tls_client::TlsClient::platform_config` (feature `platform-verifier`)
+  gives the rustls configuration that verifies a server through the
+  platform's verifier, with the extra roots of `trust_roots_file` beside the
+  platform's own, and presents the client identity. It trusts what
+  `TlsClient::apply` has reqwest trust, so a product that speaks TLS outside
+  HTTP, such as MLLP, reaches the servers its HTTP client reaches, with the
+  same protocol versions as `client_config` (#297).
+
 ## [0.6.1] - 2026-11-08
 
 ### Added

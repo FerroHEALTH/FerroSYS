@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Cadasto B.V.
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The TLS material of a product's outbound HTTPS calls.
+//! The TLS material of a product's outbound TLS calls, HTTPS and others.
 //!
 //! A table that names a remote service takes `client_identity`, inline, or
 //! `client_identity_file`: the client certificate chain and its private key
@@ -9,9 +9,10 @@
 //! `trust_roots_file`, a PEM bundle of trust roots beside the platform's.
 //! [`TlsClient::read`] reads every file once; [`TlsClient::client_config`]
 //! gives a rustls configuration over the platform roots the caller hands
-//! it, and `TlsClient::apply` (feature `reqwest`) sets the same material on
-//! a `reqwest::ClientBuilder`. No specification governs the keys: our own
-//! design.
+//! it, `TlsClient::platform_config` (feature `platform-verifier`) one over
+//! the platform's verifier, and `TlsClient::apply` (feature `reqwest`) sets
+//! the same material on a `reqwest::ClientBuilder`. No specification
+//! governs the keys: our own design.
 
 use std::path::PathBuf;
 
@@ -198,10 +199,56 @@ impl TlsClient {
                 .add(root.clone())
                 .map_err(|source| self.refused("trust_roots_file", source))?;
         }
-        let builder = ClientConfig::builder_with_provider(crate::tls::provider())
-            .with_protocol_versions(crate::tls::protocol_versions(self.min_version))
-            .map_err(|source| self.refused("client_identity", source))?
+        let builder = self
+            .versions(crate::tls::provider())?
             .with_root_certificates(platform_roots);
+        self.authenticate(builder)
+    }
+
+    /// The rustls configuration that verifies a server through the
+    /// platform's verifier, trusting the extra roots beside the platform's
+    /// own, and presents the client identity when one is set.
+    ///
+    /// It trusts what [`TlsClient::apply`] has reqwest trust, since reqwest's
+    /// `rustls` feature verifies through the same platform verifier, so a
+    /// product that speaks TLS outside HTTP, such as MLLP, reaches the
+    /// servers its HTTP client reaches. The protocol versions and cipher
+    /// suites are those of [`TlsClient::client_config`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TlsClientError::Refused`] when the platform verifier refuses
+    /// the extra roots or rustls refuses the identity.
+    #[cfg(feature = "platform-verifier")]
+    pub fn platform_config(&self) -> Result<ClientConfig, TlsClientError> {
+        let provider = crate::tls::provider();
+        let verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
+            self.roots.iter().cloned(),
+            std::sync::Arc::clone(&provider),
+        )
+        .map_err(|source| self.refused("trust_roots_file", source))?;
+        let builder = self
+            .versions(provider)?
+            .dangerous()
+            .with_custom_certificate_verifier(std::sync::Arc::new(verifier));
+        self.authenticate(builder)
+    }
+
+    /// The configuration builder over `provider` at the table's versions.
+    fn versions(
+        &self,
+        provider: std::sync::Arc<rustls::crypto::CryptoProvider>,
+    ) -> Result<rustls::ConfigBuilder<ClientConfig, rustls::WantsVerifier>, TlsClientError> {
+        ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(crate::tls::protocol_versions(self.min_version))
+            .map_err(|source| self.refused("client_identity", source))
+    }
+
+    /// `builder` finished with the client identity, or with none.
+    fn authenticate(
+        &self,
+        builder: rustls::ConfigBuilder<ClientConfig, rustls::client::WantsClientCert>,
+    ) -> Result<ClientConfig, TlsClientError> {
         match &self.identity {
             None => Ok(builder.with_no_client_auth()),
             Some(identity) => builder
@@ -376,6 +423,12 @@ mod tests {
         let config = client
             .client_config(RootCertStore::empty())
             .expect("the configuration");
+        exchange(address, config).await
+    }
+
+    /// The body of `GET /peer` over a connection under `config`, or `None`
+    /// when no answer came.
+    async fn exchange(address: SocketAddr, config: rustls::ClientConfig) -> Option<String> {
         let stream = tokio::net::TcpStream::connect(address).await.ok()?;
         let name = rustls::pki_types::ServerName::try_from("localhost").expect("a name");
         let mut stream = tokio_rustls::TlsConnector::from(Arc::new(config))
@@ -420,6 +473,34 @@ mod tests {
             peer(address, &untrusted).await,
             "the CA is no platform root"
         );
+    }
+
+    #[cfg(feature = "platform-verifier")]
+    #[tokio::test]
+    async fn the_platform_configuration_presents_the_identity_and_trusts_the_extra_root() {
+        let pki = Pki::new();
+        let address = pki.serve().await;
+        let connect = |client: TlsClient| async move {
+            let config = client.platform_config().expect("the configuration");
+            exchange(address, config).await
+        };
+        let with = TlsClient::read("remote", &pki.client(true)).expect("the material reads");
+        assert_eq!(Some("1".to_owned()), connect(with).await);
+        let without = TlsClient::read("remote", &pki.client(false)).expect("the roots read");
+        assert_eq!(
+            None,
+            connect(without).await,
+            "the listener requires an identity"
+        );
+        let untrusted = TlsClient::read(
+            "remote",
+            &TlsClientSection {
+                client_identity_file: Some(pki.path("identity.pem")),
+                ..TlsClientSection::default()
+            },
+        )
+        .expect("the identity reads");
+        assert_eq!(None, connect(untrusted).await, "the CA is no platform root");
     }
 
     #[cfg(feature = "reqwest")]
