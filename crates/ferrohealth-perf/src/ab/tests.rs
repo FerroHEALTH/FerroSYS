@@ -118,7 +118,7 @@ fn the_alternation_order_is_recorded() {
     assert!(text.contains("\"first\":\"head\""), "{text}");
     let summary = summary::ab_markdown(&report, &judge(&report).unwrap());
     assert!(
-        summary.contains("(base then head; head then base; base then head)"),
+        summary.contains("(the base leads; the head leads; the base leads)"),
         "{summary}"
     );
 }

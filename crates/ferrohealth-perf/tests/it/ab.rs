@@ -326,3 +326,65 @@ fn a_placeholder_one_arm_leaves_unfilled_refuses_the_run_before_any_load() {
         assert!(!reports.exists(), "{extra:?}: no phase ran");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_two_phases_of_a_pair_take_turns_at_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let (base_process, head_process) =
+        (Planted::start("quiet", None), Planted::start("quiet", None));
+    let dir = tempfile::tempdir().unwrap();
+    let plan = dir.path().join("plan.toml");
+    std::fs::write(
+        &plan,
+        support::plan(&support::request("item", "/item/@ARM@", 200)),
+    )
+    .unwrap();
+    let reports = dir.path().join("reports");
+    let (base_pid, head_pid) = (
+        base_process.pid().to_string(),
+        head_process.pid().to_string(),
+    );
+    let uri = server.uri();
+    let output = perf(
+        &[
+            "ab",
+            "--plan",
+            plan.to_str().unwrap(),
+            "--base-url",
+            &uri,
+            "--base-pid",
+            &base_pid,
+            "--base-var",
+            "ARM=base",
+            "--head-url",
+            &uri,
+            "--head-pid",
+            &head_pid,
+            "--head-var",
+            "ARM=head",
+            "--pairs",
+            "2",
+            "--out-dir",
+            reports.to_str().unwrap(),
+        ],
+        &dir.path().join("step.md"),
+    );
+    assert_eq!(Some(0), output.status.code(), "{}", text(&output.stderr));
+    let arms: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect();
+    let turns = arms.windows(2).filter(|two| two[0] != two[1]).count();
+    assert!(
+        arms.len() > 400 && turns * 10 > arms.len() * 9,
+        "{turns} turns in {} requests: the arms sent one after the other",
+        arms.len()
+    );
+}

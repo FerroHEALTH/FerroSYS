@@ -9,11 +9,17 @@
 //! cannot judge a run on another. The product starts the base and the head
 //! side by side, and the run measures both: the idle phase against the
 //! head, held to the plan's absolute limits, then pairs of load phases,
-//! one per arm, each after its own warm-up. The first pair runs the base
-//! first, the next the head first, and so on (AB, BA, AB, BA), and the
-//! count of pairs is even, so a linear drift over the job reaches both arms
-//! alike: with an odd count the head runs second in most of the pairs and
-//! the drift leans against it (#283). The order is recorded with each pair.
+//! one per arm, each after its own warm-up.
+//!
+//! The two phases of a pair run at once, each arm at the plan's rate, with
+//! the arrivals of one arm half an interval after the other's, so the
+//! servers take turns and the host's state at every moment reaches both.
+//! Phases run one after the other did not: on GitHub's AMD EPYC 9V74
+//! runners the latency of unchanged code moved by up to a third from one
+//! phase to the next, and four phases an arm put the head up to 37 % off
+//! its base (#287). The base leads in the first pair, the head in the next,
+//! and so on, with an even count of pairs (#283); the arm that leads is
+//! recorded with each pair as its `first`.
 //!
 //! Each load metric is judged as the head's median over its phases against
 //! the base's. The limit is the larger of the plan's `[tolerance]` and the
@@ -32,10 +38,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use ferrohealth_secret::secret_url::SecretUrl;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::time::Instant;
 
 use crate::baseline::{Tolerances, across};
 use crate::compare::{Check, Findings, Limit, Verdict, add_failures, schedule_problems};
@@ -57,6 +65,10 @@ pub const SCHEMA: u32 = 1;
 /// The pairs of load phases a run measures unless told otherwise, an even
 /// count.
 pub const DEFAULT_PAIRS: u32 = 4;
+
+/// How long before the leading arm's schedule starts a pair is set up, so
+/// both arms read their databases' counts first.
+const PHASE_LEAD: Duration = Duration::from_millis(250);
 
 /// One of the two servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -385,10 +397,17 @@ async fn carry_out(
     let started = now();
     let idle = idle_phase(plan, &arms.head.instruments).await?;
     let mut pairs = Vec::new();
+    let lag = Duration::try_from_secs_f64(0.5 / plan.load.rate).unwrap_or(Duration::ZERO);
     for index in 0..even_pairs(options.pairs) {
         let first = Arm::first_of(index);
-        let one = phase(arms.of(first), &client, &credentials).await?;
-        let two = phase(arms.of(first.other()), &client, &credentials).await?;
+        let lead = Instant::now()
+            .checked_add(PHASE_LEAD)
+            .unwrap_or_else(Instant::now);
+        let follow = lead.checked_add(lag).unwrap_or(lead);
+        let (one, two) = tokio::try_join!(
+            phase(arms.of(first), &client, &credentials, lead),
+            phase(arms.of(first.other()), &client, &credentials, follow),
+        )?;
         let (base, head) = match first {
             Arm::Base => (one, two),
             Arm::Head => (two, one),
@@ -442,6 +461,7 @@ async fn phase(
     side: &Side,
     client: &reqwest::Client,
     credentials: &crate::credentials::Credentials,
+    start: Instant,
 ) -> Result<LoadReport, RunError> {
     load_phase(
         &side.plan,
@@ -449,6 +469,7 @@ async fn phase(
         client,
         credentials,
         &side.instruments,
+        start,
     )
     .await
 }
