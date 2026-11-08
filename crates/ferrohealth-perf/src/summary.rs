@@ -9,7 +9,7 @@
 //! GitHub Flavored Markdown ("Adding a job summary", GitHub Actions
 //! documentation).
 
-use crate::ab::AbReport;
+use crate::ab::{AbReport, Arm, ArmValues};
 use crate::compare::{Check, Outcome, Verdict};
 use crate::quantile::{Quantile, QuantileName};
 use crate::report::Report;
@@ -99,6 +99,13 @@ pub fn markdown(report: &Report, verdict: &Verdict) -> String {
 /// tolerance and the noise floor.
 #[must_use]
 pub fn ab_markdown(report: &AbReport, verdict: &Verdict) -> String {
+    ab_markdown_with_values(report, verdict, &ArmValues::default())
+}
+
+/// The summary of [`ab_markdown`], naming the plan values each arm was
+/// filled with when there are any.
+#[must_use]
+pub fn ab_markdown_with_values(report: &AbReport, verdict: &Verdict, values: &ArmValues) -> String {
     let mut out = String::new();
     line(
         &mut out,
@@ -128,6 +135,20 @@ pub fn ab_markdown(report: &AbReport, verdict: &Verdict) -> String {
         ),
     );
     line(&mut out, "");
+    for arm in [Arm::Base, Arm::Head] {
+        let filled: Vec<String> = values
+            .of(arm)
+            .iter()
+            .map(|(name, value)| format!("`{name}` = `{value}`"))
+            .collect();
+        if !filled.is_empty() {
+            line(
+                &mut out,
+                &format!("The {arm}'s plan values: {}.", filled.join(", ")),
+            );
+            line(&mut out, "");
+        }
+    }
     list(&mut out, "Why it could not be judged", &verdict.problems);
     let (compared, limits): (Vec<&Check>, Vec<&Check>) = verdict
         .checks

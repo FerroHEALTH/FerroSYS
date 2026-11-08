@@ -235,6 +235,7 @@ ferrohealth-perf ab --plan perf/plan.toml \
 | `--head-database-url` | `FERROHEALTH_PERF_HEAD_DATABASE_URL` | the head's database, also held to the idle limit |
 | `--base-mllp-address`, `--head-mllp-address` | the plan's `[mllp] address` | each server's MLLP listener |
 | `--pairs` | `4` | the pairs of load phases, an even count of at least 2 |
+| `--base-var`, `--head-var` | none | a plan value of that arm, `NAME=VALUE`, repeated per name |
 | `--cgroup-root`, `--out-dir`, `--summary` | as for `run` | |
 
 1. **Idle.** The head's idle phase is held to the plan's absolute limits,
@@ -262,6 +263,34 @@ ferrohealth-perf ab --plan perf/plan.toml \
    Requests the head answered other than expected fail the run; those the
    base answered other than expected (a route the change adds, say) are
    noted, and a metric only one arm measured is noted and not judged.
+
+### Values per arm
+
+A request can name what each server assigned on its own, such as the id of
+a record the product seeded into each arm. Write the value in the plan as
+an upper-case name between at signs, and give each arm its own value:
+
+```toml
+[[requests]]
+group = "read"
+method = "GET"
+path = "/fhir/Condition/@READ_ID@"
+status = 200
+```
+
+```sh
+ferrohealth-perf ab --plan perf/plan.toml ... \
+  --base-var "READ_ID=$BASE_READ_ID" --head-var "READ_ID=$HEAD_READ_ID"
+```
+
+A name is an upper-case letter followed by upper-case letters, digits and
+`_`. The tool fills each arm's copy of the plan in request paths, header
+values and bodies, and in the HL7 v2 message files, inserting each value
+as written. Every placeholder needs a value for both arms and every value
+a placeholder, so a missing or misspelt name refuses the run with exit 2
+before any phase, naming the placeholder and the arm. The report records
+both arms' values under `values` and the summary names them, so pass ids,
+never a secret.
 
 The JSON report, `report-<UTC time>.json` and `latest.json`, holds the
 head's idle phase, every pair with its order, the tolerances and the

@@ -31,7 +31,8 @@
 //!   it measured on which host.
 //! - [`baseline`] and [`compare`]: `perf/baseline.toml` and the judgement.
 //! - [`summary`]: the Markdown step summary.
-//! - [`run`]: one run, end to end, and [`ab`]: one A/B run.
+//! - [`run`]: one run, end to end, and [`ab`]: one A/B run, with
+//!   [`values`] filling each arm's plan.
 //!
 //! No specification governs the gate: our own design (#249).
 
@@ -51,3 +52,4 @@ pub mod quantile;
 pub mod report;
 pub mod run;
 pub mod summary;
+pub mod values;

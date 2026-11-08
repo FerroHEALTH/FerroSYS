@@ -113,3 +113,18 @@ fn a_plan_of_messages_needs_a_listener() {
     .unwrap();
     assert!(Sender::new(&http_only, None).unwrap().is_none());
 }
+
+#[test]
+fn a_message_file_is_filled_with_its_values_as_it_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a.hl7");
+    std::fs::write(&file, A01.replace("PID|||P-1", "PID|||@PATIENT@")).unwrap();
+    let values = crate::values::Values::parse(&["PATIENT=P-9"]).unwrap();
+    let message = Message::read_filled(&file, &values).unwrap();
+    let text = String::from_utf8(message.framed("c")).unwrap();
+    assert!(text.contains("PID|||P-9^^^"), "{text:?}");
+    assert!(matches!(
+        Message::read_filled(&file, &crate::values::Values::default()),
+        Err(MllpError::Message { reason, .. }) if reason.contains("no value")
+    ));
+}

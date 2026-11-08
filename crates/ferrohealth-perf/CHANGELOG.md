@@ -10,6 +10,21 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `ferrohealth-perf ab` takes plan values per arm, `--base-var NAME=VALUE`
+  and `--head-var NAME=VALUE`, each repeatable (#286). A product whose
+  seeded record gets a server-assigned id, such as an id derived from the
+  uid each arm's CDR assigns, names it as `@NAME@` in a request path,
+  header value or body, or in an HL7 v2 message file, and each arm's copy
+  of the plan is filled with that arm's value. A placeholder with no value
+  for an arm, or a value that fills no placeholder, refuses the run with
+  exit 2 before any phase, naming the placeholder and the arm. The report
+  records both arms' values under `values`, `compare` reads them back, and
+  the summary names them. In the library, `ab::run_with` takes the values
+  as `ab::ArmValues` of `values::Values`, and `ab::run` sends the plan as
+  written, as before.
+
 ## [0.5.1] - 2026-11-08
 
 ### Fixed

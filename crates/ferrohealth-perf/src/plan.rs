@@ -313,7 +313,7 @@ impl Plan {
         Ok(plan)
     }
 
-    fn check(&self) -> Result<(), PlanError> {
+    pub(crate) fn check(&self) -> Result<(), PlanError> {
         let invalid = |text: String| Err(PlanError::Invalid(text));
         if self.requests.is_empty() && self.messages.is_empty() {
             return invalid("the request set is empty".to_owned());
