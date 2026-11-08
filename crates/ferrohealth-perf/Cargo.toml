@@ -4,7 +4,7 @@
 name = "ferrohealth-perf"
 description = "The performance gate of the FerroHEALTH servers: idle CPU and transaction limits, open-loop load latency, memory and CPU per request, judged against the change's base on the same host or a committed baseline"
 # Its own version line, released by the tag ferrohealth-perf-v<version>.
-version = "0.5.1"
+version = "0.5.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
