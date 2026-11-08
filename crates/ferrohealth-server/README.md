@@ -22,6 +22,13 @@ runs the same stack, the same health routes and the same shutdown.
     `503` with `Retry-After`, and the health routes are never refused;
   - the request log of `ferrohealth-telemetry`, one line for every request,
     a refusal and a panic included.
+  - the security headers of an API response, outermost, so the stack's
+    own refusals carry them too: `no-store`, `nosniff`, a referrer policy,
+    `Cross-Origin-Resource-Policy`, `DENY` framing and a CSP that admits
+    nothing, each set only when the response lacks it, and
+    `Strict-Transport-Security` when the listener serves TLS itself. A
+    route tree that answers with headers of its own opts out with
+    `api_headers::exempt`.
 - `stack::Stack` builds the same stack and also mounts routes beside the
   base path (`beside`) and the product's own answer to a request no route
   matched (`fallback`), each inside every layer above.

@@ -4,6 +4,7 @@
 //! The stack: the product, the section, the capture and the request
 //! helpers every test of it shares.
 
+mod headers;
 mod lines;
 mod refusals;
 mod routes;

@@ -17,6 +17,8 @@
 //! - [`client_address`]: the address a request came from, read behind the
 //!   trusted proxies;
 //! - gzip and Brotli response compression, on by default;
+//! - [`api_headers`]: the security headers of an API response, outermost,
+//!   so the stack's own refusals carry them too;
 //! - the request log of `ferrohealth-telemetry`;
 //! - [`health`]: `/health`, `/health/liveness`, `/health/readiness` and,
 //!   when the product supplies it, `/health/info`.
@@ -47,6 +49,7 @@
 //! No specification governs the stack: our own design, with the status
 //! codes and `Retry-After` of RFC 9110.
 
+pub mod api_headers;
 pub mod build_info;
 pub mod caller_rate;
 pub mod cli;
