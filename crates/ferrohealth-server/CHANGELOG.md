@@ -10,6 +10,14 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `tls_client::TlsClient::certificate` returns the end-entity certificate
+  of the client identity, the first certificate of its chain (RFC 8446
+  §4.4.2), or `None` without an identity. A product that binds tokens to
+  that certificate takes its RFC 8705 §3.1 thumbprint from it, without
+  reading `client_identity_file` a second time (#300).
+
 ## [0.6.2] - 2026-11-08
 
 ### Added

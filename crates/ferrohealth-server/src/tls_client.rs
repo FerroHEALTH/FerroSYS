@@ -7,11 +7,13 @@
 //! `client_identity_file`: the client certificate chain and its private key
 //! in one PEM, presented for mutual TLS and held as a secret; and
 //! `trust_roots_file`, a PEM bundle of trust roots beside the platform's.
-//! [`TlsClient::read`] reads every file once; [`TlsClient::client_config`]
-//! gives a rustls configuration over the platform roots the caller hands
-//! it, `TlsClient::platform_config` (feature `platform-verifier`) one over
-//! the platform's verifier, and `TlsClient::apply` (feature `reqwest`) sets
-//! the same material on a `reqwest::ClientBuilder`. No specification
+//! [`TlsClient::read`] reads every file once, and [`TlsClient::certificate`]
+//! returns the identity's end-entity certificate;
+//! [`TlsClient::client_config`] gives a rustls configuration over the
+//! platform roots the caller hands it, `TlsClient::platform_config` (feature
+//! `platform-verifier`) one over the platform's verifier, and
+//! `TlsClient::apply` (feature `reqwest`) sets the same material on a
+//! `reqwest::ClientBuilder`. No specification
 //! governs the keys: our own design.
 
 use std::path::PathBuf;
@@ -177,6 +179,21 @@ impl TlsClient {
     #[must_use]
     pub const fn has_identity(&self) -> bool {
         self.identity.is_some()
+    }
+
+    /// The end-entity certificate of the client identity, the first
+    /// certificate of its chain (RFC 8446 §4.4.2), or `None` without an
+    /// identity.
+    ///
+    /// It is the certificate the handshake sends, public material, so a
+    /// product takes what it binds to the identity from it, such as the
+    /// certificate thumbprint of RFC 8705 §3.1, without reading the file a
+    /// second time.
+    #[must_use]
+    pub fn certificate(&self) -> Option<&CertificateDer<'static>> {
+        self.identity
+            .as_ref()
+            .and_then(|identity| identity.chain.first())
     }
 
     /// The rustls configuration that trusts `platform_roots` and the extra
@@ -521,6 +538,33 @@ mod tests {
             .expect("the call is answered");
         assert_eq!(http::StatusCode::OK, answer.status());
         assert_eq!("1", answer.text().await.expect("the body"));
+    }
+
+    #[test]
+    fn the_certificate_is_the_first_of_the_identity_chain() {
+        use rustls::pki_types::CertificateDer;
+        use rustls::pki_types::pem::PemObject as _;
+
+        let pki = Pki::new();
+        let text = |name: &str| std::fs::read_to_string(pki.path(name)).expect("the file");
+        let chained = format!(
+            "{}{}{}",
+            text("client.pem"),
+            text("ca.pem"),
+            text("client.key")
+        );
+        write(pki.dir.path(), "chained.pem", &chained);
+        let leaf = CertificateDer::from_pem_file(pki.path("client.pem")).expect("the leaf");
+        let section = TlsClientSection {
+            client_identity_file: Some(pki.path("chained.pem")),
+            ..TlsClientSection::default()
+        };
+        let client = TlsClient::read("xcpd", &section).expect("the chain reads");
+        assert_eq!(Some(&leaf), client.certificate());
+        let without =
+            TlsClient::read("xcpd", &TlsClientSection::default()).expect("nothing to read");
+        assert_eq!(None, without.certificate());
+        assert!(!without.has_identity());
     }
 
     #[test]
