@@ -100,6 +100,11 @@ struct Identity {
 }
 
 /// The outbound TLS material of one table, every file read.
+///
+/// Two reads are equal when they read the same material: the identity's
+/// chain and private key, the extra roots and the minimum version. The table
+/// key takes no part, so a reload compares what the files held, and a
+/// certificate renewed at the same path compares unequal.
 pub struct TlsClient {
     key: String,
     identity: Option<Identity>,
@@ -117,6 +122,21 @@ impl std::fmt::Debug for TlsClient {
             .finish()
     }
 }
+
+impl PartialEq for TlsClient {
+    fn eq(&self, other: &Self) -> bool {
+        let identity = match (&self.identity, &other.identity) {
+            (None, None) => true,
+            (Some(ours), Some(theirs)) => {
+                ours.chain == theirs.chain && ours.key.secret_der() == theirs.key.secret_der()
+            }
+            _ => false,
+        };
+        identity && self.roots == other.roots && self.min_version == other.min_version
+    }
+}
+
+impl Eq for TlsClient {}
 
 impl TlsClient {
     /// Reads the material `section` names, the table at `key` (such as
@@ -565,6 +585,72 @@ mod tests {
             TlsClient::read("xcpd", &TlsClientSection::default()).expect("nothing to read");
         assert_eq!(None, without.certificate());
         assert!(!without.has_identity());
+    }
+
+    #[test]
+    fn two_reads_are_equal_over_the_material_they_read() {
+        let pki = Pki::new();
+        let read = |key: &str, section: &TlsClientSection| {
+            TlsClient::read(key, section).expect("the material reads")
+        };
+        let first = read("xcpd", &pki.client(true));
+        assert_eq!(first, read("xcpd", &pki.client(true)));
+        assert_eq!(
+            first,
+            read("pdqm", &pki.client(true)),
+            "the table key takes no part"
+        );
+        let inline = TlsClientSection {
+            client_identity: Some(Secret::new(
+                std::fs::read_to_string(pki.path("identity.pem")).expect("the identity"),
+            )),
+            client_identity_file: None,
+            ..pki.client(true)
+        };
+        assert_eq!(first, read("xcpd", &inline), "the same identity inline");
+        assert_ne!(first, read("xcpd", &pki.client(false)), "no identity");
+        assert_ne!(
+            first,
+            read(
+                "xcpd",
+                &TlsClientSection {
+                    min_version: crate::section::TlsVersion::Tls12,
+                    ..pki.client(true)
+                }
+            ),
+            "another minimum version"
+        );
+
+        let renewed = Pki::new();
+        std::fs::copy(renewed.path("identity.pem"), pki.path("identity.pem"))
+            .expect("the identity is renewed in place");
+        let after_renewal = read("xcpd", &pki.client(true));
+        assert_ne!(first, after_renewal, "a renewed identity at the same path");
+
+        std::fs::copy(renewed.path("ca.pem"), pki.path("ca.pem"))
+            .expect("the roots are replaced in place");
+        assert_ne!(
+            after_renewal,
+            read("xcpd", &pki.client(true)),
+            "a changed roots file at the same path"
+        );
+    }
+
+    #[test]
+    fn a_renewed_key_under_the_same_chain_compares_unequal() {
+        let pki = Pki::new();
+        let text = |name: &str| std::fs::read_to_string(pki.path(name)).expect("the file");
+        let first = TlsClient::read("xcpd", &pki.client(true)).expect("the material reads");
+        let other_key = KeyPair::generate().expect("a key").serialize_pem();
+        write(
+            pki.dir.path(),
+            "identity.pem",
+            &format!("{}{other_key}", text("client.pem")),
+        );
+        let rekeyed = TlsClient::read("xcpd", &pki.client(true)).expect("the material reads");
+        assert_ne!(first, rekeyed, "the key takes part");
+        let rendered = format!("{rekeyed:?}");
+        assert!(!rendered.contains("PRIVATE KEY"), "{rendered}");
     }
 
     #[test]

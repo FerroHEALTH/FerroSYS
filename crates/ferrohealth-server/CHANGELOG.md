@@ -10,6 +10,15 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `tls_client::TlsClient` implements `PartialEq` and `Eq` over the
+  material it read: the identity's chain and private key, the extra roots
+  and the minimum version. The table key takes no part. A product that
+  reloads its configuration compares two reads and rebuilds a client only
+  when they differ, so a certificate renewed at the same path rebuilds it.
+  `Debug` still shows no material (#305).
+
 ## [0.6.3] - 2026-11-08
 
 ### Added
