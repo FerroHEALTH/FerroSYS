@@ -7,10 +7,12 @@
 //!
 //! The plan names the files: `[load] client_identity_file` (a PEM
 //! certificate chain and its private key), `[load] trust_roots_file` (the
-//! roots that verify an `https` target), and per request `dpop_key_file` (a
-//! P-256 private key in PKCS#8 PEM). A relative path is read from the working
-//! directory. Each file is read when the plan is, so a file that cannot be
-//! read or parsed refuses the plan before any phase runs.
+//! roots that verify an `https` target), both read by `ferrohealth-server`'s
+//! `TlsClient` as every FerroHEALTH product reads its outbound TLS keys, and
+//! per request `dpop_key_file` (a P-256 private key in PKCS#8 PEM). A
+//! relative path is read from the working directory. Each file is read when
+//! the plan is, so a file that cannot be read or parsed refuses the plan
+//! before any phase runs.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -20,7 +22,8 @@ use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair as _};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use reqwest::{Certificate, ClientBuilder, Identity};
+use ferrohealth_server::tls_client::{TlsClient, TlsClientError};
+use reqwest::ClientBuilder;
 use thiserror::Error;
 use url::Url;
 
@@ -54,14 +57,16 @@ pub enum CredentialError {
     /// A proof could not be signed.
     #[error("a DPoP proof could not be signed")]
     Sign,
+    /// The client identity or the trust roots cannot be used.
+    #[error("the TLS client material of [load] cannot be used")]
+    Tls(#[from] TlsClientError),
 }
 
 /// What the load client presents: its TLS identity and trust roots, and the
 /// `DPoP` key of each request of the plan, in the plan's order.
 #[derive(Debug, Default, Clone)]
 pub struct Credentials {
-    identity: Option<Identity>,
-    roots: Vec<Certificate>,
+    tls: Option<Arc<TlsClient>>,
     dpop: Vec<Option<Arc<DpopKey>>>,
 }
 
@@ -70,44 +75,13 @@ impl Credentials {
     ///
     /// # Errors
     ///
-    /// [`CredentialError::Read`] for a file that cannot be read, and
-    /// [`CredentialError::Parse`] for one that holds no certificate chain
-    /// and key, no certificate, or no P-256 PKCS#8 key.
+    /// [`CredentialError::Tls`] for a client identity or trust roots file
+    /// that cannot be read or holds no certificate chain and key or no
+    /// certificate, and [`CredentialError::Read`] or
+    /// [`CredentialError::Parse`] for a `DPoP` key that cannot be read or
+    /// holds no P-256 PKCS#8 key.
     pub fn load(plan: &Plan) -> Result<Self, CredentialError> {
-        let identity = plan
-            .load
-            .client_identity_file
-            .as_deref()
-            .map(|path| {
-                let pem = read(path, "client identity")?;
-                Identity::from_pem(&pem).map_err(|source| CredentialError::Parse {
-                    what: "client identity",
-                    path: path.display().to_string(),
-                    source: Some(Box::new(source)),
-                })
-            })
-            .transpose()?;
-        let roots = match plan.load.trust_roots_file.as_deref() {
-            None => Vec::new(),
-            Some(path) => {
-                let pem = read(path, "trust roots")?;
-                let roots = Certificate::from_pem_bundle(&pem).map_err(|source| {
-                    CredentialError::Parse {
-                        what: "trust roots",
-                        path: path.display().to_string(),
-                        source: Some(Box::new(source)),
-                    }
-                })?;
-                if roots.is_empty() {
-                    return Err(CredentialError::Parse {
-                        what: "trust roots",
-                        path: path.display().to_string(),
-                        source: None,
-                    });
-                }
-                roots
-            }
-        };
+        let tls = TlsClient::read("load", &plan.load.tls())?;
         let dpop = plan
             .requests
             .iter()
@@ -120,21 +94,22 @@ impl Credentials {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            identity,
-            roots,
+            tls: Some(Arc::new(tls)),
             dpop,
         })
     }
 
-    /// `builder` with the client identity and the trust roots.
-    pub fn apply(&self, mut builder: ClientBuilder) -> ClientBuilder {
-        if let Some(identity) = &self.identity {
-            builder = builder.identity(identity.clone());
+    /// `builder` with the client identity, the trust roots and the oldest
+    /// TLS version of the plan.
+    ///
+    /// # Errors
+    ///
+    /// [`CredentialError::Tls`] when reqwest refuses the identity or a root.
+    pub fn apply(&self, builder: ClientBuilder) -> Result<ClientBuilder, CredentialError> {
+        match &self.tls {
+            Some(tls) => Ok(tls.apply(builder)?),
+            None => Ok(builder),
         }
-        for root in &self.roots {
-            builder = builder.add_root_certificate(root.clone());
-        }
-        builder
     }
 
     /// The `DPoP` key of request `index` of the plan, if it has one.

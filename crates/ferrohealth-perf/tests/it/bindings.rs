@@ -145,6 +145,7 @@ async fn the_client_identity_is_presented_on_every_connection() {
     let credentials = Credentials::load(&plan).unwrap();
     let client = credentials
         .apply(reqwest::Client::builder().no_proxy())
+        .unwrap()
         .build()
         .unwrap();
     let outcome = drive(
@@ -178,6 +179,7 @@ async fn the_client_identity_is_presented_on_every_connection() {
     let credentials = Credentials::load(&anonymous).unwrap();
     let client = credentials
         .apply(reqwest::Client::builder().no_proxy())
+        .unwrap()
         .build()
         .unwrap();
     let outcome = drive(

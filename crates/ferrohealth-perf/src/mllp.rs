@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use rustls::pki_types::pem::PemObject as _;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use ferrohealth_server::tls_client::TlsClient;
+use rustls::pki_types::ServerName;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpStream;
@@ -447,48 +447,9 @@ fn host_of(address: &str) -> String {
 /// The TLS connector of `plan`'s client identity and trust roots, beside the
 /// platform's, verifying the listener as `host`.
 fn tls(plan: &Plan, host: String) -> Result<(TlsConnector, ServerName<'static>), MllpError> {
-    let read = |path: &Path, what: &'static str| {
-        std::fs::read(path).map_err(|source| crate::credentials::CredentialError::Read {
-            what,
-            path: path.display().to_string(),
-            source,
-        })
-    };
-    let parse = |path: &Path, what: &'static str| crate::credentials::CredentialError::Parse {
-        what,
-        path: path.display().to_string(),
-        source: None,
-    };
-    let mut roots = Vec::new();
-    if let Some(path) = plan.load.trust_roots_file.as_deref() {
-        let pem = read(path, "trust roots")?;
-        roots = CertificateDer::pem_slice_iter(&pem)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_bad| parse(path, "trust roots"))?;
-    }
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier =
-        rustls_platform_verifier::Verifier::new_with_extra_roots(roots, Arc::clone(&provider))
-            .map_err(|error| MllpError::Tls("the trust roots", Some(error)))?;
-    let builder = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|error| MllpError::Tls("the protocol versions", Some(error)))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier));
-    let config = match plan.load.client_identity_file.as_deref() {
-        None => builder.with_no_client_auth(),
-        Some(path) => {
-            let pem = read(path, "client identity")?;
-            let chain = CertificateDer::pem_slice_iter(&pem)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|_bad| parse(path, "client identity"))?;
-            let key = PrivateKeyDer::from_pem_slice(&pem)
-                .map_err(|_bad| parse(path, "client identity"))?;
-            builder
-                .with_client_auth_cert(chain, key)
-                .map_err(|error| MllpError::Tls("the client identity", Some(error)))?
-        }
-    };
+    let config = TlsClient::read("load", &plan.load.tls())
+        .and_then(|client| client.platform_config())
+        .map_err(crate::credentials::CredentialError::from)?;
     let name =
         ServerName::try_from(host).map_err(|_invalid| MllpError::Tls("the server name", None))?;
     Ok((TlsConnector::from(Arc::new(config)), name))
