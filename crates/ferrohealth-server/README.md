@@ -66,7 +66,9 @@ runs the same stack, the same health routes and the same shutdown.
   `client_address` names a request's client, `caller_rate` limits one
   caller, `health::Health::with_info` serves `/health/info`, and
   `tls_client` reads the TLS material of outbound calls (feature `reqwest`
-  sets it on a reqwest client).
+  sets it on a reqwest client, and feature `platform-verifier` gives the
+  rustls configuration over the platform's verifier for TLS outside
+  HTTP).
 - `revocation` (feature `revocation`) checks every certificate an outbound
   peer presents by its CRL, then its OCSP responder, before any data is
   sent, and hands out a reqwest client that connects only over a chain a

@@ -913,6 +913,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "rustls",
+ "rustls-platform-verifier",
  "secrecy",
  "serde",
  "serde_json",
