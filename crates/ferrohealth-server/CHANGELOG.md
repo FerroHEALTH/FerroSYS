@@ -18,6 +18,12 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
   reloads its configuration compares two reads and rebuilds a client only
   when they differ, so a certificate renewed at the same path rebuilds it.
   `Debug` still shows no material (#305).
+- `revocation::RevocationCheck::from_tls_client` builds the check from
+  the material a `tls_client::TlsClient` read: its extra roots are the
+  trust anchors, its identity is presented and its `min_version` is the
+  link's minimum. A product that reads a table through `TlsClient` builds
+  the check without reading the files a second time; `from_pem` shares the
+  same build (#307).
 
 ## [0.6.3] - 2026-11-08
 
