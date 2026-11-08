@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-09
+
 ### Added
 
 - `tls_client::TlsClient` implements `PartialEq` and `Eq` over the
@@ -551,7 +553,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.3...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.4...HEAD
+[0.6.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.3...ferrohealth-server-v0.6.4
 [0.6.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.2...ferrohealth-server-v0.6.3
 [0.6.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.1...ferrohealth-server-v0.6.2
 [0.6.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.0...ferrohealth-server-v0.6.1
