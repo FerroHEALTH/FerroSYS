@@ -29,7 +29,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   `ferrohealth-smart` carried for itself (#310).
 - `tls::TlsClientSection` and `tls::TlsVersion`, the outbound TLS keys of a
   table that names a remote service and the oldest TLS version spoken,
-  with `TlsClientSection::names_material` (#310).
+  with `TlsClientSection::names_material`. `TlsVersion` orders oldest
+  first, so the higher of two minimums is their `max` (#310).
 - Feature `schema`: `schemars::JsonSchema` on each type above, for a
   product that generates its configuration reference from its types
   (#310).
