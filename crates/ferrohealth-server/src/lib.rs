@@ -35,6 +35,8 @@
 //! within a bound, over TLS when `[server.tls]` is set ([`tls`]);
 //! [`serve::run_all`] serves several listeners under one signal.
 //! [`tls_client`] reads the TLS material of a product's outbound calls,
+//! `telemetry` (feature `otlp`) builds a product's telemetry with its OTLP
+//! collector dialed over that TLS,
 //! and `revocation` (feature `revocation`) checks every certificate an
 //! outbound peer presents by CRL, then OCSP, before any data is sent.
 //! [`healthcheck`] is the container probe, [`cli::Common`] and
@@ -72,5 +74,7 @@ pub mod same_origin;
 pub mod section;
 pub mod serve;
 pub mod stack;
+#[cfg(feature = "otlp")]
+pub mod telemetry;
 pub mod tls;
 pub mod tls_client;
