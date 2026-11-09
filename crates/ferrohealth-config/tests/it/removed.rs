@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use ferrohealth_config::loader::Loader;
-use ferrohealth_config::removed::{Removals, Removed};
+use ferrohealth_config::removed::{Removals, Removed, Retired, stale};
 use ferrohealth_config::tls::{TlsClientSection, TlsVersion, TlsVersionError};
 use serde::{Deserialize, Serialize};
 
@@ -41,18 +41,25 @@ fn load(file: &str) -> Tree {
         .0
 }
 
-fn removals(tree: &Tree) -> Removals {
-    let mut removals = Removals::new();
-    removals.replaced(
-        tree.server.request_timeout_ms,
+/// The keys [`Server`] retired, in the release `0.3.0` of this fixture.
+const RETIRED: [Retired; 2] = [
+    Retired::replaced(
         "server.request_timeout_ms",
         "server.request_timeout, a duration such as `30s`",
-    );
-    removals.retired(
-        tree.server.swagger_ui,
+        "0.3.0",
+    ),
+    Retired::removed(
         "server.swagger_ui",
         "the product serves no API browser",
-    );
+        "0.3.0",
+    ),
+];
+
+fn removals(tree: &Tree) -> Removals {
+    let [request_timeout_ms, swagger_ui] = &RETIRED;
+    let mut removals = Removals::new();
+    removals.check(tree.server.request_timeout_ms, request_timeout_ms);
+    removals.check(tree.server.swagger_ui, swagger_ui);
     removals
 }
 
@@ -91,6 +98,37 @@ fn an_unset_retired_key_passes_and_renders_as_absent() {
     let rendered = toml::to_string(&tree).expect("the rendering");
     assert!(!rendered.contains("request_timeout_ms"), "{rendered}");
     assert!(!rendered.contains("swagger_ui"), "{rendered}");
+}
+
+#[test]
+fn a_refusal_is_stale_once_the_version_moves_past_its_release() {
+    assert!(
+        stale(&RETIRED, "0.3.0").is_empty(),
+        "the release that retired them"
+    );
+    let past: Vec<&str> = stale(&RETIRED, "0.3.1")
+        .into_iter()
+        .map(Retired::key)
+        .collect();
+    assert_eq!(vec!["server.request_timeout_ms", "server.swagger_ui"], past);
+    assert_eq!(2, stale(&RETIRED, "0.4.0").len(), "a minor release");
+    assert_eq!("0.3.0", RETIRED[0].since());
+}
+
+#[test]
+fn a_key_of_a_repeated_table_is_named_under_it() {
+    let tree = load("[server]\nrequest_timeout_ms = 1\n");
+    let mut removals = Removals::new();
+    removals.check_under(
+        tree.server.request_timeout_ms,
+        &Retired::replaced("request_timeout_ms", "request_timeout", "0.3.0"),
+        "auth.issuer[0]",
+    );
+    let refusal = removals.finish().expect_err("set");
+    assert_eq!(
+        "auth.issuer[0].request_timeout_ms",
+        refusal.removals()[0].key()
+    );
 }
 
 #[test]

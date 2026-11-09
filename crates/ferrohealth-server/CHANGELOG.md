@@ -12,6 +12,12 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [0.8.0] - 2026-11-09
 
+### Changed
+
+- Breaking: the crate builds on `ferrohealth-config` 0.4 and
+  `ferrohealth-telemetry` 0.4, whose types its sections and its stack
+  name. A product moves to both in the same change (#329).
+
 ### Removed
 
 - Breaking: the named refusals of the `[server]` and `[server.tls]` keys

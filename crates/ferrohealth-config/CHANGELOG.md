@@ -10,6 +10,30 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Added
+
+- `removed::Retired`: a retired key as a section declares it, with what
+  took its place and `since`, the crate release that retired it
+  (`Retired::replaced`, `Retired::removed`), and `Removals::check` and
+  `Removals::check_under`, which refuse a set key through its declaration.
+- `removed::stale`: the declarations whose release is not the crate's
+  version. One unit test per crate runs it, so the pull request that moves
+  a version past a refusal's release fails until the refusal is deleted:
+  a removal aid lives for one release (the owner's rule of 2026-11-09)
+  (#329).
+
+### Removed
+
+- Breaking: `Loader::rename`, `loader::Deprecation`, `Loaded::deprecations`,
+  `ConfigError::Renamed` and the `# deprecated:` line of `check_report`.
+  Reading a retired key under its new name is legacy support the
+  one-release rule forbids, and no product called it; an old name is now
+  an unknown key (#329).
+- Breaking: `Removals::replaced` and `Removals::retired`; a refusal goes
+  through its `Retired` declaration (#329).
+
 ## [0.3.0] - 2026-11-09
 
 ### Added

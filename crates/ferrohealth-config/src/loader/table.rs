@@ -67,26 +67,6 @@ pub(super) fn dropped_path(key: &str) -> Vec<String> {
     path
 }
 
-/// Returns the value at `path` in `table`.
-pub(super) fn lookup<'a>(table: &'a toml::Table, path: &[String]) -> Option<&'a toml::Value> {
-    let (last, parents) = path.split_last()?;
-    let mut cursor = table;
-    for parent in parents {
-        cursor = cursor.get(parent.as_str())?.as_table()?;
-    }
-    cursor.get(last.as_str())
-}
-
-/// Removes and returns the value at `path` in `table`.
-pub(super) fn take(table: &mut toml::Table, path: &[String]) -> Option<toml::Value> {
-    let (last, parents) = path.split_last()?;
-    let mut cursor = table;
-    for parent in parents {
-        cursor = cursor.get_mut(parent.as_str())?.as_table_mut()?;
-    }
-    cursor.remove(last.as_str())
-}
-
 /// Removes the value at `path` in `table`, when there is one.
 pub(super) fn remove(table: &mut toml::Table, path: &[String]) {
     let Some((last, parents)) = path.split_last() else {
@@ -141,24 +121,6 @@ pub(super) fn fill(table: &mut toml::Table, defaults: &toml::Table) {
             }
         }
     }
-}
-
-/// Puts `value` at `path` in `table`, creating the tables above it.
-pub(super) fn insert(table: &mut toml::Table, path: &[String], value: toml::Value) {
-    let Some((last, parents)) = path.split_last() else {
-        return;
-    };
-    let mut cursor = table;
-    for parent in parents {
-        let entry = cursor
-            .entry(parent.clone())
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        let toml::Value::Table(next) = entry else {
-            return;
-        };
-        cursor = next;
-    }
-    cursor.insert(last.clone(), value);
 }
 
 /// Returns the dotted key above `key`, or `None` for a top-level key.
