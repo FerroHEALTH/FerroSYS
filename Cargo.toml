@@ -40,7 +40,7 @@ schemars = { version = "1.2.2", default-features = false, features = ["derive", 
 # of the crates built on it; cargo-semver-checks keeps every patch compatible
 # (https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements).
 ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "0.2.0" }
-ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.3.0" }
+ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.4.0" }
 # ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
 # provider read by Prometheus and pushed over OTLP, on the lines FerroFED
 # resolves. Verified against crates.io on 2026-10-26.
@@ -59,7 +59,7 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
 http = "1.5.0"
-ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.3.0" }
+ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.4.0" }
 ferrohealth-health = { path = "crates/ferrohealth-health", version = "0.1.1" }
 ferrohealth-server = { path = "crates/ferrohealth-server", version = "0.8.0" }
 # ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.

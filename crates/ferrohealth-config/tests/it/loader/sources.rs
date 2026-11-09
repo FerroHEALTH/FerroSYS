@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The sources: the defaults, the file, the environment, the overrides, the
-//! fallbacks and the renames, and the provenance each leaves.
+//! fallbacks, and the provenance each leaves.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -133,8 +133,7 @@ fn an_override_is_placed_typed_where_the_tree_wants_a_number_or_a_boolean() {
 
 #[test]
 fn the_table_holds_what_the_sources_set_typed_as_the_tree_took_it() {
-    let renaming = product_defaults().rename("server.bind", "server.listen", "0.3.0");
-    let file = "[server]\nbind = \"10.0.0.5:8080\"\n[cdr]\nurl = \"https://cdr.example.org/\"\n";
+    let file = "[server]\nlisten = \"10.0.0.5:8080\"\n[cdr]\nurl = \"https://cdr.example.org/\"\n";
     let environment = environment(&[
         ("FERROSYS__SERVER__BODY_LIMIT_BYTES", "2048"),
         ("FERROSYS__SERVER__TLS", "false"),
@@ -144,7 +143,7 @@ fn the_table_holds_what_the_sources_set_typed_as_the_tree_took_it() {
         ),
         ("FERROSYS__CDR__PASSWORD", SENTINEL),
     ]);
-    let loaded = renaming
+    let loaded = product_defaults()
         .load_sources::<Config>(Some(file), None, &environment)
         .expect("the sources load");
     let table = loaded.table_with_secrets();
@@ -167,9 +166,8 @@ fn the_table_holds_what_the_sources_set_typed_as_the_tree_took_it() {
     assert_eq!(
         Some(&toml::Value::String("10.0.0.5:8080".to_owned())),
         server.get("listen"),
-        "a renamed key stands under its new name"
+        "a file key stands as written"
     );
-    assert!(!server.contains_key("bind"));
     let cdr = table
         .get("cdr")
         .and_then(toml::Value::as_table)
@@ -458,40 +456,13 @@ fn a_composed_fallback_reads_several_variables_in_the_fallback_order() {
 }
 
 #[test]
-fn a_renamed_key_is_read_under_its_old_name_and_reported() {
-    let renaming = || loader().rename("server.bind", "server.listen", "0.3.0");
-    let loaded = renaming()
+fn an_old_name_is_an_unknown_key_never_read_as_the_new_one() {
+    let error = loader()
         .load_sources::<Config>(
             Some("[server]\nbind = \"0.0.0.0:1\"\n"),
             None,
             &BTreeMap::new(),
         )
-        .expect("the old key is read");
-    assert_eq!("0.0.0.0:1", loaded.settings().server.listen);
-    assert_eq!(
-        vec![ferrohealth_config::loader::Deprecation {
-            old: "server.bind".to_owned(),
-            new: "server.listen".to_owned(),
-            refused_in: "0.3.0".to_owned(),
-        }],
-        loaded.deprecations()
-    );
-    let report = ferrohealth_config::report::check_report(&loaded).expect("the tree renders");
-    assert!(
-        report.contains(
-            "# deprecated: server.bind is read as server.listen, and is refused from 0.3.0"
-        ),
-        "{report}"
-    );
-    let error = renaming()
-        .load_sources::<Config>(
-            Some("[server]\nbind = \"0.0.0.0:1\"\nlisten = \"0.0.0.0:2\"\n"),
-            None,
-            &BTreeMap::new(),
-        )
-        .expect_err("both names are refused");
-    assert_eq!(
-        "server.bind was renamed to server.listen; set server.listen only",
-        error.to_string()
-    );
+        .expect_err("an old name is refused");
+    assert!(error.to_string().contains("bind"), "{error}");
 }

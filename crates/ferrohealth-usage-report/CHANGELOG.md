@@ -10,6 +10,14 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Changed
+
+- Breaking: the `telemetry` feature links `ferrohealth-telemetry` 0.4, so
+  `window::Window` implements that release's `request_log::Recorder`. A
+  product moves to `ferrohealth-telemetry` 0.4 in the same change (#329).
+
 ## [0.3.0] - 2026-11-09
 
 ### Added
