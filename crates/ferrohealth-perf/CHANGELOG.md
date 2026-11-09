@@ -277,7 +277,8 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   `$GITHUB_STEP_SUMMARY`, and the host fingerprint with a warning when it
   differs from the baseline's (#249).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.6.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.7.0...HEAD
+[0.7.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.6.0...ferrohealth-perf-v0.7.0
 [0.6.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.5.2...ferrohealth-perf-v0.6.0
 [0.5.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.5.1...ferrohealth-perf-v0.5.2
 [0.5.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.5.0...ferrohealth-perf-v0.5.1
