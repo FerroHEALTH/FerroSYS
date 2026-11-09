@@ -31,9 +31,12 @@
 //! assert_eq!(1, cli.config.sets.len());
 //! ```
 
+use std::error::Error;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+
+use crate::run::Failure;
 
 /// `--config` and `--set`, which every subcommand takes.
 ///
@@ -78,6 +81,20 @@ pub enum Common {
     Healthcheck,
 }
 
+impl Common {
+    /// The failure this job ends with when the configuration does not load:
+    /// [`Failure::not_up`] for `healthcheck`, which reports the server not
+    /// ready, and [`Failure::refused_configuration`] (exit 78) for `serve`
+    /// and `config check`.
+    #[must_use]
+    pub fn refused(&self, error: impl Into<Box<dyn Error>>) -> Failure {
+        match self {
+            Self::Healthcheck => Failure::not_up(error),
+            Self::Serve | Self::Config { .. } => Failure::refused_configuration(error),
+        }
+    }
+}
+
 /// The `config` jobs.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum ConfigCommand {
@@ -91,6 +108,7 @@ mod tests {
     use clap::{Parser, Subcommand};
 
     use super::{Common, ConfigArgs, ConfigCommand};
+    use crate::run::{EXIT_CONFIG, EXIT_FAILURE};
 
     #[derive(Debug, Parser)]
     struct Cli {
@@ -167,6 +185,26 @@ mod tests {
                 Cli::try_parse_from(["x", "serve", "--set", bad]).is_err(),
                 "{bad:?} is refused"
             );
+        }
+    }
+
+    #[test]
+    fn a_configuration_that_does_not_load_ends_each_job_with_its_failure() {
+        let check = Common::Config {
+            command: ConfigCommand::Check,
+        };
+        for (job, code, line) in [
+            (Common::Serve, EXIT_CONFIG, "cannot start: no server.listen"),
+            (check, EXIT_CONFIG, "cannot start: no server.listen"),
+            (
+                Common::Healthcheck,
+                EXIT_FAILURE,
+                "not up: no server.listen",
+            ),
+        ] {
+            let failure = job.refused("no server.listen");
+            assert_eq!(code, failure.code(), "{job:?}");
+            assert_eq!(line, failure.to_string(), "{job:?}");
         }
     }
 }

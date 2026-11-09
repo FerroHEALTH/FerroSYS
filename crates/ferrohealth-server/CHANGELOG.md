@@ -10,6 +10,23 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `run::Failure::refused_configuration` (the line opens `cannot start`,
+  exit 78) and `run::Failure::not_up` (the line opens `not up`, exit 1),
+  the two failures of a configuration that does not load, and
+  `cli::Common::refused`, which picks `not_up` for `healthcheck` and the
+  refusal for `serve` and `config check` (#342).
+- `run::config_check`, the whole `config check` job: the redacted running
+  tree of a `Loaded<T>` on standard output and exit 0, a tree that does not
+  render exiting 78 (#342).
+- `telemetry::install` (feature `otlp`), the start every binary makes:
+  `telemetry::build`, the subscriber on the detected console and the
+  family's panic hook, returning `telemetry::Installed` with the providers,
+  the console filter handle and a `shutdown` that logs a lost flush. A
+  subscriber already in place is refused with the new variant
+  `telemetry::TelemetryBuildError::Install` (#342).
+
 ## [0.8.0] - 2026-11-09
 
 ### Changed

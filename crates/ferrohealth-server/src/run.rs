@@ -6,7 +6,10 @@
 //! with its whole cause chain.
 //!
 //! A product keeps its own parser and every subcommand body; [`Run`] holds
-//! what is the same around them:
+//! what is the same around them. [`Failure::refused_configuration`] and
+//! [`Failure::not_up`] are the two failures of a configuration that does not
+//! load, which `cli::Common::refused` picks between for its job, and
+//! [`config_check`] is the whole `config check` job over the loaded tree:
 //!
 //! ```
 //! use std::process::ExitCode;
@@ -34,9 +37,11 @@
 //! let code = Run::new("ferrosys").run(["ferrosys", "migrate"], |cli: Cli| async move {
 //!     match cli.command {
 //!         Command::Migrate => Ok(ExitCode::SUCCESS),
-//!         Command::Common(_) => {
+//!         Command::Common(common) => {
 //!             let refused = std::io::Error::other("server.listen is not an address");
-//!             Err(Failure::from(refused).with_context("cannot start").with_code(EXIT_CONFIG))
+//!             let failure = common.refused(refused);
+//!             assert_eq!(EXIT_CONFIG, failure.code());
+//!             Err(failure)
 //!         }
 //!     }
 //! });
@@ -54,6 +59,9 @@ use std::num::NonZeroU8;
 use std::process::ExitCode;
 
 use clap::Parser;
+use ferrohealth_config::loader::Loaded;
+use ferrohealth_config::report::check_report;
+use serde::Serialize;
 
 /// The exit code of a configuration the binary refuses to start on.
 ///
@@ -206,6 +214,26 @@ impl Failure {
         }
     }
 
+    /// A configuration the binary refuses to start on: the line opens with
+    /// `cannot start` and the process exits [`EXIT_CONFIG`].
+    ///
+    /// `error` is any [`Error`] or an error already boxed, such as an
+    /// `anyhow::Error`.
+    #[must_use]
+    pub fn refused_configuration(error: impl Into<Box<dyn Error>>) -> Self {
+        Self::boxed(error)
+            .with_context("cannot start")
+            .with_code(EXIT_CONFIG)
+    }
+
+    /// A probe, such as `healthcheck`, that finds no server to ask: the line
+    /// opens with `not up` and the process exits 1, which an orchestrator
+    /// reads as a server not ready rather than a bad configuration.
+    #[must_use]
+    pub fn not_up(error: impl Into<Box<dyn Error>>) -> Self {
+        Self::boxed(error).with_context("not up")
+    }
+
     /// Opens the rendered line with `context`, such as `cannot start`.
     #[must_use]
     pub fn with_context(mut self, context: impl Into<String>) -> Self {
@@ -252,6 +280,39 @@ impl fmt::Debug for Failure {
     }
 }
 
+/// The `config check` job: the running tree of `loaded` on standard output.
+///
+/// Every secret is redacted and each key is followed by where it came from
+/// (`ferrohealth_config::report::check_report`); the job returns exit 0.
+///
+/// A product whose check goes further, such as resolving the tree or building
+/// its clients, runs those steps beside this one and refuses with
+/// [`Failure::refused_configuration`].
+///
+/// # Errors
+///
+/// Returns a [`Failure`] exiting [`EXIT_CONFIG`] when the tree does not
+/// render as a TOML table, and one exiting 1 when standard output refuses the
+/// report.
+pub fn config_check<T: Serialize>(loaded: &Loaded<T>) -> Result<ExitCode, Failure> {
+    config_check_to(loaded, &mut io::stdout().lock())
+}
+
+/// [`config_check`] with the report written to `out`.
+fn config_check_to<T: Serialize>(
+    loaded: &Loaded<T>,
+    out: &mut dyn Write,
+) -> Result<ExitCode, Failure> {
+    let report = check_report(loaded).map_err(|error| {
+        Failure::from(error)
+            .with_context("cannot render the configuration")
+            .with_code(EXIT_CONFIG)
+    })?;
+    writeln!(out, "{report}")
+        .map_err(|error| Failure::from(error).with_context("cannot write the report"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
 /// Renders `error` and every cause behind it on one line, each separated
 /// by `: `.
 ///
@@ -280,7 +341,7 @@ mod tests {
 
     use clap::{Parser, Subcommand};
 
-    use super::{EXIT_CONFIG, Failure, Run, chain};
+    use super::{EXIT_CONFIG, EXIT_FAILURE, Failure, Run, chain, config_check_to};
 
     #[derive(Debug, Parser)]
     #[command(name = "ferrosys", version = "1.2.3")]
@@ -429,5 +490,108 @@ mod tests {
             secret: "s3cr3t",
             source: None,
         })
+    }
+
+    #[test]
+    fn a_refused_configuration_exits_78_and_a_probe_not_up_exits_1() {
+        let refused = Failure::refused_configuration(refused());
+        assert_eq!(EXIT_CONFIG, refused.code());
+        assert_eq!(
+            "cannot start: the token endpoint refused the client: 401 Unauthorized",
+            refused.to_string()
+        );
+        let probe = Failure::not_up(boxed_root());
+        assert_eq!(EXIT_FAILURE, probe.code());
+        assert_eq!("not up: 401 Unauthorized", probe.to_string());
+    }
+
+    #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct Settings {
+        user: String,
+        password: Option<ferrohealth_secret::secret::Secret>,
+    }
+
+    fn loaded(file: &str) -> ferrohealth_config::loader::Loaded<Settings> {
+        ferrohealth_config::loader::Loader::new("FERROSYS")
+            .expect("the prefix is valid")
+            .load_sources(Some(file), None, &std::collections::BTreeMap::new())
+            .expect("the file loads")
+    }
+
+    #[test]
+    fn config_check_writes_the_redacted_tree_and_exits_0() {
+        let mut out = Vec::new();
+        let code = config_check_to(
+            &loaded("user = \"ferrosys\"\npassword = \"Qz7sentinel\"\n"),
+            &mut out,
+        )
+        .expect("the tree renders");
+        assert_eq!(ExitCode::SUCCESS, code);
+        let report = String::from_utf8(out).expect("the report is UTF-8");
+        assert!(report.contains("user = \"ferrosys\"  # file"), "{report}");
+        assert!(report.contains("password = \"***\"  # file"), "{report}");
+        assert!(!report.contains("Qz7sentinel"), "{report}");
+        assert!(report.ends_with('\n'), "one line ends the report");
+    }
+
+    /// A standard output that refuses every write.
+    struct Closed;
+
+    impl std::io::Write for Closed {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn config_check_refuses_a_closed_output_with_exit_1() {
+        let failure = config_check_to(&loaded("user = \"ferrosys\"\n"), &mut Closed)
+            .expect_err("the output is closed");
+        assert_eq!(EXIT_FAILURE, failure.code());
+        assert!(
+            failure.to_string().starts_with("cannot write the report: "),
+            "{failure}"
+        );
+    }
+
+    /// A tree that loads and refuses to serialize.
+    #[derive(Debug, Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Unrenderable {
+        user: String,
+    }
+
+    impl serde::Serialize for Unrenderable {
+        fn serialize<S: serde::Serializer>(&self, _serializer: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("refused"))
+        }
+    }
+
+    #[test]
+    fn config_check_refuses_a_tree_that_does_not_render_with_exit_78() {
+        let loaded = ferrohealth_config::loader::Loader::new("FERROSYS")
+            .expect("the prefix is valid")
+            .load_sources::<Unrenderable>(
+                Some("user = \"ferrosys\"\n"),
+                None,
+                &std::collections::BTreeMap::new(),
+            )
+            .expect("the file loads");
+        assert_eq!("ferrosys", loaded.settings().user);
+        let mut out = Vec::new();
+        let failure = config_check_to(&loaded, &mut out).expect_err("the tree does not render");
+        assert_eq!(EXIT_CONFIG, failure.code());
+        assert!(
+            failure
+                .to_string()
+                .starts_with("cannot render the configuration: "),
+            "{failure}"
+        );
+        assert!(out.is_empty(), "nothing is written");
     }
 }
