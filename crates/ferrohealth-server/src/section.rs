@@ -2,11 +2,19 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The `[server]` section of a product's configuration.
+//!
+//! Every span of time is a `ferrohealth_config::units::Duration` and every
+//! amount of data a `ByteSize`, so a key names no unit
+//! (`request_timeout = "30s"`). The keys of 0.6, which spelled the unit into
+//! the name (`request_timeout_ms`), are refused at load naming their
+//! replacement.
 
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::time::Duration;
 
+use ferrohealth_config::removed::{Removals, Removed, RemovedKeys};
+use ferrohealth_config::tls::TlsVersion;
+use ferrohealth_config::units::{ByteSize, Duration};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::client_address::Forwarding;
@@ -19,37 +27,43 @@ use crate::client_address::Forwarding;
 /// partial `[server]` table keeps the product's value for every key it does
 /// not name.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(try_from = "RawServer")]
+#[cfg_attr(feature = "schema", schemars(!try_from, default, deny_unknown_fields))]
 pub struct ServerSection {
     /// The socket address the listener binds.
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub listen: SocketAddr,
     /// The path every route is served under: empty, or starting with `/`
     /// and not ending with one.
     pub base_path: BasePath,
     /// How long one request may take before the server answers `408`.
-    pub request_timeout_ms: u64,
+    pub request_timeout: Duration,
     /// How long a client may take to send its first byte once it connected,
     /// and each HTTP/1.1 request head from that head's first byte; a client
     /// still sending its head then is disconnected, which bounds a
-    /// connection that never finishes one.
-    pub header_read_timeout_ms: std::num::NonZeroU64,
+    /// connection that never finishes one. Never zero.
+    pub header_read_timeout: Duration,
     /// How long a kept-alive HTTP/1.1 connection may wait for its next
     /// request before the server closes it. Keep it longer than the idle
     /// timeout of the clients and proxies in front, so they close an idle
-    /// connection first.
-    pub idle_timeout_ms: std::num::NonZeroU64,
+    /// connection first. Never zero.
+    pub idle_timeout: Duration,
     /// The largest request body the server reads before answering `413`.
-    pub body_limit_bytes: usize,
+    pub body_limit: ByteSize,
     /// How long readiness stays withdrawn before the listener closes, so an
     /// orchestrator stops sending requests first.
-    pub drain_delay_ms: u64,
+    pub drain_delay: Duration,
     /// How long the requests in flight may take once the listener closed.
-    pub shutdown_timeout_ms: u64,
+    pub shutdown_timeout: Duration,
     /// How many requests the server serves at once; past it a request is
     /// answered `503`. Unset, there is no bound.
+    #[cfg_attr(feature = "schema", schemars(with = "Option<u64>"))]
     pub max_concurrent_requests: Option<NonZeroUsize>,
-    /// The seconds a refused request is told to wait (`Retry-After`).
-    pub retry_after_s: u64,
+    /// How long a refused request is told to wait (`Retry-After`), a whole
+    /// number of seconds, since the header carries delay-seconds (RFC 9110
+    /// §10.2.3).
+    pub retry_after: Duration,
     /// The listener's TLS; unset, the listener speaks plain HTTP behind a
     /// proxy that terminates TLS.
     pub tls: Option<TlsSection>,
@@ -63,99 +77,56 @@ pub struct ServerSection {
     /// Whether a response is compressed with gzip or Brotli when the client
     /// accepts one.
     pub compression: bool,
-    /// The smallest response body, in bytes, that is compressed.
-    pub compression_min_bytes: u64,
+    /// The smallest response body that is compressed.
+    pub compression_min_size: ByteSize,
 }
 
 /// The `[server.caller_rate]` table: the steady rate and the burst one caller
 /// may send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CallerRate {
     /// The requests per second a caller may send once its burst is spent.
+    #[cfg_attr(feature = "schema", schemars(with = "u32", range(min = 1)))]
     pub requests_per_second: std::num::NonZeroU32,
     /// The requests a caller may send at once.
+    #[cfg_attr(feature = "schema", schemars(with = "u32", range(min = 1)))]
     pub burst: std::num::NonZeroU32,
 }
 
 /// The `[server.tls]` table: the certificate chain and the private key the
 /// listener serves, each in PEM, and the client certificates it asks for.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(try_from = "RawTls")]
+#[cfg_attr(feature = "schema", schemars(!try_from, deny_unknown_fields))]
 pub struct TlsSection {
     /// The certificate chain, the leaf first.
     pub certificate_file: std::path::PathBuf,
     /// The private key of the leaf.
     pub key_file: std::path::PathBuf,
     /// Whether the listener asks a client certificate.
+    #[cfg_attr(feature = "schema", schemars(default))]
     pub client_auth: ClientAuth,
     /// The CA bundle a client certificate must chain to; required unless
     /// `client_auth` is `none`, and refused when it is.
     pub client_ca_file: Option<std::path::PathBuf>,
-    /// How often, in seconds, the files are read again; unset, only `SIGHUP`
+    /// How often the files are read again, never zero; unset, only `SIGHUP`
     /// reads them again.
-    pub reload_interval_s: Option<std::num::NonZeroU64>,
+    pub reload_interval: Option<Duration>,
     /// The client certificate chain and key, in one PEM, the healthcheck
     /// presents to a listener that asks one.
     pub healthcheck_identity_file: Option<std::path::PathBuf>,
     /// The oldest TLS version the listener speaks: `"1.3"` unless lowered to
     /// `"1.2"`.
+    #[cfg_attr(feature = "schema", schemars(default))]
     pub min_version: TlsVersion,
-}
-
-/// The oldest TLS version a listener or an outbound client speaks.
-///
-/// TLS 1.3 (RFC 8446) is the default, as RFC 9325 §3.1.1 has it supported; a
-/// deployment may lower the minimum to TLS 1.2, which RFC 9325 §3.1.1 allows,
-/// with the suites of RFC 9325 §4.2. TLS 1.0 and 1.1 are deprecated (RFC
-/// 8996) and refused when the configuration is read.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(try_from = "String", into = "String")]
-pub enum TlsVersion {
-    /// TLS 1.2 and 1.3.
-    Tls12,
-    /// TLS 1.3 alone.
-    #[default]
-    Tls13,
-}
-
-/// A `min_version` the server does not speak.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum TlsVersionError {
-    /// TLS 1.0 or 1.1, which RFC 8996 deprecates.
-    #[error("TLS {0} is deprecated (RFC 8996); the minimum is \"1.2\" or \"1.3\"")]
-    Deprecated(&'static str),
-    /// A value that names no TLS version.
-    #[error("min_version takes \"1.2\" or \"1.3\"")]
-    Unknown,
-}
-
-impl TryFrom<String> for TlsVersion {
-    type Error = TlsVersionError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_str() {
-            "1.3" => Ok(Self::Tls13),
-            "1.2" => Ok(Self::Tls12),
-            "1.1" => Err(TlsVersionError::Deprecated("1.1")),
-            "1.0" => Err(TlsVersionError::Deprecated("1.0")),
-            _ => Err(TlsVersionError::Unknown),
-        }
-    }
-}
-
-impl From<TlsVersion> for String {
-    fn from(version: TlsVersion) -> Self {
-        match version {
-            TlsVersion::Tls12 => "1.2",
-            TlsVersion::Tls13 => "1.3",
-        }
-        .to_owned()
-    }
 }
 
 /// Whether the listener asks a client certificate.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ClientAuth {
     /// No client certificate is asked.
@@ -167,7 +138,183 @@ pub enum ClientAuth {
     Required,
 }
 
-/// The table as written, checked into a [`TlsSection`].
+/// The `[server]` table as written, checked into a [`ServerSection`].
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawServer {
+    listen: SocketAddr,
+    base_path: BasePath,
+    request_timeout: Duration,
+    header_read_timeout: Duration,
+    idle_timeout: Duration,
+    body_limit: ByteSize,
+    drain_delay: Duration,
+    shutdown_timeout: Duration,
+    max_concurrent_requests: Option<NonZeroUsize>,
+    retry_after: Duration,
+    tls: Option<TlsSection>,
+    trusted_proxies: Vec<crate::client_address::TrustedProxy>,
+    forwarded_header: crate::client_address::ForwardedHeader,
+    caller_rate: Option<CallerRate>,
+    compression: bool,
+    compression_min_size: ByteSize,
+    request_timeout_ms: Removed,
+    header_read_timeout_ms: Removed,
+    idle_timeout_ms: Removed,
+    body_limit_bytes: Removed,
+    drain_delay_ms: Removed,
+    shutdown_timeout_ms: Removed,
+    retry_after_s: Removed,
+    compression_min_bytes: Removed,
+}
+
+impl Default for RawServer {
+    fn default() -> Self {
+        let section = ServerSection::default();
+        Self {
+            listen: section.listen,
+            base_path: section.base_path,
+            request_timeout: section.request_timeout,
+            header_read_timeout: section.header_read_timeout,
+            idle_timeout: section.idle_timeout,
+            body_limit: section.body_limit,
+            drain_delay: section.drain_delay,
+            shutdown_timeout: section.shutdown_timeout,
+            max_concurrent_requests: section.max_concurrent_requests,
+            retry_after: section.retry_after,
+            tls: section.tls,
+            trusted_proxies: section.trusted_proxies,
+            forwarded_header: section.forwarded_header,
+            caller_rate: section.caller_rate,
+            compression: section.compression,
+            compression_min_size: section.compression_min_size,
+            request_timeout_ms: Removed::default(),
+            header_read_timeout_ms: Removed::default(),
+            idle_timeout_ms: Removed::default(),
+            body_limit_bytes: Removed::default(),
+            drain_delay_ms: Removed::default(),
+            shutdown_timeout_ms: Removed::default(),
+            retry_after_s: Removed::default(),
+            compression_min_bytes: Removed::default(),
+        }
+    }
+}
+
+/// A `[server]` table the server refuses to start on.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ServerSectionError {
+    /// The table sets keys of 0.6 that name their unit; each is named with
+    /// its replacement.
+    #[error(transparent)]
+    Removed(#[from] RemovedKeys),
+    /// A bound that must hold some time is zero.
+    #[error("server.{key} is zero; it bounds a connection, so give it a duration such as `30s`")]
+    Zero {
+        /// The key, under `server`.
+        key: &'static str,
+    },
+    /// `retry_after` is not a whole number of seconds.
+    #[error(
+        "server.retry_after is sent as whole seconds (RFC 9110 §10.2.3); give it in seconds, such as `1s`"
+    )]
+    RetryAfterSeconds,
+    /// `body_limit` is larger than this platform can address.
+    #[error("server.body_limit is larger than this platform can address")]
+    BodyLimit,
+}
+
+/// The 0.6 keys of `[server]`, each with what replaced it.
+fn removals(raw: &RawServer) -> Removals {
+    let mut removals = Removals::new();
+    for (removed, key, replacement) in [
+        (
+            raw.request_timeout_ms,
+            "request_timeout_ms",
+            "server.request_timeout, a duration such as `30s`",
+        ),
+        (
+            raw.header_read_timeout_ms,
+            "header_read_timeout_ms",
+            "server.header_read_timeout, a duration such as `30s`",
+        ),
+        (
+            raw.idle_timeout_ms,
+            "idle_timeout_ms",
+            "server.idle_timeout, a duration such as `2min`",
+        ),
+        (
+            raw.body_limit_bytes,
+            "body_limit_bytes",
+            "server.body_limit, a size such as `1MiB`",
+        ),
+        (
+            raw.drain_delay_ms,
+            "drain_delay_ms",
+            "server.drain_delay, a duration such as `5s`",
+        ),
+        (
+            raw.shutdown_timeout_ms,
+            "shutdown_timeout_ms",
+            "server.shutdown_timeout, a duration such as `10s`",
+        ),
+        (
+            raw.retry_after_s,
+            "retry_after_s",
+            "server.retry_after, a duration in whole seconds such as `1s`",
+        ),
+        (
+            raw.compression_min_bytes,
+            "compression_min_bytes",
+            "server.compression_min_size, a size such as `1KiB`",
+        ),
+    ] {
+        removals.replaced(removed, format!("server.{key}"), replacement);
+    }
+    removals
+}
+
+impl TryFrom<RawServer> for ServerSection {
+    type Error = ServerSectionError;
+
+    fn try_from(raw: RawServer) -> Result<Self, Self::Error> {
+        removals(&raw).finish()?;
+        for (key, bound) in [
+            ("header_read_timeout", raw.header_read_timeout),
+            ("idle_timeout", raw.idle_timeout),
+        ] {
+            if bound.is_zero() {
+                return Err(ServerSectionError::Zero { key });
+            }
+        }
+        if !raw.retry_after.is_whole_seconds() {
+            return Err(ServerSectionError::RetryAfterSeconds);
+        }
+        if usize::try_from(raw.body_limit).is_err() {
+            return Err(ServerSectionError::BodyLimit);
+        }
+        Ok(Self {
+            listen: raw.listen,
+            base_path: raw.base_path,
+            request_timeout: raw.request_timeout,
+            header_read_timeout: raw.header_read_timeout,
+            idle_timeout: raw.idle_timeout,
+            body_limit: raw.body_limit,
+            drain_delay: raw.drain_delay,
+            shutdown_timeout: raw.shutdown_timeout,
+            max_concurrent_requests: raw.max_concurrent_requests,
+            retry_after: raw.retry_after,
+            tls: raw.tls,
+            trusted_proxies: raw.trusted_proxies,
+            forwarded_header: raw.forwarded_header,
+            caller_rate: raw.caller_rate,
+            compression: raw.compression,
+            compression_min_size: raw.compression_min_size,
+        })
+    }
+}
+
+/// The `[server.tls]` table as written, checked into a [`TlsSection`].
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTls {
@@ -176,10 +323,12 @@ struct RawTls {
     #[serde(default)]
     client_auth: ClientAuth,
     client_ca_file: Option<std::path::PathBuf>,
-    reload_interval_s: Option<std::num::NonZeroU64>,
+    reload_interval: Option<Duration>,
     healthcheck_identity_file: Option<std::path::PathBuf>,
     #[serde(default)]
     min_version: TlsVersion,
+    #[serde(default)]
+    reload_interval_s: Removed,
 }
 
 /// A `[server.tls]` table whose `client_auth` names no CA.
@@ -187,7 +336,7 @@ struct RawTls {
 #[error("client_auth asks a client certificate, and client_ca_file names no CA it must chain to")]
 pub struct NoClientCa;
 
-/// A `[server.tls]` table whose `client_auth` and `client_ca_file` disagree.
+/// A `[server.tls]` table the listener refuses.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ClientAuthError {
@@ -203,12 +352,27 @@ pub enum ClientAuthError {
          client_ca_file"
     )]
     UnusedClientCa,
+    /// The table sets `reload_interval_s`, the key of 0.6.
+    #[error(transparent)]
+    Removed(#[from] RemovedKeys),
+    /// `reload_interval` is zero.
+    #[error(
+        "server.tls.reload_interval is zero; give it a duration such as `1h`, or leave it unset"
+    )]
+    ZeroReloadInterval,
 }
 
 impl TryFrom<RawTls> for TlsSection {
     type Error = ClientAuthError;
 
     fn try_from(raw: RawTls) -> Result<Self, Self::Error> {
+        let mut removals = Removals::new();
+        removals.replaced(
+            raw.reload_interval_s,
+            "server.tls.reload_interval_s",
+            "server.tls.reload_interval, a duration such as `1h`",
+        );
+        removals.finish()?;
         if raw.client_auth != ClientAuth::None && raw.client_ca_file.is_none() {
             return Err(NoClientCa.into());
         }
@@ -217,12 +381,15 @@ impl TryFrom<RawTls> for TlsSection {
         if raw.client_auth == ClientAuth::None && raw.client_ca_file.is_some() {
             return Err(ClientAuthError::UnusedClientCa);
         }
+        if raw.reload_interval.is_some_and(Duration::is_zero) {
+            return Err(ClientAuthError::ZeroReloadInterval);
+        }
         Ok(Self {
             certificate_file: raw.certificate_file,
             key_file: raw.key_file,
             client_auth: raw.client_auth,
             client_ca_file: raw.client_ca_file,
-            reload_interval_s: raw.reload_interval_s,
+            reload_interval: raw.reload_interval,
             healthcheck_identity_file: raw.healthcheck_identity_file,
             min_version: raw.min_version,
         })
@@ -239,7 +406,7 @@ impl TlsSection {
             key_file,
             client_auth: ClientAuth::None,
             client_ca_file: None,
-            reload_interval_s: None,
+            reload_interval: None,
             healthcheck_identity_file: None,
             min_version: TlsVersion::Tls13,
         }
@@ -251,20 +418,20 @@ impl Default for ServerSection {
         Self {
             listen: SocketAddr::from(([127, 0, 0, 1], 8080)),
             base_path: BasePath::default(),
-            request_timeout_ms: 30_000,
-            header_read_timeout_ms: std::num::NonZeroU64::MIN.saturating_add(29_999),
-            idle_timeout_ms: std::num::NonZeroU64::MIN.saturating_add(119_999),
-            body_limit_bytes: 1024 * 1024,
-            drain_delay_ms: 0,
-            shutdown_timeout_ms: 10_000,
+            request_timeout: Duration::from_secs(30),
+            header_read_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_mins(2),
+            body_limit: ByteSize::from_mib(1),
+            drain_delay: Duration::ZERO,
+            shutdown_timeout: Duration::from_secs(10),
             max_concurrent_requests: None,
-            retry_after_s: 1,
+            retry_after: Duration::from_secs(1),
             tls: None,
             trusted_proxies: Vec::new(),
             forwarded_header: crate::client_address::ForwardedHeader::default(),
             caller_rate: None,
             compression: true,
-            compression_min_bytes: 1024,
+            compression_min_size: ByteSize::from_kib(1),
         }
     }
 }
@@ -280,34 +447,13 @@ impl Forwarding {
 }
 
 impl ServerSection {
-    /// The request timeout.
+    /// The body limit in bytes, which the section checked fits the
+    /// platform when it was read.
     #[must_use]
-    pub const fn request_timeout(&self) -> Duration {
-        Duration::from_millis(self.request_timeout_ms)
-    }
-
-    /// The bound on reading a request head.
-    #[must_use]
-    pub const fn header_read_timeout(&self) -> Duration {
-        Duration::from_millis(self.header_read_timeout_ms.get())
-    }
-
-    /// The idle limit of a kept-alive connection.
-    #[must_use]
-    pub const fn idle_timeout(&self) -> Duration {
-        Duration::from_millis(self.idle_timeout_ms.get())
-    }
-
-    /// The drain delay.
-    #[must_use]
-    pub const fn drain_delay(&self) -> Duration {
-        Duration::from_millis(self.drain_delay_ms)
-    }
-
-    /// The bound on the drain.
-    #[must_use]
-    pub const fn shutdown_timeout(&self) -> Duration {
-        Duration::from_millis(self.shutdown_timeout_ms)
+    pub fn body_limit_bytes(&self) -> usize {
+        // NOTE: no specification governs this: our own design; a limit past the address
+        // space bounds nothing more than the address space does, so it saturates.
+        usize::try_from(self.body_limit).unwrap_or(usize::MAX)
     }
 }
 
@@ -326,6 +472,14 @@ impl ServerSection {
 /// # Ok::<(), ferrohealth_server::section::BasePathError>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(
+        with = "String",
+        description = "Empty, or / followed by path segments with no trailing / (RFC 3986 §3.3)."
+    )
+)]
 pub struct BasePath(String);
 
 /// A base path outside the form.
@@ -395,209 +549,4 @@ impl Serialize for BasePath {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use ferrohealth_config::error::ConfigError;
-    use ferrohealth_config::loader::Loader;
-
-    use super::{BasePath, ServerSection};
-
-    #[derive(Debug, Default, serde::Deserialize)]
-    #[serde(default, deny_unknown_fields)]
-    struct Config {
-        server: ServerSection,
-    }
-
-    fn load(text: &str) -> Result<ServerSection, ConfigError> {
-        Loader::new("FERROSYS")?
-            .load_sources::<Config>(Some(text), None, &BTreeMap::new())
-            .map(|loaded| loaded.into_parts().0.server)
-    }
-
-    #[test]
-    fn the_section_defaults_and_reads_its_keys() {
-        assert_eq!(
-            ServerSection::default(),
-            load("").expect("an empty file loads")
-        );
-        let section = load(
-            "[server]\nlisten = \"0.0.0.0:9090\"\nbase_path = \"/ferrosys\"\nmax_concurrent_requests = 64\n",
-        )
-        .expect("the section loads");
-        assert_eq!("0.0.0.0:9090", section.listen.to_string());
-        assert_eq!("/ferrosys", section.base_path.as_str());
-        assert_eq!(
-            Some(64),
-            section
-                .max_concurrent_requests
-                .map(std::num::NonZeroUsize::get)
-        );
-        assert_eq!(
-            std::time::Duration::from_secs(10),
-            section.shutdown_timeout()
-        );
-    }
-
-    #[test]
-    fn a_partial_table_keeps_the_product_defaults_and_the_operator_wins() {
-        let product = ServerSection {
-            listen: "0.0.0.0:8080".parse().expect("an address"),
-            body_limit_bytes: 64 * 1024 * 1024,
-            ..ServerSection::default()
-        };
-        let load = |text: &str| {
-            Loader::new("FERROSYS")?
-                .defaults("server", &product)?
-                .load_sources::<Config>(Some(text), None, &BTreeMap::new())
-                .map(|loaded| loaded.into_parts().0.server)
-        };
-        let section = load("[server]\nrequest_timeout_ms = 5000\n").expect("the section loads");
-        assert_eq!(
-            ServerSection {
-                request_timeout_ms: 5000,
-                ..product.clone()
-            },
-            section,
-            "a partial table keeps every product default it does not name"
-        );
-        let section = load("[server]\nlisten = \"127.0.0.1:9090\"\n").expect("the section loads");
-        assert_eq!(
-            "127.0.0.1:9090",
-            section.listen.to_string(),
-            "the operator wins"
-        );
-        assert_eq!(64 * 1024 * 1024, section.body_limit_bytes);
-        assert_eq!(product, load("").expect("an empty file loads"));
-    }
-
-    #[test]
-    fn a_bad_listen_address_base_path_or_zero_bound_is_refused_at_load() {
-        for (text, key) in [
-            ("[server]\nlisten = \"not an address\"\n", "server.listen"),
-            ("[server]\nbase_path = \"/ferrosys/\"\n", "server.base_path"),
-            (
-                "[server]\nmax_concurrent_requests = 0\n",
-                "server.max_concurrent_requests",
-            ),
-        ] {
-            let error = load(text).expect_err("the value is refused");
-            assert!(
-                matches!(&error, ConfigError::Invalid { key: Some(found), .. } if found == key),
-                "{text}: {error:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_proxy_rate_and_compression_keys_load() {
-        let section = load(
-            "[server]\ntrusted_proxies = [\"10.0.0.0/8\", \"::1\"]\nforwarded_header = \"x-forwarded-for\"\ncompression = false\n\n[server.caller_rate]\nrequests_per_second = 5\nburst = 10\n",
-        )
-        .expect("the section loads");
-        assert_eq!(
-            vec!["10.0.0.0/8".to_owned(), "::1/128".to_owned()],
-            section
-                .trusted_proxies
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            crate::client_address::ForwardedHeader::XForwardedFor,
-            section.forwarded_header
-        );
-        assert!(!section.compression);
-        assert_eq!(Some(10), section.caller_rate.map(|rate| rate.burst.get()));
-        for (text, key) in [
-            (
-                "[server]\ntrusted_proxies = [\"a proxy\"]\n",
-                "server.trusted_proxies",
-            ),
-            (
-                "[server.caller_rate]\nrequests_per_second = 0\nburst = 1\n",
-                "server.caller_rate.requests_per_second",
-            ),
-        ] {
-            let error = load(text).expect_err("the value is refused");
-            let names_key = |error: &ConfigError| matches!(error, ConfigError::Invalid { key: Some(found), .. } if found.starts_with(key));
-            let named = match &error {
-                ConfigError::Refusals { refusals } => refusals.iter().any(names_key),
-                other => names_key(other),
-            };
-            assert!(named, "{text}: {error:?}");
-        }
-    }
-
-    #[test]
-    fn the_header_bound_and_the_tls_minimum_load() {
-        let tls = "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\n";
-        let section = load(&format!(
-            "[server]\nheader_read_timeout_ms = 5000\n\n{tls}min_version = \"1.2\"\n"
-        ))
-        .expect("the section loads");
-        assert_eq!(
-            std::time::Duration::from_secs(5),
-            section.header_read_timeout()
-        );
-        assert_eq!(
-            Some(super::TlsVersion::Tls12),
-            section.tls.map(|tls| tls.min_version),
-            "a deployment may lower the minimum to 1.2"
-        );
-        assert_eq!(
-            std::time::Duration::from_secs(30),
-            ServerSection::default().header_read_timeout()
-        );
-        let default = load(tls).expect("the section loads");
-        assert_eq!(
-            Some(super::TlsVersion::Tls13),
-            default.tls.map(|tls| tls.min_version),
-            "TLS 1.3 is the default minimum"
-        );
-        assert!(load("[server]\nheader_read_timeout_ms = 0\n").is_err());
-        assert_eq!(
-            std::time::Duration::from_secs(120),
-            ServerSection::default().idle_timeout(),
-            "the idle limit outlasts the 90 s a Go client keeps an idle connection"
-        );
-        assert_eq!(
-            std::time::Duration::from_secs(95),
-            load("[server]\nidle_timeout_ms = 95000\n")
-                .expect("the section loads")
-                .idle_timeout()
-        );
-        assert!(load("[server]\nidle_timeout_ms = 0\n").is_err());
-        let refused =
-            load(&format!("{tls}min_version = \"1.1\"\n")).expect_err("TLS 1.1 is refused");
-        assert!(
-            refused.to_string().contains("RFC 8996"),
-            "the refusal names the deprecation: {refused}"
-        );
-        assert_eq!(
-            Err(super::TlsVersionError::Deprecated("1.0")),
-            super::TlsVersion::try_from("1.0".to_owned())
-        );
-    }
-
-    #[test]
-    fn the_client_ca_refusal_reads_in_full_through_the_loader() {
-        let error = load(
-            "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nclient_ca_file = \"ca.pem\"\n",
-        )
-        .expect_err("a client CA under none is refused");
-        let rendered = error.to_string();
-        for word in ["client_ca_file", "none", "required", "optional"] {
-            assert!(rendered.contains(word), "{word} in {rendered}");
-        }
-    }
-
-    #[test]
-    fn a_base_path_is_empty_or_slash_separated_segments() {
-        assert!(BasePath::new("").is_ok());
-        assert!(BasePath::new("/a/b-c").is_ok());
-        for bad in ["a", "/", "/a/", "//a", "/a b", "/a?b", "/a#b", "/ä"] {
-            assert!(BasePath::new(bad).is_err(), "{bad:?} is refused");
-        }
-    }
-}
+mod tests;

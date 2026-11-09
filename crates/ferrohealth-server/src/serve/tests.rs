@@ -123,8 +123,8 @@ async fn start_run(
 
 fn short_head_bound() -> ServerSection {
     ServerSection {
-        header_read_timeout_ms: std::num::NonZeroU64::new(200).expect("not zero"),
-        drain_delay_ms: 0,
+        header_read_timeout: ferrohealth_config::units::Duration::from_millis(200),
+        drain_delay: ferrohealth_config::units::Duration::ZERO,
         ..ServerSection::default()
     }
 }

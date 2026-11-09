@@ -253,117 +253,49 @@ async fn an_otlp_table_builds_both_exports() {
     assert!(telemetry.tracer().is_some(), "spans are exported");
 }
 
-#[cfg(feature = "otlp")]
-#[tokio::test]
-async fn a_trust_roots_file_that_cannot_be_read_is_refused() {
-    let mut section = with_otlp("https://otel.example.org:4317");
-    if let Some(otlp) = section.otlp.as_mut() {
-        otlp.trust_roots_file = Some("/nonexistent/roots.pem".into());
-    }
-    let error = Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
-        .expect_err("the file is missing");
-    assert!(
-        matches!(&error, InitError::TlsFile { key, .. } if *key == "telemetry.otlp.trust_roots_file"),
-        "{error:?}"
-    );
-}
-
 #[test]
-fn a_tls_file_beside_a_plain_http_collector_is_refused() {
-    for (roots, identity, named) in [
-        (true, false, "telemetry.otlp.trust_roots_file"),
-        (false, true, "telemetry.otlp.client_identity_file"),
-    ] {
+fn tls_material_beside_a_plain_http_collector_is_refused() {
+    for (roots, identity) in [(true, false), (false, true)] {
         let mut section = with_otlp("http://127.0.0.1:4317");
         if let Some(otlp) = section.otlp.as_mut() {
-            otlp.trust_roots_file = roots.then(|| "/run/roots.pem".into());
-            otlp.client_identity_file = identity.then(|| "/run/identity.pem".into());
+            otlp.tls.trust_roots_file = roots.then(|| "/run/roots.pem".into());
+            otlp.tls.client_identity_file = identity.then(|| "/run/identity.pem".into());
         }
         let error = Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
-            .expect_err("the file would be ignored");
+            .expect_err("the material would be ignored");
+        assert!(matches!(&error, InitError::TlsWithoutHttps), "{error:?}");
         assert!(
-            matches!(&error, InitError::TlsWithoutHttps { key } if *key == named),
-            "{error:?}"
+            error.to_string().starts_with("telemetry.otlp.tls"),
+            "{error}"
         );
-        assert!(error.to_string().starts_with(named), "{error}");
     }
-}
-
-/// A certificate and its private key, as PEM.
-#[cfg(feature = "otlp")]
-fn certificate() -> (String, String) {
-    let key = rcgen::KeyPair::generate().expect("a key");
-    let certificate = rcgen::CertificateParams::new(vec!["collector.example.org".to_owned()])
-        .expect("the parameters")
-        .self_signed(&key)
-        .expect("the certificate");
-    (certificate.pem(), key.serialize_pem())
 }
 
 #[cfg(feature = "otlp")]
 #[tokio::test]
-async fn a_tls_file_that_is_no_pem_of_its_kind_is_refused_without_quoting_it() {
-    let (certificate, key) = certificate();
-    let directory = tempfile::tempdir().expect("a directory");
-    let write = |name: &str, text: &str| {
-        let path = directory.path().join(name);
-        std::fs::write(&path, text).expect("the file is written");
-        path
-    };
-    let only_key = write("key.pem", &key);
-    let only_certificate = write("certificate.pem", &certificate);
-    let identity = write("identity.pem", &format!("{certificate}{key}"));
-    let text = write("text.pem", "Qz7sentinel");
-    let cases = [
-        (
-            Some(&only_key),
-            None,
-            "telemetry.otlp.trust_roots_file",
-            "PEM certificate",
-        ),
-        (
-            Some(&text),
-            None,
-            "telemetry.otlp.trust_roots_file",
-            "PEM certificate",
-        ),
-        (
-            None,
-            Some(&only_certificate),
-            "telemetry.otlp.client_identity_file",
-            "PEM private key",
-        ),
-        (
-            None,
-            Some(&only_key),
-            "telemetry.otlp.client_identity_file",
-            "PEM certificate",
-        ),
-    ];
-    for (roots, client, named, lacking) in cases {
-        let mut section = with_otlp("https://otel.example.org:4317");
-        if let Some(otlp) = section.otlp.as_mut() {
-            otlp.trust_roots_file = roots.cloned();
-            otlp.client_identity_file = client.cloned();
-        }
-        let error = Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
-            .expect_err("the file holds no PEM of its kind");
-        assert!(
-            matches!(&error, InitError::TlsPem { key, wanted, .. } if *key == named && *wanted == lacking),
-            "{error:?}"
-        );
-        let shown = format!("{error} {error:?}");
-        for quoted in ["Qz7sentinel", "BEGIN", "MII"] {
-            assert!(!shown.contains(quoted), "{shown}");
-        }
-    }
-    let mut section = with_otlp("https://otel.example.org:4317");
-    if let Some(otlp) = section.otlp.as_mut() {
-        otlp.trust_roots_file = Some(only_certificate.clone());
-        otlp.client_identity_file = Some(identity);
-    }
-    Telemetry::new(&section, Service::new("ferrosys", "0.0.0"))
-        .expect("trust roots and a whole identity build");
+async fn an_https_collector_without_handed_tls_is_refused() {
+    let error = Telemetry::new(
+        &with_otlp("https://otel.example.org:4317"),
+        Service::new("ferrosys", "0.0.0"),
+    )
+    .expect_err("no TLS was handed");
+    assert!(matches!(error, InitError::TlsNotHanded), "{error:?}");
+}
+
+#[cfg(feature = "otlp")]
+#[tokio::test]
+async fn an_https_collector_builds_both_exports_over_the_handed_tls() {
+    let _installed = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let tls = rustls::ClientConfig::builder()
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
+    let telemetry = Telemetry::with_tls(
+        &with_otlp("https://otel.example.org:4317"),
+        Service::new("ferrosys", "0.0.0"),
+        Arc::new(tls),
+    )
+    .expect("the exporters build without connecting");
+    assert!(telemetry.tracer().is_some(), "spans are exported");
 }
 
 #[cfg(feature = "prometheus")]

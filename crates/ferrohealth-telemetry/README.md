@@ -19,6 +19,11 @@ same way.
   OTLP (feature `otlp`). One tracer provider exports the product's own
   spans and never an event. Neither reads a client's `traceparent`, so
   every request starts a trace of the server's own.
+- An `https://` collector is dialed over the rustls configuration the
+  product builds from `[telemetry.otlp.tls]` with `ferrohealth-server`'s
+  `tls_client::TlsClient` and hands to `Telemetry::with_tls`, so the trust
+  roots, the client identity and the minimum version hold. The crate reads
+  no TLS file itself.
 - `telemetry::Console` decides colour from the format, the terminal and
   `NO_COLOR`, and carries the directives no filter can drop. `install`
   returns the `FilterHandle` that replaces the filter at run time.

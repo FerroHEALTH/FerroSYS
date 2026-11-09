@@ -10,6 +10,43 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-09
+
+### Added
+
+- `units::Duration`, one span of time written as a whole number and a
+  UCUM unit with no space (`"500ms"`, `"30s"`, `"10min"`, `"12h"`, `"7d"`),
+  and `units::ByteSize`, one amount of data written with an IEC 80000-13
+  binary unit (`"64MiB"`). A bare number is refused, `m` (the metre in
+  UCUM) is refused naming `min`, and a decimal unit (`MB`) is refused
+  naming the binary one. Each renders in the largest exact unit, so
+  `config check` shows `"1h"` for `"3600s"`, and the environment and
+  `--set` carry the same strings (#310).
+- `removed::Removed`, a field that reads a retired key and keeps none of
+  its value, and `removed::Removals`, which gathers every retired key a
+  configuration set and refuses them at once, each naming its replacement
+  (`removed::RemovedKeys`). It is the shared form of the refusal
+  `ferrohealth-smart` carried for itself (#310).
+- `tls::TlsClientSection` and `tls::TlsVersion`, the outbound TLS keys of a
+  table that names a remote service and the oldest TLS version spoken,
+  with `TlsClientSection::names_material`. `TlsVersion` orders oldest
+  first, so the higher of two minimums is their `max` (#310).
+- Feature `schema`: `schemars::JsonSchema` on each type above, for a
+  product that generates its configuration reference from its types
+  (#310).
+
+### Changed
+
+- Breaking: the crate moves to 0.3.0 with the `ferrohealth-server` 0.7
+  move of `TlsClientSection` and `TlsVersion` to this crate. A product
+  names them as `ferrohealth_config::tls::*` (#310).
+
+### Fixed
+
+- The refusals of a `min_version` of `"1.0"`, `"1.1"` or no TLS version
+  quote the versions in backticks, so the loader's masking of quoted values
+  no longer hides them (#310).
+
 ## [0.2.10] - 2026-11-06
 
 ### Added

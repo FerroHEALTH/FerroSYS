@@ -4,8 +4,9 @@
 //! The `[telemetry]` section of a product's configuration.
 
 use std::fmt;
-use std::path::PathBuf;
 
+use ferrohealth_config::removed::{Removals, Removed, RemovedKeys};
+use ferrohealth_config::tls::TlsClientSection;
 use ferrohealth_secret::secret_url::SecretUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tracing_subscriber::EnvFilter;
@@ -19,6 +20,7 @@ pub const DEFAULT_FILTER: &str = "info,hyper=warn,tower=warn,h2=warn";
 /// Every key has a default, so the section may be left out; with no
 /// `[telemetry.otlp]` table nothing is exported.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct TelemetrySection {
     /// The console rendering.
@@ -37,6 +39,7 @@ pub struct TelemetrySection {
 
 /// The console rendering a deployment asks for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     /// `pretty` on a terminal, `json` otherwise, so a container writes
@@ -87,6 +90,14 @@ impl Format {
 /// assert_eq!("info,hyper=warn,tower=warn,h2=warn", Filter::default().as_str());
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(
+        with = "String",
+        description = "A tracing filter directive, such as info,hyper=warn."
+    )
+)]
 pub struct Filter(String);
 
 /// A filter directive the parser refuses.
@@ -156,25 +167,28 @@ impl Serialize for Filter {
 
 /// The `[telemetry.otlp]` table: where and how spans and metrics are sent.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(try_from = "RawOtlp")]
+#[cfg_attr(feature = "schema", schemars(!try_from, default, deny_unknown_fields))]
 pub struct OtlpSection {
     /// The collector's OTLP/gRPC endpoint; `https://` speaks TLS. It may
     /// carry a credential, so it renders masked.
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub endpoint: SecretUrl,
     /// Whether the product's spans are exported.
     pub traces: bool,
     /// Whether the metrics are pushed.
     pub metrics: bool,
     /// The share of the server's traces that are sampled.
+    #[cfg_attr(feature = "schema", schemars(range(min = 0.0, max = 1.0)))]
     pub sample_ratio: SampleRatio,
-    /// A PEM file of trust roots the collector's certificate may chain to,
-    /// beside the platform's. It holds one certificate or more, and is
-    /// refused beside an endpoint that is not `https://`.
-    pub trust_roots_file: Option<PathBuf>,
-    /// A PEM file holding the client certificate chain and its key, for
-    /// mutual TLS with the collector. It holds both, and is refused beside
-    /// an endpoint that is not `https://`.
-    pub client_identity_file: Option<PathBuf>,
+    /// The TLS to the collector: trust roots beside the platform's, the
+    /// client identity for mutual TLS and the minimum version. The crate
+    /// reads none of it: the product reads the table with
+    /// `ferrohealth-server`'s `TlsClient` and hands the built configuration
+    /// to `Telemetry::with_tls`. TLS material is refused beside an endpoint
+    /// that is not `https://`.
+    pub tls: TlsClientSection,
 }
 
 impl Default for OtlpSection {
@@ -184,15 +198,73 @@ impl Default for OtlpSection {
             traces: true,
             metrics: true,
             sample_ratio: SampleRatio::ALL,
-            trust_roots_file: None,
-            client_identity_file: None,
+            tls: TlsClientSection::default(),
         }
+    }
+}
+
+/// The `[telemetry.otlp]` table as written, checked into an [`OtlpSection`].
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawOtlp {
+    endpoint: SecretUrl,
+    traces: bool,
+    metrics: bool,
+    sample_ratio: SampleRatio,
+    tls: TlsClientSection,
+    trust_roots_file: Removed,
+    client_identity_file: Removed,
+}
+
+impl Default for RawOtlp {
+    fn default() -> Self {
+        let section = OtlpSection::default();
+        Self {
+            endpoint: section.endpoint,
+            traces: section.traces,
+            metrics: section.metrics,
+            sample_ratio: section.sample_ratio,
+            tls: section.tls,
+            trust_roots_file: Removed::default(),
+            client_identity_file: Removed::default(),
+        }
+    }
+}
+
+impl TryFrom<RawOtlp> for OtlpSection {
+    type Error = RemovedKeys;
+
+    fn try_from(raw: RawOtlp) -> Result<Self, Self::Error> {
+        let mut removals = Removals::new();
+        removals.replaced(
+            raw.trust_roots_file,
+            "telemetry.otlp.trust_roots_file",
+            "telemetry.otlp.tls.trust_roots_file",
+        );
+        removals.replaced(
+            raw.client_identity_file,
+            "telemetry.otlp.client_identity_file",
+            "telemetry.otlp.tls.client_identity_file",
+        );
+        removals.finish()?;
+        Ok(Self {
+            endpoint: raw.endpoint,
+            traces: raw.traces,
+            metrics: raw.metrics,
+            sample_ratio: raw.sample_ratio,
+            tls: raw.tls,
+        })
     }
 }
 
 /// The share of traces that are sampled: a finite number from `0.0`, none,
 /// to `1.0`, every one.
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(with = "f64")
+)]
 pub struct SampleRatio(f64);
 
 impl SampleRatio {
@@ -310,6 +382,38 @@ mod tests {
         assert_eq!(
             "https://***@otel.example.org:4317",
             otlp.endpoint.to_string()
+        );
+    }
+
+    #[test]
+    fn the_otlp_file_keys_of_0_2_are_refused_naming_the_tls_table() {
+        let error = load(
+            "[telemetry.otlp]\nendpoint = \"https://otel.example.org:4317\"\ntrust_roots_file = \"/run/roots.pem\"\nclient_identity_file = \"/run/identity.pem\"\n",
+        )
+        .expect_err("the keys of 0.2 are refused");
+        let shown = error.to_string();
+        for line in [
+            "telemetry.otlp.trust_roots_file was replaced by telemetry.otlp.tls.trust_roots_file",
+            "telemetry.otlp.client_identity_file was replaced by telemetry.otlp.tls.client_identity_file",
+        ] {
+            assert!(shown.contains(line), "{line} in {shown}");
+        }
+    }
+
+    #[test]
+    fn the_otlp_tls_table_loads() {
+        let section = load(
+            "[telemetry.otlp]\nendpoint = \"https://otel.example.org:4317\"\n\n[telemetry.otlp.tls]\ntrust_roots_file = \"/run/roots.pem\"\nmin_version = \"1.2\"\n",
+        )
+        .expect("the table loads");
+        let otlp = section.otlp.expect("the table is present");
+        assert_eq!(
+            Some(std::path::Path::new("/run/roots.pem")),
+            otlp.tls.trust_roots_file.as_deref()
+        );
+        assert_eq!(
+            ferrohealth_config::tls::TlsVersion::Tls12,
+            otlp.tls.min_version
         );
     }
 

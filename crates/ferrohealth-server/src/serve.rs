@@ -477,7 +477,7 @@ where
 /// Serves `app` as [`run`] does, over `tls` when it is set, which the
 /// product built and keeps; `section.tls` is not read.
 ///
-/// The server reads `tls` again on `SIGHUP` and every `reload_interval_s`
+/// The server reads `tls` again on `SIGHUP` and every `reload_interval`
 /// of its table, and the product may call [`crate::tls::ReloadableTls::reload`]
 /// from its own reload path too.
 ///
@@ -495,10 +495,10 @@ pub async fn run_with_tls<F>(
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    let (delay, bound) = (section.drain_delay(), section.shutdown_timeout());
+    let (delay, bound) = (section.drain_delay.get(), section.shutdown_timeout.get());
     let bounds = keep_alive::Bounds {
-        header_read: section.header_read_timeout(),
-        idle: section.idle_timeout(),
+        header_read: section.header_read_timeout.get(),
+        idle: section.idle_timeout.get(),
     };
     let Some(tls) = tls else {
         let connections = Connections::new(app, None, bounds);
@@ -506,12 +506,9 @@ where
     };
     let section = tls.section().clone();
     let reloads = tokio::spawn(reload_on_signal(Arc::clone(&tls)));
-    let interval = section.reload_interval_s.map(|seconds| {
-        tokio::spawn(reload_every(
-            Arc::clone(&tls),
-            Duration::from_secs(seconds.get()),
-        ))
-    });
+    let interval = section
+        .reload_interval
+        .map(|every| tokio::spawn(reload_every(Arc::clone(&tls), every.get())));
     let connections = Connections::new(app, Some(tls), bounds);
     let served = drive(listener, connections, lifecycle, signal, delay, bound).await;
     reloads.abort();

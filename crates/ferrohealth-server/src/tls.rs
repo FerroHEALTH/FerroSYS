@@ -212,12 +212,12 @@ fn chain(key: &'static str, path: &Path) -> Result<Vec<CertificateDer<'static>>,
 
 /// The versions the listener speaks from `min_version` on.
 pub(crate) fn protocol_versions(
-    min_version: crate::section::TlsVersion,
+    min_version: ferrohealth_config::tls::TlsVersion,
 ) -> &'static [&'static rustls::SupportedProtocolVersion] {
     static TLS13_ONLY: &[&rustls::SupportedProtocolVersion] = &[&rustls::version::TLS13];
     match min_version {
-        crate::section::TlsVersion::Tls12 => rustls::ALL_VERSIONS,
-        crate::section::TlsVersion::Tls13 => TLS13_ONLY,
+        ferrohealth_config::tls::TlsVersion::Tls12 => rustls::ALL_VERSIONS,
+        ferrohealth_config::tls::TlsVersion::Tls13 => TLS13_ONLY,
     }
 }
 
@@ -280,7 +280,7 @@ pub struct PeerCertificates(pub Arc<[CertificateDer<'static>]>);
 /// The listener's TLS configuration, read again on demand.
 ///
 /// `serve::run` builds one from `[server.tls]` and reads it again on
-/// `SIGHUP` and every `reload_interval_s`. A product that reloads its
+/// `SIGHUP` and every `reload_interval`. A product that reloads its
 /// configuration on a path of its own builds it itself, hands it to
 /// `serve::run_with_tls` or `serve::Listener::with_reloadable_tls`, and calls
 /// [`ReloadableTls::reload`] from that path.

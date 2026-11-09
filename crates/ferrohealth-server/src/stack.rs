@@ -194,9 +194,9 @@ impl Stack {
             beside,
             fallback,
         } = self;
-        let admission = section.max_concurrent_requests.map(|limit| {
-            Admission::new(limit, std::time::Duration::from_secs(section.retry_after_s))
-        });
+        let admission = section
+            .max_concurrent_requests
+            .map(|limit| Admission::new(limit, section.retry_after.get()));
         let product = match &admission {
             Some(admission) => product.route_layer(axum::middleware::from_fn_with_state(
                 admission.clone(),
@@ -235,8 +235,8 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         forwarding: Forwarding::from_section(section),
         panic_body: policy.panic_body,
         refusal_body: policy.refusal_body,
-        timeout: section.request_timeout(),
-        body_limit: section.body_limit_bytes,
+        timeout: section.request_timeout.get(),
+        body_limit: section.body_limit_bytes(),
     });
     let transport = api_headers::Transport {
         tls: section.tls.is_some(),
@@ -249,13 +249,13 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         .layer(IdentifyLayer)
         .layer(policy.request_log)
         .layer(edge)
-        .layer(RequestBodyLimitLayer::new(section.body_limit_bytes))
-        .layer(DefaultBodyLimit::max(section.body_limit_bytes));
+        .layer(RequestBodyLimitLayer::new(section.body_limit_bytes()))
+        .layer(DefaultBodyLimit::max(section.body_limit_bytes()));
     if section.compression {
         routes.layer(
             outer.layer(
                 CompressionLayer::new().gzip(true).br(true).compress_when(
-                    SizeAbove::new(section.compression_min_bytes)
+                    SizeAbove::new(section.compression_min_size.bytes())
                         .and(NotForContentType::GRPC)
                         .and(NotForContentType::IMAGES)
                         .and(NotForContentType::SSE),

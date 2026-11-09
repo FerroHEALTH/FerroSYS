@@ -51,7 +51,7 @@ use x509_cert::Certificate;
 
 use self::chain::Link;
 use self::gate::{Cleared, Gate};
-use crate::section::TlsVersion;
+use ferrohealth_config::tls::TlsVersion;
 
 /// How long a cleared chain admits a connection, in seconds.
 const CLEARED_FOR: u64 = 300;

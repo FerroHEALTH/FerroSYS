@@ -31,12 +31,16 @@ url = "2.5.8"
 # environment. Verified against crates.io on 2026-10-26.
 percent-encoding = "2.3.2"
 toml = { version = "1.1.8", default-features = false, features = ["std", "parse", "display", "serde"] }
+# The JSON Schema of the configuration types behind each crate's `schema`
+# feature, on the line the products resolve. Verified against crates.io on
+# 2026-11-09.
+schemars = { version = "1.2.2", default-features = false, features = ["derive", "std"] }
 # One FerroSYS crate requires another by a caret requirement on the newest
 # release it needs, so a patch of one reaches the products without a release
 # of the crates built on it; cargo-semver-checks keeps every patch compatible
 # (https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements).
 ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "0.2.0" }
-ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.2.6" }
+ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.3.0" }
 # ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
 # provider read by Prometheus and pushed over OTLP, on the lines FerroFED
 # resolves. Verified against crates.io on 2026-10-26.
@@ -44,16 +48,20 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "fmt", "env-filter", "json", "ansi", "registry"] }
 opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "rt-tokio"] }
-opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "grpc-tonic", "tls-aws-lc", "tls-roots"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["trace", "metrics", "grpc-tonic"] }
+# The channel the OTLP export dials an https collector over, through the
+# rustls configuration the product built: tonic without its own TLS, so it
+# passes the stream through. Verified against crates.io on 2026-11-09.
+tonic = { version = "0.14.6", default-features = false, features = ["channel"] }
 opentelemetry-prometheus = "0.33.1"
 prometheus = { version = "0.14.0", default-features = false }
 tracing-opentelemetry = { version = "0.34.0", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
 http = "1.5.0"
-ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.2.2" }
+ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.3.0" }
 ferrohealth-health = { path = "crates/ferrohealth-health", version = "0.1.1" }
-ferrohealth-server = { path = "crates/ferrohealth-server", version = "0.6.2" }
+ferrohealth-server = { path = "crates/ferrohealth-server", version = "0.7.0" }
 # ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.
 # Verified against crates.io on 2026-10-26.
 tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit", "compression-gzip", "compression-br"] }

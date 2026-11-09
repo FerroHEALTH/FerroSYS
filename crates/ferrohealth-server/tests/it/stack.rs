@@ -81,8 +81,8 @@ fn product() -> Router {
 fn section() -> ServerSection {
     ServerSection {
         base_path: BasePath::new("/ferrosys").expect("a base path"),
-        request_timeout_ms: 1_000,
-        body_limit_bytes: 16,
+        request_timeout: ferrohealth_config::units::Duration::from_millis(1_000),
+        body_limit: ferrohealth_config::units::ByteSize::from_bytes(16),
         ..ServerSection::default()
     }
 }

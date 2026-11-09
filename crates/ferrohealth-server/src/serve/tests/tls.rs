@@ -110,7 +110,7 @@ async fn a_listener_serves_the_tls_the_product_keeps_and_reloads() {
         let _received = stopped.await;
     };
     let section = ServerSection {
-        drain_delay_ms: 0,
+        drain_delay: ferrohealth_config::units::Duration::ZERO,
         ..ServerSection::default()
     };
     let reloaded = std::sync::Arc::clone(&kept);

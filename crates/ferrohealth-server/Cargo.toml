@@ -4,7 +4,7 @@
 name = "ferrohealth-server"
 description = "The HTTP server plumbing of the FerroHEALTH products: the request id, the panic catch, the limits, the health routes, the bounded drain, the healthcheck and the CLI skeleton"
 # Its own version line, released by the tag ferrohealth-server-v<version>.
-version = "0.6.4"
+version = "0.7.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -32,12 +32,16 @@ platform-verifier = ["dep:rustls-platform-verifier"]
 # `revocation::RevocationCheck`, the outbound TLS that checks every
 # certificate a peer presents by CRL, then OCSP, before any data is sent.
 revocation = ["reqwest", "dep:aws-lc-rs", "dep:der", "dep:jiff", "dep:url", "dep:x509-cert", "dep:x509-ocsp"]
+# `schemars::JsonSchema` on the `[server]` section and every type it reaches,
+# for a product that generates its configuration reference from its types.
+schema = ["dep:schemars", "ferrohealth-config/schema"]
 
 [dependencies]
 aws-lc-rs = { workspace = true, optional = true }
 axum = { workspace = true, features = ["tokio", "http1", "json"] }
 clap.workspace = true
 der = { workspace = true, optional = true }
+ferrohealth-config.workspace = true
 ferrohealth-secret.workspace = true
 ferrohealth-health = { workspace = true, features = ["registry"] }
 ferrohealth-telemetry = { workspace = true, features = ["axum"] }
@@ -50,6 +54,7 @@ pin-project-lite.workspace = true
 reqwest = { workspace = true, optional = true }
 rustls.workspace = true
 rustls-platform-verifier = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -66,7 +71,6 @@ x509-ocsp = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
-ferrohealth-config.workspace = true
 hyper = { workspace = true, features = ["http2"] }
 rcgen.workspace = true
 tempfile.workspace = true

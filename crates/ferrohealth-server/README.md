@@ -38,10 +38,10 @@ runs the same stack, the same health routes and the same shutdown.
   the port reads it.
 - `serve::serve` runs until `SIGTERM` or `SIGINT`. It then withdraws
   readiness, waits the drain delay, and gives the requests in flight a
-  bounded time to finish. A client gets `header_read_timeout_ms` to send a
+  bounded time to finish. A client gets `header_read_timeout` to send a
   request head, counted from the head's first byte, so a connection that
   never finishes one is closed, and a kept-alive connection is closed
-  after `idle_timeout_ms` without a request.
+  after `idle_timeout` without a request.
 - `healthcheck::check` is the container probe: readiness over loopback,
   exit `0` only on `200`. `healthcheck::Get` makes the same exchange for a
   product that reads more from its own listener, over plain HTTP or the

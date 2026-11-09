@@ -50,5 +50,8 @@ pub mod libpq;
 pub mod loader;
 mod overrides;
 pub mod provenance;
+pub mod removed;
 pub mod report;
 pub mod strict;
+pub mod tls;
+pub mod units;

@@ -69,7 +69,7 @@ async fn routes_beside_the_base_path_and_the_fallback_run_inside_the_stack() {
         .finish();
     let _default = tracing::subscriber::set_default(subscriber);
     let section = ServerSection {
-        compression_min_bytes: 0,
+        compression_min_size: ferrohealth_config::units::ByteSize::ZERO,
         ..section()
     };
     let app = beside_and_fallback(&section, StackPolicy::default());
@@ -140,9 +140,9 @@ async fn routes_beside_the_base_path_and_the_fallback_run_inside_the_stack() {
 #[tokio::test]
 async fn every_layer_covers_the_routes_beside_and_the_fallback() {
     let section = ServerSection {
-        compression_min_bytes: 0,
+        compression_min_size: ferrohealth_config::units::ByteSize::ZERO,
         max_concurrent_requests: NonZeroUsize::new(1),
-        retry_after_s: 2,
+        retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
     let app = beside_and_fallback(&section, refusing());
