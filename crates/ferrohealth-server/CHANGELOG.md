@@ -624,7 +624,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.0...HEAD
+[0.8.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.1...ferrohealth-server-v0.8.0
 [0.7.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.0...ferrohealth-server-v0.7.1
 [0.7.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.4...ferrohealth-server-v0.7.0
 [0.6.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.3...ferrohealth-server-v0.6.4
