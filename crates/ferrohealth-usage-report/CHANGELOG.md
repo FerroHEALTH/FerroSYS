@@ -10,6 +10,16 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-09
+
+### Changed
+
+- Breaking: the `telemetry` feature links `ferrohealth-telemetry` 0.3, so
+  `window::Window` implements the 0.3 `request_log::Recorder`. A product on
+  `ferrohealth-telemetry` 0.3 linked two copies of the crate beside 0.2.1,
+  and its `Window` did not satisfy the request log's `Recorder` bound. A
+  product moves to `ferrohealth-telemetry` 0.3 in the same change (#320).
+
 ## [0.2.1] - 2026-11-05
 
 ### Changed
@@ -83,7 +93,8 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
   reports, a refusal logged with the collector's status, and a daily report
   that does not arrive keeping its counts for the next try (#18).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.2.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.3.0...HEAD
+[0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.2.1...ferrohealth-usage-report-v0.3.0
 [0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.2.0...ferrohealth-usage-report-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.2...ferrohealth-usage-report-v0.2.0
 [0.1.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.1.1...ferrohealth-usage-report-v0.1.2
