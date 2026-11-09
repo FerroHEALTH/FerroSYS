@@ -273,9 +273,12 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The pull request's merge commit and its first parent, the base, so
+      # the check judges only a change that reaches a crate.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: "false"
@@ -285,7 +288,7 @@ jobs:
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-semver-checks@${{ steps.pin.outputs.version }}
-      - run: bash scripts/checks/semver.sh
+      - run: bash scripts/checks/semver.sh --changed HEAD^1
 
   # ---- The single required check --------------------------------------------
   # It needs every other job and runs on always(), so it reports even when a
