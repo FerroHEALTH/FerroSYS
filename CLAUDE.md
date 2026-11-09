@@ -50,6 +50,12 @@ milestone set and its crates.io name reserved, which needs the owner.
 
 ## IMPORTANT hard rules
 
+- **Family rules carried in `.claude/memory/` (index `MEMORY.md`).** A removal
+  aid (a named refusal of a removed or renamed config key, flag, env variable,
+  route or format) lives exactly one release and the next release deletes it
+  fully; no legacy support is ever kept (owner hard rule 2026-11-09,
+  `no-compat-shims.md`). Build the proper solution even when it breaks an API
+  and moves the minor version (owner 2026-11-08, `no-half-solutions.md`).
 - **The standards are the authority** once code lands: the OpenTelemetry
   protocol and semantic conventions, W3C Trace Context, the HTTP RFCs, and
   the FerroPULSE report envelope, vendored and pinned. Cite the section in
