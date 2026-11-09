@@ -53,7 +53,10 @@ runs the same stack, the same health routes and the same shutdown.
 - `run::Run` is the run path around them: the command line parsed with
   clap's exit codes, the multi-threaded runtime started, the product's job
   run on it, and a `run::Failure` written with its whole cause chain and
-  its exit code, 1 or `run::EXIT_CONFIG`.
+  its exit code, 1 or `run::EXIT_CONFIG`. `run::Failure::refused_configuration`
+  and `run::Failure::not_up` are the two failures of a configuration that
+  does not load, which `cli::Common::refused` picks for its job, and
+  `run::config_check` is the `config check` job over the loaded tree.
 - `section::ServerSection` is the `[server]` section, with the listener's
   TLS (mutual TLS, reload on `SIGHUP`, TLS 1.3 unless `min_version`
   lowers it to 1.2), the trusted proxies, the caller
@@ -96,8 +99,9 @@ runs the same stack, the same health routes and the same shutdown.
 ferrohealth-server = "=0.8.0"
 ```
 
-Install `ferrohealth_telemetry::panic::install_hook` at start, so Rust's own
-hook prints no panic message. Pin the version exactly, as every FerroHEALTH
+Start the telemetry with `telemetry::install` (feature `otlp`), which also
+installs `ferrohealth_telemetry::panic::install_hook`, so Rust's own hook
+prints no panic message. Pin the version exactly, as every FerroHEALTH
 product does.
 
 ## Licence

@@ -9,13 +9,15 @@
 //! is that hand-over, written once for every product binary: it reads
 //! `telemetry.otlp.tls` with [`TlsClient`] over the platform's verifier and
 //! the table's extra roots, so the trust roots, the client identity and the
-//! minimum version hold. No specification governs the hand-over: our own
-//! design.
+//! minimum version hold. [`install`] is the start every binary makes over
+//! it: the telemetry built, its subscriber installed on the detected console,
+//! and the family's panic hook in place of Rust's. No specification governs
+//! the hand-over: our own design.
 
 use std::sync::Arc;
 
 use ferrohealth_telemetry::section::TelemetrySection;
-use ferrohealth_telemetry::telemetry::{InitError, Service, Telemetry};
+use ferrohealth_telemetry::telemetry::{Console, FilterHandle, InitError, Service, Telemetry};
 
 use crate::tls_client::{TlsClient, TlsClientError};
 
@@ -32,6 +34,42 @@ pub enum TelemetryBuildError {
     /// The providers could not be built.
     #[error("the telemetry could not be built")]
     Init(#[source] InitError),
+    /// The subscriber could not be installed, such as in a process that
+    /// already has one.
+    #[error("the telemetry could not be installed")]
+    Install(#[source] InitError),
+}
+
+/// The telemetry [`install`] put in place: the providers and the handle of
+/// the console filter.
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct Installed {
+    telemetry: Arc<Telemetry>,
+    filter: FilterHandle,
+}
+
+impl Installed {
+    /// The providers, for the request log's meter and the exporters.
+    #[must_use]
+    pub const fn telemetry(&self) -> &Arc<Telemetry> {
+        &self.telemetry
+    }
+
+    /// The handle that replaces the console filter at run time.
+    #[must_use]
+    pub const fn filter(&self) -> &FilterHandle {
+        &self.filter
+    }
+
+    /// Flushes and stops the exporters before the process exits, logging a
+    /// failure: the job has ended, so a lost flush changes nothing it
+    /// answers.
+    pub fn shutdown(&self) {
+        if let Err(error) = self.telemetry.shutdown() {
+            tracing::warn!(%error, "the telemetry did not flush");
+        }
+    }
 }
 
 /// Builds the telemetry `section` asks for, described by `service`.
@@ -61,13 +99,43 @@ pub fn build(
     Telemetry::with_tls(section, service, Arc::new(tls)).map_err(TelemetryBuildError::Init)
 }
 
+/// Builds and installs the telemetry `section` asks for, with the family's
+/// panic hook.
+///
+/// The telemetry comes from [`build`], its subscriber writes to standard
+/// output over `Console::detect`, and
+/// `ferrohealth_telemetry::panic::install_hook` replaces Rust's hook, so a
+/// panic writes the family's line and never its message.
+///
+/// Call it once per process, after the configuration is read and before the
+/// first line is logged; with `[telemetry.otlp]` it runs inside the Tokio
+/// runtime that carries the export. Call [`Installed::shutdown`] before the
+/// process exits.
+///
+/// # Errors
+///
+/// Returns every error of [`build`], and [`TelemetryBuildError::Install`]
+/// when the process already has a subscriber. The panic hook is left alone
+/// on an error.
+pub fn install(
+    section: &TelemetrySection,
+    service: Service,
+) -> Result<Installed, TelemetryBuildError> {
+    let telemetry = Arc::new(build(section, service)?);
+    let filter = telemetry
+        .install(section, &Console::detect())
+        .map_err(TelemetryBuildError::Install)?;
+    ferrohealth_telemetry::panic::install_hook();
+    Ok(Installed { telemetry, filter })
+}
+
 #[cfg(test)]
 mod tests {
     use ferrohealth_secret::secret_url::SecretUrl;
     use ferrohealth_telemetry::section::{OtlpSection, TelemetrySection};
     use ferrohealth_telemetry::telemetry::{InitError, Service};
 
-    use super::{TelemetryBuildError, build};
+    use super::{TelemetryBuildError, build, install};
 
     fn with_otlp(endpoint: &str) -> TelemetrySection {
         TelemetrySection {
@@ -126,5 +194,26 @@ mod tests {
             ),
             "{refusal}"
         );
+    }
+
+    #[test]
+    fn install_puts_the_subscriber_in_place_once_per_process() {
+        let installed = install(&TelemetrySection::default(), service()).expect("it installs");
+        // The default hook comes back, so a later assertion prints its message.
+        drop(std::panic::take_hook());
+        assert!(
+            installed.telemetry().tracer().is_none(),
+            "no spans are exported"
+        );
+        installed
+            .filter()
+            .replace("debug")
+            .expect("the handle replaces the console filter");
+        tracing::info!("a line through the installed subscriber");
+        installed.shutdown();
+        let again = install(&TelemetrySection::default(), service())
+            .expect_err("a process has one subscriber");
+        assert!(matches!(again, TelemetryBuildError::Install(_)), "{again}");
+        assert_eq!("the telemetry could not be installed", again.to_string());
     }
 }
