@@ -203,7 +203,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.3.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.0...HEAD
+[0.4.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.3.0...ferrohealth-telemetry-v0.4.0
 [0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.5...ferrohealth-telemetry-v0.3.0
 [0.2.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.4...ferrohealth-telemetry-v0.2.5
 [0.2.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.3...ferrohealth-telemetry-v0.2.4
