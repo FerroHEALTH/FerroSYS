@@ -5,7 +5,6 @@
 
 use std::fmt;
 
-use ferrohealth_config::removed::{Removals, Removed, RemovedKeys};
 use ferrohealth_config::tls::TlsClientSection;
 use ferrohealth_secret::secret_url::SecretUrl;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -168,8 +167,7 @@ impl Serialize for Filter {
 /// The `[telemetry.otlp]` table: where and how spans and metrics are sent.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(try_from = "RawOtlp")]
-#[cfg_attr(feature = "schema", schemars(!try_from, default, deny_unknown_fields))]
+#[serde(default, deny_unknown_fields)]
 pub struct OtlpSection {
     /// The collector's OTLP/gRPC endpoint; `https://` speaks TLS. It may
     /// carry a credential, so it renders masked.
@@ -200,60 +198,6 @@ impl Default for OtlpSection {
             sample_ratio: SampleRatio::ALL,
             tls: TlsClientSection::default(),
         }
-    }
-}
-
-/// The `[telemetry.otlp]` table as written, checked into an [`OtlpSection`].
-#[derive(Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct RawOtlp {
-    endpoint: SecretUrl,
-    traces: bool,
-    metrics: bool,
-    sample_ratio: SampleRatio,
-    tls: TlsClientSection,
-    trust_roots_file: Removed,
-    client_identity_file: Removed,
-}
-
-impl Default for RawOtlp {
-    fn default() -> Self {
-        let section = OtlpSection::default();
-        Self {
-            endpoint: section.endpoint,
-            traces: section.traces,
-            metrics: section.metrics,
-            sample_ratio: section.sample_ratio,
-            tls: section.tls,
-            trust_roots_file: Removed::default(),
-            client_identity_file: Removed::default(),
-        }
-    }
-}
-
-impl TryFrom<RawOtlp> for OtlpSection {
-    type Error = RemovedKeys;
-
-    fn try_from(raw: RawOtlp) -> Result<Self, Self::Error> {
-        let mut removals = Removals::new();
-        removals.replaced(
-            raw.trust_roots_file,
-            "telemetry.otlp.trust_roots_file",
-            "telemetry.otlp.tls.trust_roots_file",
-        );
-        removals.replaced(
-            raw.client_identity_file,
-            "telemetry.otlp.client_identity_file",
-            "telemetry.otlp.tls.client_identity_file",
-        );
-        removals.finish()?;
-        Ok(Self {
-            endpoint: raw.endpoint,
-            traces: raw.traces,
-            metrics: raw.metrics,
-            sample_ratio: raw.sample_ratio,
-            tls: raw.tls,
-        })
     }
 }
 
@@ -386,17 +330,15 @@ mod tests {
     }
 
     #[test]
-    fn the_otlp_file_keys_of_0_2_are_refused_naming_the_tls_table() {
-        let error = load(
-            "[telemetry.otlp]\nendpoint = \"https://otel.example.org:4317\"\ntrust_roots_file = \"/run/roots.pem\"\nclient_identity_file = \"/run/identity.pem\"\n",
-        )
-        .expect_err("the keys of 0.2 are refused");
-        let shown = error.to_string();
-        for line in [
-            "telemetry.otlp.trust_roots_file was replaced by telemetry.otlp.tls.trust_roots_file",
-            "telemetry.otlp.client_identity_file was replaced by telemetry.otlp.tls.client_identity_file",
-        ] {
-            assert!(shown.contains(line), "{line} in {shown}");
+    fn the_otlp_file_keys_of_0_2_are_unknown_keys() {
+        for key in ["trust_roots_file", "client_identity_file"] {
+            assert!(
+                load(&format!(
+                    "[telemetry.otlp]\nendpoint = \"https://otel.example.org:4317\"\n{key} = \"/run/x.pem\"\n"
+                ))
+                .is_err(),
+                "{key} is no key of [telemetry.otlp]"
+            );
         }
     }
 

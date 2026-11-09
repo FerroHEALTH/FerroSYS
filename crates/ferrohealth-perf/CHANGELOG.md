@@ -10,6 +10,11 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- The load plan links `ferrohealth-server` 0.8, which deletes the named
+  refusals of the `[server]` keys 0.7.0 retired (#328).
+
 ## [0.7.0] - 2026-11-09
 
 ### Changed

@@ -10,6 +10,20 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-09
+
+### Removed
+
+- Breaking: the named refusals of the `[server]` and `[server.tls]` keys
+  0.7.0 retired are deleted, under the owner's rule that a removal aid
+  lives for the one release that retires it (#328).
+  `request_timeout_ms`, `header_read_timeout_ms`, `idle_timeout_ms`,
+  `body_limit_bytes`, `drain_delay_ms`, `shutdown_timeout_ms`,
+  `retry_after_s`, `compression_min_bytes` and `tls.reload_interval_s` are
+  refused as unknown keys when the table loads, and the variants
+  `section::ServerSectionError::Removed` and
+  `section::ClientAuthError::Removed` are gone.
+
 ## [0.7.1] - 2026-11-09
 
 ### Added
