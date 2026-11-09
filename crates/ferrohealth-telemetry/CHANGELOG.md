@@ -10,6 +10,36 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-09
+
+### Changed
+
+- Breaking: `[telemetry.otlp]` takes the shared outbound TLS table,
+  `tls` (`ferrohealth_config::tls::TlsClientSection`: `trust_roots_file`,
+  `client_identity` or `client_identity_file`, `min_version`), in place of
+  its own `trust_roots_file` and `client_identity_file`, which are refused
+  at load naming `telemetry.otlp.tls.trust_roots_file` and
+  `telemetry.otlp.tls.client_identity_file` (#312).
+- Breaking: the crate reads no TLS file. A product reads
+  `telemetry.otlp.tls` with `ferrohealth-server`'s `tls_client::TlsClient`
+  and hands the rustls configuration to the new `Telemetry::with_tls`; the
+  export dials the collector through it with the ALPN protocol `h2`, so
+  the minimum version and the client identity hold, which tonic's own TLS
+  could not hold for `min_version`. `Telemetry::new` refuses an
+  `https://` collector (`InitError::TlsNotHanded`). `InitError::TlsFile`,
+  `InitError::TlsPem` and `InitError::Identity` are gone,
+  `InitError::TlsWithoutHttps` names the table and carries no key, and
+  `InitError::Endpoint` and `InitError::ServerName` refuse an endpoint the
+  export cannot dial (#312).
+- The `otlp` feature links tonic without its TLS features, so tonic passes
+  the dialed stream through as it is (#312).
+
+### Added
+
+- Feature `schema`: `schemars::JsonSchema` on `TelemetrySection` and every
+  type it reaches, for a product that generates its configuration
+  reference (#312).
+
 ## [0.2.5] - 2026-11-05
 
 ### Changed

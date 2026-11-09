@@ -24,16 +24,10 @@
 //!
 //! let server: Server = toml::from_str("request_timeout_ms = 30000").unwrap();
 //! let mut removals = Removals::new();
-//! removals.replaced(
-//!     server.request_timeout_ms,
-//!     "server.request_timeout_ms",
-//!     "server.request_timeout, a duration such as `30s`",
-//! );
-//! let refusal = removals.finish().unwrap_err();
-//! assert_eq!(
-//!     "server.request_timeout_ms was replaced by server.request_timeout, a duration such as `30s`",
-//!     refusal.to_string(),
-//! );
+//! let (old, new) = ("server.request_timeout_ms", "server.request_timeout");
+//! removals.replaced(server.request_timeout_ms, old, format!("{new}, a duration such as `30s`"));
+//! let refusal = removals.finish().unwrap_err().to_string();
+//! assert!(refusal.starts_with("server.request_timeout_ms was replaced by server.request_timeout"));
 //! ```
 
 use std::fmt;

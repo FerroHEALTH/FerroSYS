@@ -158,41 +158,31 @@ pub enum InitError {
     /// `[telemetry.otlp]` is present and this build has no OTLP export.
     #[error("telemetry.otlp is set, but this build has no OTLP export")]
     NoOtlp,
-    /// A TLS file of `[telemetry.otlp]` could not be read.
-    #[error("{key} names {}, which could not be read", path.display())]
-    TlsFile {
-        /// The key that names the file.
-        key: &'static str,
-        /// The file.
-        path: std::path::PathBuf,
-        /// What the file system reported.
-        #[source]
-        source: io::Error,
-    },
-    /// A TLS file of `[telemetry.otlp]` is set beside an endpoint that is
-    /// not `https://`, which would export in plain text and ignore it.
+    /// `[telemetry.otlp]` names TLS material beside an endpoint that is not
+    /// `https://`, which would export in plain text and ignore it.
     #[error(
-        "{key} is set, and telemetry.otlp.endpoint is not https://, so the file would be ignored"
+        "telemetry.otlp.tls names TLS material, and telemetry.otlp.endpoint is not https://, so the material would be ignored"
     )]
-    TlsWithoutHttps {
-        /// The key that names the file.
-        key: &'static str,
+    TlsWithoutHttps,
+    /// `[telemetry.otlp]` names an `https://` collector and the product
+    /// handed no TLS configuration to dial it with.
+    #[error(
+        "telemetry.otlp.endpoint is https://, and no TLS configuration was handed to Telemetry::with_tls for it"
+    )]
+    TlsNotHanded,
+    /// The endpoint is no URI the export can dial; it is not quoted, since it
+    /// may carry a credential.
+    #[cfg(feature = "otlp")]
+    #[error("telemetry.otlp.endpoint is no URI the OTLP export can dial")]
+    Endpoint {
+        /// What `tonic` reported.
+        #[source]
+        source: tonic::transport::Error,
     },
-    /// A TLS file of `[telemetry.otlp]` holds no PEM of its kind: no
-    /// certificate among the trust roots, or a client identity without a
-    /// certificate or a private key. No part of the file is quoted.
-    #[error("{key} names {}, which holds no {wanted}", path.display())]
-    TlsPem {
-        /// The key that names the file.
-        key: &'static str,
-        /// The file.
-        path: std::path::PathBuf,
-        /// What the file lacks, such as `PEM certificate`.
-        wanted: &'static str,
-    },
-    /// The client identity of `[telemetry.otlp]` could not be read.
-    #[error(transparent)]
-    Identity(#[from] ferrohealth_secret::file::SecretError),
+    /// The endpoint's host is neither a DNS name nor an IP address, so no
+    /// TLS server name can be checked against it.
+    #[error("telemetry.otlp.endpoint names no host a TLS certificate can be checked against")]
+    ServerName,
     /// An OTLP exporter could not be built.
     #[cfg(feature = "otlp")]
     #[error("the OTLP exporter could not be built")]
@@ -234,12 +224,6 @@ pub enum InitError {
     },
 }
 
-/// The key of the OTLP trust roots file.
-const TRUST_ROOTS_KEY: &str = "telemetry.otlp.trust_roots_file";
-
-/// The key of the OTLP client identity file.
-const CLIENT_IDENTITY_KEY: &str = "telemetry.otlp.client_identity_file";
-
 /// The one OpenTelemetry provider of a process.
 ///
 /// Built from a [`TelemetrySection`] and a [`Service`]. With the
@@ -265,7 +249,26 @@ impl fmt::Debug for Telemetry {
 }
 
 impl Telemetry {
-    /// Builds the providers `section` asks for, described by `service`.
+    /// Builds the providers `section` asks for, described by `service`,
+    /// with no TLS to a collector: an `https://` collector needs
+    /// [`Telemetry::with_tls`].
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`Telemetry::with_tls`], and
+    /// [`InitError::TlsNotHanded`] for an `https://` collector.
+    pub fn new(section: &TelemetrySection, service: Service) -> Result<Self, InitError> {
+        Self::build(section, service, otlp::Handed::default())
+    }
+
+    /// Builds the providers `section` asks for, described by `service`,
+    /// dialing an `https://` collector over `tls`.
+    ///
+    /// `tls` is the rustls configuration the product built from
+    /// `telemetry.otlp.tls` with `ferrohealth-server`'s `TlsClient`, so its
+    /// trust roots, client identity and minimum version hold; the export
+    /// offers it the ALPN protocol `h2` (RFC 9113 §3.2). A plain-HTTP
+    /// collector does not use it.
     ///
     /// The OTLP exporters speak gRPC through `tonic`, so with
     /// `[telemetry.otlp]` this runs inside the Tokio runtime that carries the
@@ -274,12 +277,25 @@ impl Telemetry {
     /// # Errors
     ///
     /// Returns [`InitError::MissingEndpoint`], [`InitError::NoOtlp`],
-    /// [`InitError::TlsWithoutHttps`], [`InitError::TlsFile`],
-    /// [`InitError::TlsPem`] and [`InitError::Identity`] for an OTLP table
-    /// this build cannot honour, `InitError::Exporter` when an exporter
-    /// cannot be built, and [`InitError::Prometheus`] when the Prometheus
-    /// reader cannot be built.
-    pub fn new(section: &TelemetrySection, service: Service) -> Result<Self, InitError> {
+    /// [`InitError::TlsWithoutHttps`], `InitError::Endpoint` and
+    /// [`InitError::ServerName`] for an OTLP table this build cannot honour,
+    /// `InitError::Exporter` when an exporter cannot be built, and
+    /// [`InitError::Prometheus`] when the Prometheus reader cannot be built.
+    #[cfg(feature = "otlp")]
+    pub fn with_tls(
+        section: &TelemetrySection,
+        service: Service,
+        tls: Arc<rustls::ClientConfig>,
+    ) -> Result<Self, InitError> {
+        Self::build(section, service, Some(tls))
+    }
+
+    /// Builds the providers, with the TLS the product handed, if any.
+    fn build(
+        section: &TelemetrySection,
+        service: Service,
+        tls: otlp::Handed,
+    ) -> Result<Self, InitError> {
         let service = match &section.environment {
             Some(environment) => service.environment(environment.clone()),
             None => service,
@@ -306,16 +322,10 @@ impl Telemetry {
             }
             // NOTE: no specification governs this: our own design; TLS material beside a
             // plain-HTTP collector would be ignored, so the table is refused instead.
-            if !section.endpoint.expose().starts_with("https://") {
-                let files = [
-                    (TRUST_ROOTS_KEY, section.trust_roots_file.is_some()),
-                    (CLIENT_IDENTITY_KEY, section.client_identity_file.is_some()),
-                ];
-                if let Some((key, _)) = files.into_iter().find(|(_, set)| *set) {
-                    return Err(InitError::TlsWithoutHttps { key });
-                }
+            if !section.endpoint.expose().starts_with("https://") && section.tls.names_material() {
+                return Err(InitError::TlsWithoutHttps);
             }
-            let (with_push, exported) = otlp::export(section, meters, resource)?;
+            let (with_push, exported) = otlp::export(section, meters, resource, tls)?;
             meters = with_push;
             tracers = exported;
         }
@@ -642,120 +652,8 @@ pub fn sampler(ratio: SampleRatio) -> Sampler {
     Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(ratio.get())))
 }
 
-/// The OTLP export, when the build has it.
 #[cfg(feature = "otlp")]
-mod otlp {
-    use opentelemetry_otlp::tonic_types::transport::{Certificate, ClientTlsConfig, Identity};
-    use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
-    use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::metrics::{MeterProviderBuilder, PeriodicReader, Temporality};
-    use opentelemetry_sdk::trace::SdkTracerProvider;
-    use rustls::pki_types::pem::PemObject as _;
-    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-    use secrecy::ExposeSecret as _;
-
-    use super::{CLIENT_IDENTITY_KEY, InitError, TRUST_ROOTS_KEY, sampler};
-    use crate::section::OtlpSection;
-
-    /// Adds the metrics push to `meters` and builds the span export, each
-    /// when `section` turns it on.
-    pub(super) fn export(
-        section: &OtlpSection,
-        mut meters: MeterProviderBuilder,
-        resource: Resource,
-    ) -> Result<(MeterProviderBuilder, Option<SdkTracerProvider>), InitError> {
-        let endpoint = section.endpoint.expose().to_owned();
-        let tls = tls(section)?;
-        if section.metrics {
-            let mut builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint.clone());
-            if let Some(tls) = &tls {
-                builder = builder.with_tls_config(tls.clone());
-            }
-            let exporter = builder
-                .with_temporality(Temporality::Cumulative)
-                .build()
-                .map_err(|source| InitError::Exporter { source })?;
-            meters = meters.with_reader(PeriodicReader::builder(exporter).build());
-        }
-        let tracers = if section.traces {
-            let mut builder = opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint);
-            if let Some(tls) = tls {
-                builder = builder.with_tls_config(tls);
-            }
-            let exporter = builder
-                .build()
-                .map_err(|source| InitError::Exporter { source })?;
-            Some(
-                SdkTracerProvider::builder()
-                    .with_batch_exporter(exporter)
-                    .with_resource(resource)
-                    .with_sampler(sampler(section.sample_ratio))
-                    .build(),
-            )
-        } else {
-            None
-        };
-        Ok((meters, tracers))
-    }
-
-    /// The TLS of an `https://` collector: the platform's trust roots, the
-    /// ones `trust_roots_file` adds, and the client identity
-    /// `client_identity_file` names for mutual TLS.
-    fn tls(section: &OtlpSection) -> Result<Option<ClientTlsConfig>, InitError> {
-        if !section.endpoint.expose().starts_with("https://") {
-            return Ok(None);
-        }
-        // NOTE: tonic builds its TLS client from rustls's process-level provider; an
-        // earlier install by the product wins, so the outcome of this one is dropped.
-        let _installed: Result<(), std::sync::Arc<rustls::crypto::CryptoProvider>> =
-            rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let mut config = ClientTlsConfig::new().with_native_roots();
-        if let Some(path) = &section.trust_roots_file {
-            let roots = std::fs::read(path).map_err(|source| InitError::TlsFile {
-                key: TRUST_ROOTS_KEY,
-                path: path.clone(),
-                source,
-            })?;
-            if !holds_certificates(&roots) {
-                return Err(pem_refusal(TRUST_ROOTS_KEY, path, "PEM certificate"));
-            }
-            config = config.ca_certificate(Certificate::from_pem(roots));
-        }
-        if let Some(path) = &section.client_identity_file {
-            let pem =
-                ferrohealth_secret::file::read_secret_file("telemetry.otlp.client_identity", path)?;
-            let pem = pem.expose_secret();
-            if !holds_certificates(pem.as_bytes()) {
-                return Err(pem_refusal(CLIENT_IDENTITY_KEY, path, "PEM certificate"));
-            }
-            if PrivateKeyDer::from_pem_slice(pem.as_bytes()).is_err() {
-                return Err(pem_refusal(CLIENT_IDENTITY_KEY, path, "PEM private key"));
-            }
-            config = config.identity(Identity::from_pem(pem, pem));
-        }
-        Ok(Some(config))
-    }
-
-    /// Whether `pem` holds one certificate or more, and every PEM section of
-    /// a certificate in it parses.
-    fn holds_certificates(pem: &[u8]) -> bool {
-        let mut certificates = CertificateDer::pem_slice_iter(pem).peekable();
-        certificates.peek().is_some() && certificates.all(|certificate| certificate.is_ok())
-    }
-
-    /// The refusal of the file `key` names at `path`, which lacks `wanted`.
-    fn pem_refusal(key: &'static str, path: &std::path::Path, wanted: &'static str) -> InitError {
-        InitError::TlsPem {
-            key,
-            path: path.to_path_buf(),
-            wanted,
-        }
-    }
-}
+mod otlp;
 
 /// The stand-in of the OTLP export in a build without it.
 #[cfg(not(feature = "otlp"))]
@@ -767,11 +665,15 @@ mod otlp {
     use super::InitError;
     use crate::section::OtlpSection;
 
+    /// No TLS can be handed to a build without the export.
+    pub(super) type Handed = Option<std::convert::Infallible>;
+
     /// Refuses `[telemetry.otlp]`: this build cannot honour it.
     pub(super) fn export(
         _section: &OtlpSection,
         _meters: MeterProviderBuilder,
         _resource: Resource,
+        _tls: Handed,
     ) -> Result<(MeterProviderBuilder, Option<SdkTracerProvider>), InitError> {
         Err(InitError::NoOtlp)
     }

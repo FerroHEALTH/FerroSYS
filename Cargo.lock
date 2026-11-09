@@ -946,12 +946,13 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-telemetry"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "axum",
  "ferrohealth-config",
  "ferrohealth-secret",
  "http",
+ "hyper-util",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-prometheus",
@@ -960,12 +961,15 @@ dependencies = [
  "prometheus",
  "rcgen",
  "rustls",
+ "schemars",
  "secrecy",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
+ "tonic",
  "tower",
  "tracing",
  "tracing-opentelemetry",
@@ -2637,7 +2641,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
- "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
@@ -3335,10 +3338,8 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "rustls-native-certs",
  "sync_wrapper",
  "tokio",
- "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

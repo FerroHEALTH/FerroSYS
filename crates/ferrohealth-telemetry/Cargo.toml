@@ -4,7 +4,7 @@
 name = "ferrohealth-telemetry"
 description = "The telemetry of the FerroHEALTH products: the console, the request log that never carries a body, the panic hook, and one OpenTelemetry provider for traces and metrics"
 # Its own version line, released by the tag ferrohealth-telemetry-v<version>.
-version = "0.2.5"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,13 +20,26 @@ include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 [features]
 default = []
 # The OTLP export of spans and metrics over gRPC, with TLS to the collector.
-otlp = ["dep:opentelemetry-otlp", "dep:rustls"]
+otlp = [
+    "dep:opentelemetry-otlp",
+    "dep:rustls",
+    "dep:tonic",
+    "dep:tokio",
+    "dep:tokio-rustls",
+    "dep:hyper-util",
+    "dep:tower",
+    "dep:http",
+]
 # The Prometheus text exposition of the metrics.
 prometheus = ["dep:opentelemetry-prometheus", "dep:prometheus"]
 # The request-log middleware and the metrics route for axum.
 axum = ["dep:axum", "dep:http", "dep:pin-project-lite", "dep:tower"]
+# `schemars::JsonSchema` on the `[telemetry]` section and every type it
+# reaches, for a product that generates its configuration reference.
+schema = ["dep:schemars", "ferrohealth-config/schema"]
 
 [dependencies]
+ferrohealth-config.workspace = true
 ferrohealth-secret.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
@@ -44,14 +57,18 @@ opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry-prometheus = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["net"] }
+tokio-rustls = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
-ferrohealth-config.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 rcgen.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 tower.workspace = true
 
 [lints]
