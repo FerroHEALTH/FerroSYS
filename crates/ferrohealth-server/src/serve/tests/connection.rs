@@ -43,7 +43,7 @@ async fn a_client_that_never_finishes_its_head_is_disconnected() {
     let address = listener.local_addr().expect("the address");
     let lifecycle = Lifecycle::default();
     let section = ServerSection {
-        header_read_timeout_ms: std::num::NonZeroU64::new(200).expect("not zero"),
+        header_read_timeout: ferrohealth_config::units::Duration::from_millis(200),
         ..ServerSection::default()
     };
     let app = app(

@@ -48,8 +48,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ferrohealth_server::section::TlsVersion;
-use ferrohealth_server::tls_client::TlsClientSection;
+use ferrohealth_config::tls::TlsClientSection;
+use ferrohealth_config::tls::TlsVersion;
 use http::{HeaderName, HeaderValue, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

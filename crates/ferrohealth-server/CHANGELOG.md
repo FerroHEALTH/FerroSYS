@@ -10,6 +10,45 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-09
+
+### Changed
+
+- Breaking: every span of time and amount of data in `[server]` is a
+  `ferrohealth_config::units::Duration` or `ByteSize`, and its key names no
+  unit. A product's file and environment move each key: `request_timeout_ms`
+  to `request_timeout`, `header_read_timeout_ms` to `header_read_timeout`,
+  `idle_timeout_ms` to `idle_timeout`, `body_limit_bytes` to `body_limit`,
+  `drain_delay_ms` to `drain_delay`, `shutdown_timeout_ms` to
+  `shutdown_timeout`, `retry_after_s` to `retry_after` (whole seconds,
+  RFC 9110 §10.2.3), `compression_min_bytes` to `compression_min_size`, and
+  `tls.reload_interval_s` to `tls.reload_interval`. Each old key is refused
+  at load naming its replacement and the form of its value, all of them at
+  once; the defaults keep their 0.6 values (#311).
+- Breaking: `ServerSection`'s fields follow the keys, and its
+  `request_timeout`, `header_read_timeout`, `idle_timeout`, `drain_delay`
+  and `shutdown_timeout` methods are gone: read the field and call
+  `Duration::get`. `ServerSection::body_limit_bytes` returns the limit as a
+  `usize`. A zero `header_read_timeout`, `idle_timeout` or
+  `tls.reload_interval`, a `retry_after` that is not whole seconds and a
+  `body_limit` past the address space are refused at load
+  (`section::ServerSectionError`, `section::ClientAuthError`) (#311).
+- Breaking: `tls_client::TlsClient::read` reads
+  `ferrohealth_config::tls::TlsClientSection`, and the listener's
+  `TlsSection::min_version` is `ferrohealth_config::tls::TlsVersion` (#311).
+
+### Added
+
+- Feature `schema`: `schemars::JsonSchema` on `ServerSection` and every type
+  it reaches, for a product that generates its configuration reference
+  (#311).
+
+### Removed
+
+- Breaking: `tls_client::TlsClientSection`, `section::TlsVersion` and
+  `section::TlsVersionError`, which live in `ferrohealth-config` 0.3 under
+  `tls` (#311).
+
 ## [0.6.4] - 2026-11-09
 
 ### Added

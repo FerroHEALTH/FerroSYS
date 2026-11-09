@@ -29,6 +29,7 @@ pub const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for
 
 /// The header a trusted proxy names the client in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum ForwardedHeader {
     /// `Forwarded`, its `for=` parameters (RFC 7239 §4, §5.2).
@@ -53,6 +54,14 @@ pub enum ForwardedHeader {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(
+        with = "String",
+        description = "An IP address, or a CIDR block such as 10.0.0.0/8."
+    )
+)]
 pub struct TrustedProxy(IpNet);
 
 /// A `trusted_proxies` entry that is neither an address nor a CIDR block.

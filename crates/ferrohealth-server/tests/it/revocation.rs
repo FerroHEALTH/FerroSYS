@@ -10,12 +10,13 @@ mod front;
 
 use std::time::Duration;
 
+use ferrohealth_config::tls::TlsClientSection;
+use ferrohealth_config::tls::TlsVersion;
 use ferrohealth_secret::secret::Secret;
 use ferrohealth_server::revocation::{
     RevocationCheck, RevocationError, RevocationSetupError, StatusError,
 };
-use ferrohealth_server::section::TlsVersion;
-use ferrohealth_server::tls_client::{TlsClient, TlsClientSection};
+use ferrohealth_server::tls_client::TlsClient;
 use url::Url;
 
 use self::front::{Front, Source, Standing};

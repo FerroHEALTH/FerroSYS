@@ -335,7 +335,6 @@ impl<S: tokio::io::AsyncWrite> tokio::io::AsyncWrite for Bounded<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU64;
     use std::time::Duration;
 
     use ferrohealth_health::lifecycle::Lifecycle;
@@ -376,8 +375,8 @@ mod tests {
 
     fn bounds(header_read_ms: u64, idle_ms: u64) -> ServerSection {
         ServerSection {
-            header_read_timeout_ms: NonZeroU64::new(header_read_ms).expect("non-zero"),
-            idle_timeout_ms: NonZeroU64::new(idle_ms).expect("non-zero"),
+            header_read_timeout: ferrohealth_config::units::Duration::from_millis(header_read_ms),
+            idle_timeout: ferrohealth_config::units::Duration::from_millis(idle_ms),
             ..ServerSection::default()
         }
     }

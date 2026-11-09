@@ -4,3 +4,5 @@
 //! Integration tests over the public API of ferrohealth-config.
 
 mod loader;
+mod removed;
+mod units;

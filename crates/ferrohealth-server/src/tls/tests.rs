@@ -318,15 +318,15 @@ fn the_minimum_version_decides_whether_tls_1_2_is_spoken() {
             rustls::ProtocolVersion::TLSv1_3,
             rustls::ProtocolVersion::TLSv1_2
         ],
-        versions(crate::section::TlsVersion::Tls12)
+        versions(ferrohealth_config::tls::TlsVersion::Tls12)
     );
     assert_eq!(
         vec![rustls::ProtocolVersion::TLSv1_3],
-        versions(crate::section::TlsVersion::Tls13)
+        versions(ferrohealth_config::tls::TlsVersion::Tls13)
     );
     let files = Files::new();
     let strict = TlsSection {
-        min_version: crate::section::TlsVersion::Tls13,
+        min_version: ferrohealth_config::tls::TlsVersion::Tls13,
         ..files.section(ClientAuth::None, false)
     };
     assert!(

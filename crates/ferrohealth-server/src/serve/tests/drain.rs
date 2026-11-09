@@ -96,8 +96,8 @@ async fn a_connection_still_open_at_the_bound_is_closed_when_run_returns() {
     let address = listener.local_addr().expect("the address");
     let lifecycle = Lifecycle::default();
     let section = ServerSection {
-        drain_delay_ms: 0,
-        shutdown_timeout_ms: 300,
+        drain_delay: ferrohealth_config::units::Duration::ZERO,
+        shutdown_timeout: ferrohealth_config::units::Duration::from_millis(300),
         ..ServerSection::default()
     };
     let app = app(
@@ -149,7 +149,7 @@ async fn every_listener_drains_on_one_signal() {
         }),
     );
     let section = ServerSection {
-        shutdown_timeout_ms: 5_000,
+        shutdown_timeout: ferrohealth_config::units::Duration::from_millis(5_000),
         ..ServerSection::default()
     };
     let mut listeners = Vec::new();
@@ -252,8 +252,8 @@ async fn an_http2_handler_still_running_at_the_bound_is_cancelled_when_run_retur
     let address = listener.local_addr().expect("the address");
     let lifecycle = Lifecycle::default();
     let section = ServerSection {
-        drain_delay_ms: 0,
-        shutdown_timeout_ms: 300,
+        drain_delay: ferrohealth_config::units::Duration::ZERO,
+        shutdown_timeout: ferrohealth_config::units::Duration::from_millis(300),
         ..ServerSection::default()
     };
     let app = app(

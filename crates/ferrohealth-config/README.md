@@ -46,6 +46,19 @@ console reads its configuration the same way, so an operator learns it once.
   key per line with its source. Secrets held in the redacting types of
   `ferrohealth-secret` show as `***`, and a secret's `<key>_file` sibling is
   read with `ferrohealth_secret::file`.
+- `units::Duration` and `units::ByteSize` are the one way every section
+  writes a span of time and an amount of data: a whole number and its unit
+  with no space, `"30s"`, `"10min"`, `"7d"` (UCUM codes `ms`, `s`, `min`,
+  `h`, `d`) and `"64MiB"` (IEC 80000-13 binary units). A bare number, `m`
+  and a decimal unit such as `MB` are refused, each naming the right form.
+- `removed::Removed` keeps a retired key readable so that
+  `removed::Removals` can refuse every retired key a file sets, all at
+  once, each naming its replacement. A key is never read under two names.
+- `tls::TlsClientSection` is the TLS table of every outbound call, read by
+  `ferrohealth-server`'s `tls_client::TlsClient`, and `tls::TlsVersion` the
+  oldest TLS version a listener or a client speaks.
+- Feature `schema` derives `schemars::JsonSchema` on these types, for a
+  product that generates its configuration reference.
 
 ## Use
 

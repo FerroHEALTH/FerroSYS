@@ -3,7 +3,8 @@
 
 //! The TLS material of a product's outbound TLS calls, HTTPS and others.
 //!
-//! A table that names a remote service takes `client_identity`, inline, or
+//! A table that names a remote service holds a
+//! `ferrohealth_config::tls::TlsClientSection`: `client_identity`, inline, or
 //! `client_identity_file`: the client certificate chain and its private key
 //! in one PEM, presented for mutual TLS and held as a secret; and
 //! `trust_roots_file`, a PEM bundle of trust roots beside the platform's.
@@ -18,29 +19,11 @@
 
 use std::path::PathBuf;
 
+use ferrohealth_config::tls::TlsClientSection;
 use ferrohealth_secret::secret::Secret;
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::{ClientConfig, RootCertStore};
-use serde::{Deserialize, Serialize};
-
-/// The outbound TLS keys of one table.
-///
-/// `Debug` and serialization show the inline identity as `***`, as
-/// [`Secret`] does.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct TlsClientSection {
-    /// The client certificate chain and its private key, in one PEM.
-    pub client_identity: Option<Secret>,
-    /// A file holding `client_identity`.
-    pub client_identity_file: Option<PathBuf>,
-    /// A PEM bundle of trust roots beside the platform's.
-    pub trust_roots_file: Option<PathBuf>,
-    /// The oldest TLS version the client speaks: `"1.3"` unless lowered to
-    /// `"1.2"`, as for the listener.
-    pub min_version: crate::section::TlsVersion,
-}
 
 /// The outbound TLS material could not be read.
 ///
@@ -109,7 +92,7 @@ pub struct TlsClient {
     key: String,
     identity: Option<Identity>,
     roots: Vec<CertificateDer<'static>>,
-    min_version: crate::section::TlsVersion,
+    min_version: ferrohealth_config::tls::TlsVersion,
 }
 
 impl std::fmt::Debug for TlsClient {
@@ -326,8 +309,8 @@ impl TlsClient {
             builder = builder.add_root_certificate(root);
         }
         builder = builder.tls_version_min(match self.min_version {
-            crate::section::TlsVersion::Tls12 => reqwest::tls::Version::TLS_1_2,
-            crate::section::TlsVersion::Tls13 => reqwest::tls::Version::TLS_1_3,
+            ferrohealth_config::tls::TlsVersion::Tls12 => reqwest::tls::Version::TLS_1_2,
+            ferrohealth_config::tls::TlsVersion::Tls13 => reqwest::tls::Version::TLS_1_3,
         });
         if let Some(identity) = &self.identity {
             let identity = reqwest::Identity::from_pem(identity.pem.expose().as_bytes())
@@ -380,7 +363,9 @@ mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
 
-    use super::{TlsClient, TlsClientError, TlsClientSection};
+    use ferrohealth_config::tls::TlsClientSection;
+
+    use super::{TlsClient, TlsClientError};
     use crate::section::{ClientAuth, TlsSection};
     use crate::tls::{PeerCertificates, ReloadableTls};
 
@@ -628,7 +613,7 @@ mod tests {
             read(
                 "xcpd",
                 &TlsClientSection {
-                    min_version: crate::section::TlsVersion::Tls12,
+                    min_version: ferrohealth_config::tls::TlsVersion::Tls12,
                     ..pki.client(true)
                 }
             ),
@@ -720,12 +705,15 @@ mod tests {
     #[test]
     fn the_outbound_minimum_is_tls_1_3_unless_lowered_and_never_below_1_2() {
         assert_eq!(
-            crate::section::TlsVersion::Tls13,
+            ferrohealth_config::tls::TlsVersion::Tls13,
             TlsClientSection::default().min_version
         );
         let lowered: TlsClientSection =
             toml::from_str("min_version = \"1.2\"\n").expect("1.2 is taken");
-        assert_eq!(crate::section::TlsVersion::Tls12, lowered.min_version);
+        assert_eq!(
+            ferrohealth_config::tls::TlsVersion::Tls12,
+            lowered.min_version
+        );
         let refused = toml::from_str::<TlsClientSection>("min_version = \"1.1\"\n")
             .expect_err("1.1 is refused");
         assert!(refused.to_string().contains("RFC 8996"), "{refused}");

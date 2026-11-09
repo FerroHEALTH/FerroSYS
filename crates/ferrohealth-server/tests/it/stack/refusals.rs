@@ -173,7 +173,7 @@ async fn a_timeout_is_written_with_the_product_refusal_body() {
 async fn the_limit_and_the_bound_are_written_with_the_product_refusal_body() {
     let section = ServerSection {
         max_concurrent_requests: NonZeroUsize::new(1),
-        retry_after_s: 2,
+        retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
     let app = app(product(), serving(), &section, refusing());
@@ -238,7 +238,7 @@ async fn the_limit_and_the_bound_are_written_with_the_product_refusal_body() {
 async fn past_the_bound_a_request_is_refused_and_health_is_never_refused() {
     let section = ServerSection {
         max_concurrent_requests: NonZeroUsize::new(1),
-        retry_after_s: 2,
+        retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
     let app = app(product(), serving(), &section, StackPolicy::default());

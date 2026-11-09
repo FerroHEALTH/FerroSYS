@@ -10,6 +10,16 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-09
+
+### Changed
+
+- Breaking: the load plan's `min_version` is
+  `ferrohealth_config::tls::TlsVersion` and `LoadSettings::tls` returns
+  `ferrohealth_config::tls::TlsClientSection`, which moved there from
+  `ferrohealth-server` 0.7. The plan's keys and behaviour are unchanged
+  (#313).
+
 ## [0.6.0] - 2026-11-08
 
 ### Changed
