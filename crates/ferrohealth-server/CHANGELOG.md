@@ -10,6 +10,18 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-09
+
+### Added
+
+- Feature `otlp`: `telemetry::build(&TelemetrySection, Service)` builds a
+  product's telemetry with its OTLP collector dialed over the TLS that
+  `tls_client::TlsClient` reads from `telemetry.otlp.tls`, over the
+  platform verifier, and hands it to `Telemetry::with_tls`; with no
+  `[telemetry.otlp]` it calls `Telemetry::new`. A product binary no longer
+  writes that hand-over itself. `telemetry::TelemetryBuildError` names the
+  TLS refusal and the telemetry refusal, each with its source (#323).
+
 ## [0.7.0] - 2026-11-09
 
 ### Changed
@@ -592,7 +604,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.1...HEAD
+[0.7.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.0...ferrohealth-server-v0.7.1
 [0.7.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.4...ferrohealth-server-v0.7.0
 [0.6.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.3...ferrohealth-server-v0.6.4
 [0.6.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.6.2...ferrohealth-server-v0.6.3
