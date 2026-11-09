@@ -22,6 +22,9 @@ default = []
 # The `Recorder` through which the shared request log of
 # ferrohealth-telemetry fills the window.
 telemetry = ["dep:ferrohealth-telemetry"]
+# `received`: a report read back under every rule of envelope v2, for the
+# collector that receives it.
+receive = []
 
 [dependencies]
 ferrohealth-telemetry = { workspace = true, features = ["axum"], optional = true }

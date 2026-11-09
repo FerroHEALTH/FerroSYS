@@ -25,7 +25,13 @@ own `status`.
   route templates, never paths: with the `telemetry` feature the window is a
   `ferrohealth_telemetry::request_log::Recorder`, handed to the shared
   request log with `RequestLog::with_recorder`.
-- `envelope` holds the closed types of envelope v2.
+- `envelope` holds the closed types of envelope v2, with its bounds and
+  patterns, so every reader of the envelope takes them from one place.
+- `received::read`, with the `receive` feature, reads a received report
+  back under every rule of the envelope: an unknown, repeated or missing
+  member and a value outside its set, bound or pattern are refused, each
+  as a `received::Refusal` naming the member and the rule. The product's
+  `status` is kept as raw JSON. It is the collector's reader.
 - `reporter::Reporter` sends one `start` report at each start (at most one
   per ten minutes) and one `daily` report a day. A refusal is logged with
   the collector's status. A daily report that does not arrive keeps its

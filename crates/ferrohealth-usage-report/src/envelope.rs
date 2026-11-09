@@ -9,6 +9,10 @@
 //! the envelope's key pattern; the `start` and `daily` events carry exactly
 //! the members each admits. The product's `status` is its own type, which
 //! the product keeps to the envelope's `status` rules.
+//!
+//! The bounds and the patterns are public, so a reader of the envelope
+//! holds them from this one place; feature `receive` adds
+//! `crate::received`, which reads a report back under every rule.
 
 use std::collections::BTreeMap;
 
@@ -38,6 +42,18 @@ pub const MAX_GROUPS: usize = 32;
 /// The most counters a window carries.
 pub const MAX_COUNTERS: usize = 64;
 
+/// The most members `status` carries.
+pub const MAX_STATUS_MEMBERS: usize = 32;
+
+/// The most tokens one `status` array holds.
+pub const MAX_TOKENS: usize = 16;
+
+/// The longest key or token, in characters.
+pub const MAX_NAME_LEN: usize = 32;
+
+/// The longest `version`, in characters.
+pub const MAX_VERSION_LEN: usize = 64;
+
 /// The envelope's version, always `2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SchemaV2;
@@ -50,6 +66,7 @@ impl Serialize for SchemaV2 {
 
 /// The reporting product.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "receive", derive(serde::Deserialize))]
 pub enum Product {
     /// FerroEHR.
     #[serde(rename = "ferroehr")]
@@ -70,6 +87,7 @@ pub enum Product {
 
 /// The licence grant the installation runs under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "receive", derive(serde::Deserialize))]
 #[serde(rename_all = "kebab-case")]
 pub enum LicenceGrant {
     /// The Additional Use Grant: non-commercial production use.
@@ -102,7 +120,8 @@ impl Key {
         let first_is_letter = characters.next().is_some_and(|c| c.is_ascii_lowercase());
         let rest_is_valid =
             characters.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-        (first_is_letter && rest_is_valid && name.len() <= 32).then(|| Self(name.to_owned()))
+        (first_is_letter && rest_is_valid && name.len() <= MAX_NAME_LEN)
+            .then(|| Self(name.to_owned()))
     }
 
     /// Returns the name.
@@ -114,6 +133,7 @@ impl Key {
 
 /// The host's logical CPUs, in the envelope's buckets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "receive", derive(serde::Deserialize))]
 pub enum CpuBucket {
     /// One or two.
     #[serde(rename = "1-2")]
@@ -148,6 +168,7 @@ impl CpuBucket {
 
 /// The host's memory in GiB, in the envelope's buckets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "receive", derive(serde::Deserialize))]
 pub enum MemoryBucket {
     /// Below 4 GiB.
     #[serde(rename = "<4")]
@@ -182,6 +203,7 @@ impl MemoryBucket {
 
 /// The requests of a window, in the envelope's buckets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "receive", derive(serde::Deserialize))]
 pub enum RequestsBucket {
     /// None.
     #[serde(rename = "0")]
@@ -301,20 +323,118 @@ pub struct Report<S> {
 /// envelope admits, and `0000000` otherwise.
 #[must_use]
 pub fn report_git_sha(revision: &str) -> String {
-    let valid = (7..=40).contains(&revision.len())
-        && revision
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if valid {
+    if is_git_sha(revision) {
         revision.to_owned()
     } else {
         String::from("0000000")
     }
 }
 
+/// Whether `text` is a `git_sha` the envelope admits: 7 to 40 lower-case
+/// hex digits.
+#[must_use]
+pub fn is_git_sha(text: &str) -> bool {
+    (7..=40).contains(&text.len())
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Whether `text` is a `status` token: a lower-case letter or digit, then
+/// up to 31 lower-case letters, digits, `.`, `_`, `+` or `-`.
+///
+/// # Examples
+///
+/// ```
+/// use ferrohealth_usage_report::envelope::is_token;
+///
+/// assert!(is_token("1.2.0+build"));
+/// assert!(!is_token("http://snomed.info/sct"));
+/// ```
+#[must_use]
+pub fn is_token(text: &str) -> bool {
+    let mut bytes = text.bytes();
+    let first = bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    first
+        && text.len() <= MAX_NAME_LEN
+        && bytes.all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'+' | b'-')
+        })
+}
+
+/// Whether `text` is an `instance_id`: a UUID in the hyphenated form, in
+/// either case.
+#[must_use]
+pub fn is_instance_id(text: &str) -> bool {
+    let groups: Vec<&str> = text.split('-').collect();
+    groups.len() == 5
+        && groups
+            .iter()
+            .zip([8, 4, 4, 4, 12])
+            .all(|(group, len)| group.len() == len && group.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Whether `text` is a `version`: Semantic Versioning 2.0.0 with a major, minor and
+/// patch of at most nine digits each, and at most 64 characters.
+///
+/// # Examples
+///
+/// ```
+/// use ferrohealth_usage_report::envelope::is_version;
+///
+/// assert!(is_version("1.4.0-rc.1+build.7"));
+/// assert!(!is_version("01.4.0"));
+/// assert!(!is_version("1.4"));
+/// ```
+#[must_use]
+pub fn is_version(text: &str) -> bool {
+    let (rest, build) = match text.split_once('+') {
+        Some((rest, build)) => (rest, Some(build)),
+        None => (text, None),
+    };
+    let (core, pre) = match rest.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (rest, None),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    text.len() <= MAX_VERSION_LEN
+        && parts.len() == 3
+        && parts.iter().all(|part| is_numeric(part) && part.len() <= 9)
+        && pre.is_none_or(|pre| pre.split('.').all(is_prerelease_identifier))
+        && build.is_none_or(|build| {
+            build
+                .split('.')
+                .all(|id| !id.is_empty() && id.bytes().all(is_identifier_byte))
+        })
+}
+
+/// Whether `id` is `0` or digits without a leading zero.
+fn is_numeric(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && (id == "0" || !id.starts_with('0'))
+}
+
+/// Whether `id` is a Semantic Versioning pre-release identifier: a numeric one, or one
+/// of letters, digits and `-` holding a non-digit.
+fn is_prerelease_identifier(id: &str) -> bool {
+    is_numeric(id)
+        || (!id.is_empty()
+            && id.bytes().all(is_identifier_byte)
+            && id.bytes().any(|b| !b.is_ascii_digit()))
+}
+
+/// Whether `byte` may stand in a Semantic Versioning identifier.
+const fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'-'
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CpuBucket, Key, MemoryBucket, RequestsBucket, report_git_sha};
+    use super::{
+        CpuBucket, Key, MemoryBucket, RequestsBucket, is_instance_id, is_token, is_version,
+        report_git_sha,
+    };
 
     #[test]
     fn buckets_are_half_open() {
@@ -347,5 +467,77 @@ mod tests {
         assert_eq!("0000000", report_git_sha("unknown"));
         assert_eq!("0000000", report_git_sha("1A2B3C4"));
         assert_eq!("0000000", report_git_sha("abc"));
+    }
+
+    #[test]
+    fn a_version_follows_the_envelope_pattern() {
+        for good in [
+            "0.0.0",
+            "1.2.3",
+            "999999999.0.1",
+            "1.0.0-alpha",
+            "1.0.0-0.3.7",
+            "1.0.0-x-y.1",
+            "1.0.0+20130313144700",
+            "1.0.0-beta+exp.sha.5114f85",
+        ] {
+            assert!(is_version(good), "{good} is admitted");
+        }
+        for bad in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "01.2.3",
+            "1.02.3",
+            "1000000000.0.0",
+            "1.2.3-",
+            "1.2.3-01",
+            "1.2.3-a..b",
+            "1.2.3+",
+            "1.2.3+a..b",
+            "v1.2.3",
+            "1.2.3-\u{e4}",
+        ] {
+            assert!(!is_version(bad), "{bad:?} is refused");
+        }
+        assert!(
+            !is_version(&format!("1.0.0-{}", "a".repeat(60))),
+            "longer than 64 is refused"
+        );
+    }
+
+    #[test]
+    fn a_token_and_an_instance_id_follow_the_envelope_patterns() {
+        for good in ["snomed", "icd10cm", "1.2.0+build", "a"] {
+            assert!(is_token(good), "{good} is a token");
+        }
+        for bad in [
+            "",
+            "-x",
+            ".x",
+            "Dr. Jansen",
+            "http://snomed.info/sct",
+            "UPPER",
+        ] {
+            assert!(!is_token(bad), "{bad:?} is refused");
+        }
+        assert!(!is_token(&"a".repeat(33)), "longer than 32 is refused");
+        assert!(
+            is_instance_id("0f8fad5b-d9cb-469f-a165-70867728950e"),
+            "lower case"
+        );
+        assert!(
+            is_instance_id("0F8FAD5B-D9CB-469F-A165-70867728950E"),
+            "upper case"
+        );
+        for bad in [
+            "0f8fad5bd9cb469fa16570867728950e",
+            "0f8fad5b-d9cb-469f-a165-70867728950",
+            "0f8fad5b-d9cb-469f-a165-70867728950g",
+            "{0f8fad5b-d9cb-469f-a165-70867728950e}",
+        ] {
+            assert!(!is_instance_id(bad), "{bad} is refused");
+        }
     }
 }
