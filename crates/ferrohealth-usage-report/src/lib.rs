@@ -14,7 +14,10 @@
 //!   off switch.
 //! - [`state::StateDir`]: the instance id under `state_dir`, created once.
 //! - [`window::Window`]: the latency window the request log fills.
-//! - [`envelope`]: the closed types of envelope v2.
+//! - [`envelope`]: the closed types of envelope v2, with its bounds and
+//!   patterns.
+//! - `received` (feature `receive`): a received report, read back under
+//!   every rule of envelope v2.
 //! - [`reporter::Reporter`]: assembles and sends the reports; a product
 //!   supplies only its [`reporter::ProductSection`].
 //!
@@ -22,6 +25,8 @@
 //! `docs/specs/ferropulse/`; no other specification governs the report.
 
 pub mod envelope;
+#[cfg(feature = "receive")]
+pub mod received;
 pub mod reporter;
 pub mod section;
 pub mod state;
