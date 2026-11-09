@@ -20,7 +20,7 @@ mod refusal;
 mod table;
 
 use refusal::{collected, follows_a_drop, invalid};
-use table::{dropped_path, fill, insert, lookup, overlay, remove, take};
+use table::{dropped_path, fill, overlay, remove};
 
 /// The loader of one product's configuration.
 ///
@@ -77,7 +77,6 @@ pub struct Loader {
     prefix: String,
     aliases: Vec<Alias>,
     reserved: Vec<String>,
-    renames: Vec<Deprecation>,
     defaults: toml::Table,
 }
 
@@ -133,30 +132,17 @@ impl Alias {
     }
 }
 
-/// A key renamed from one release to the next, still read under its old
-/// name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Deprecation {
-    /// The old dotted key.
-    pub old: String,
-    /// The new dotted key.
-    pub new: String,
-    /// The release that refuses the old key.
-    pub refused_in: String,
-}
-
 /// The most refusals one load reports.
 pub const MAX_REFUSALS: usize = 16;
 
 /// A tree the loader read, with where each key came from.
 ///
-/// Its `Debug` rendering shows the tree, the provenance and the
-/// deprecations, and never the table of [`Loaded::table_with_secrets`].
+/// Its `Debug` rendering shows the tree and the provenance, and never the
+/// table of [`Loaded::table_with_secrets`].
 #[derive(Clone)]
 pub struct Loaded<T> {
     settings: T,
     provenance: Provenance,
-    deprecations: Vec<Deprecation>,
     table: toml::Table,
 }
 
@@ -165,7 +151,6 @@ impl<T: fmt::Debug> fmt::Debug for Loaded<T> {
         f.debug_struct("Loaded")
             .field("settings", &self.settings)
             .field("provenance", &self.provenance)
-            .field("deprecations", &self.deprecations)
             .finish_non_exhaustive()
     }
 }
@@ -183,18 +168,10 @@ impl<T> Loaded<T> {
         &self.provenance
     }
 
-    /// Returns the renamed keys this configuration still set under their
-    /// old name.
-    #[must_use]
-    pub fn deprecations(&self) -> &[Deprecation] {
-        &self.deprecations
-    }
-
     /// Returns the table the sources set, which holds every secret as read.
     ///
     /// It is what the file, the environment and the `--set` pairs set,
-    /// merged as the load applied them: every renamed key under its new
-    /// name, and every override typed as the tree took it, a number, a
+    /// merged as the load applied them, every override typed as the tree took it, a number, a
     /// boolean or an array where the tree wants one and text elsewhere.
     /// The defaults are left out, the tree's and those of
     /// [`Loader::defaults`] alike, so a key no source set is absent. Reading
@@ -275,7 +252,6 @@ impl Loader {
             prefix,
             aliases: Vec::new(),
             reserved: Vec::new(),
-            renames: Vec::new(),
             defaults: toml::Table::new(),
         })
     }
@@ -421,24 +397,6 @@ impl Loader {
         self
     }
 
-    /// Reads the dotted key `old` as `new` until the release `refused_in`:
-    /// the value moves, the load reports it in [`Loaded::deprecations`] and
-    /// logs it, and both set at once is refused.
-    #[must_use]
-    pub fn rename(
-        mut self,
-        old: impl Into<String>,
-        new: impl Into<String>,
-        refused_in: impl Into<String>,
-    ) -> Self {
-        self.renames.push(Deprecation {
-            old: old.into(),
-            new: new.into(),
-            refused_in: refused_in.into(),
-        });
-        self
-    }
-
     /// Reserves `variable`, a name under the prefix the product reads
     /// itself and that sets no key.
     ///
@@ -545,8 +503,7 @@ impl Loader {
     ///
     /// Returns every error of [`Loader::load_sources`]. Up to
     /// [`MAX_REFUSALS`] invalid keys are collected into one
-    /// [`ConfigError::Refusals`], and a renamed key set under both its old
-    /// and its new name is refused as [`ConfigError::Renamed`].
+    /// [`ConfigError::Refusals`].
     pub fn load_sources_with<T: DeserializeOwned>(
         &self,
         text: Option<&str>,
@@ -564,8 +521,7 @@ impl Loader {
         let overrides = self.overrides(environment, sets)?;
         let mut set_by: BTreeMap<String, String> = BTreeMap::new();
         for item in &overrides {
-            let key = self.renamed(&item.key());
-            set_by.insert(key, item.name().to_owned());
+            set_by.insert(item.key(), item.name().to_owned());
         }
         // NOTE: no specification governs this: our own design; the sets apply last,
         // so they are the last overrides, each key in the form a refusal names.
@@ -573,7 +529,7 @@ impl Loader {
             .iter()
             .rev()
             .take(sets.len())
-            .map(|item| self.renamed(&item.key()))
+            .map(Override::key)
             .collect();
         let provenance = Provenance::new(
             path.map(Path::to_path_buf),
@@ -598,7 +554,6 @@ impl Loader {
                 )?;
             }
             growth.check()?;
-            let deprecations = self.apply_renames(&mut table)?;
             for path in &dropped {
                 remove(&mut table, path);
             }
@@ -610,11 +565,9 @@ impl Loader {
                 toml::to_string(&filled).map_err(|source| ConfigError::Assemble { source })?;
             let error = match toml::from_str::<T>(&merged) {
                 Ok(settings) if errors.is_empty() => {
-                    warn_deprecated(&deprecations);
                     return Ok(Loaded {
                         settings,
                         provenance,
-                        deprecations,
                         table,
                     });
                 }
@@ -682,46 +635,5 @@ impl Loader {
             overrides.push(Override::new(&format!("--set {key}"), key, raw)?);
         }
         Ok(overrides)
-    }
-
-    /// The key `key` is read as: its new name when it was renamed.
-    fn renamed(&self, key: &str) -> String {
-        self.renames
-            .iter()
-            .find(|rename| rename.old == key)
-            .map_or_else(|| key.to_owned(), |rename| rename.new.clone())
-    }
-
-    /// Moves every renamed key of `table` to its new name.
-    fn apply_renames(&self, table: &mut toml::Table) -> Result<Vec<Deprecation>, ConfigError> {
-        let mut found = Vec::new();
-        for rename in &self.renames {
-            let old: Vec<String> = rename.old.split('.').map(str::to_owned).collect();
-            let new: Vec<String> = rename.new.split('.').map(str::to_owned).collect();
-            let Some(value) = take(table, &old) else {
-                continue;
-            };
-            if lookup(table, &new).is_some() {
-                return Err(ConfigError::Renamed {
-                    old: rename.old.clone(),
-                    new: rename.new.clone(),
-                });
-            }
-            insert(table, &new, value);
-            found.push(rename.clone());
-        }
-        Ok(found)
-    }
-}
-
-/// Logs every renamed key the configuration still sets under its old name.
-fn warn_deprecated(deprecations: &[Deprecation]) {
-    for deprecation in deprecations {
-        tracing::warn!(
-            old = deprecation.old.as_str(),
-            new = deprecation.new.as_str(),
-            refused_in = deprecation.refused_in.as_str(),
-            "a renamed configuration key is set under its old name"
-        );
     }
 }

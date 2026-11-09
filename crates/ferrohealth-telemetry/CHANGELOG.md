@@ -10,6 +10,14 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+### Changed
+
+- Breaking: the crate builds on `ferrohealth-config` 0.4, so
+  `OtlpSection.tls` is that release's `TlsClientSection`. A product moves
+  to `ferrohealth-config` 0.4 in the same change (#329).
+
 ### Removed
 
 - The named refusal of `telemetry.otlp.trust_roots_file` and

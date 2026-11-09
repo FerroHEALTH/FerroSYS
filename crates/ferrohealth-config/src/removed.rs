@@ -4,16 +4,23 @@
 //! The refusal of a key a configuration tree no longer reads.
 //!
 //! A section keeps each retired key as a [`Removed`] field, so the strict
-//! load still accepts it, and refuses it after the load through
+//! load still accepts it, declares it once as a [`Retired`] with the crate
+//! release that retired it, and refuses it after the load through
 //! [`Removals`], which names the replacement of every retired key the
 //! sources set, all of them at once. An old file therefore never starts
 //! with a default in the place of what its operator wrote, and a key is
-//! never read under two names (`Loader::rename` reads an old name as the
-//! new one, and is not used for this). No specification governs this: our
+//! never read under two names.
+//!
+//! A refusal lives for the one release that retires the key (the owner's
+//! rule of 2026-11-09), and the strict load refuses the key as unknown
+//! after it. [`stale`] holds a crate to that: run in one unit test over the
+//! crate's declarations, it names every refusal whose release is not the
+//! crate's version, so the pull request that moves the version past it
+//! fails until the refusal is deleted. No specification governs this: our
 //! own design.
 //!
 //! ```
-//! use ferrohealth_config::removed::{Removals, Removed};
+//! use ferrohealth_config::removed::{Removals, Removed, Retired, stale};
 //!
 //! #[derive(Default, serde::Deserialize)]
 //! #[serde(default, deny_unknown_fields)]
@@ -22,12 +29,17 @@
 //!     request_timeout_ms: Removed,
 //! }
 //!
+//! const NEW: &str = "server.request_timeout, a duration such as `30s`";
+//! const REQUEST_TIMEOUT_MS: Retired = Retired::replaced("server.request_timeout_ms", NEW, "0.7.0");
+//!
 //! let server: Server = toml::from_str("request_timeout_ms = 30000").unwrap();
 //! let mut removals = Removals::new();
-//! let (old, new) = ("server.request_timeout_ms", "server.request_timeout");
-//! removals.replaced(server.request_timeout_ms, old, format!("{new}, a duration such as `30s`"));
+//! removals.check(server.request_timeout_ms, &REQUEST_TIMEOUT_MS);
 //! let refusal = removals.finish().unwrap_err().to_string();
 //! assert!(refusal.starts_with("server.request_timeout_ms was replaced by server.request_timeout"));
+//!
+//! assert!(stale(&[REQUEST_TIMEOUT_MS], "0.7.0").is_empty());
+//! assert_eq!(1, stale(&[REQUEST_TIMEOUT_MS], "0.8.0").len());
 //! ```
 
 use std::fmt;
@@ -88,6 +100,89 @@ impl schemars::JsonSchema for Removed {
             "description": "A retired key: setting it refuses the configuration, naming its replacement."
         })
     }
+}
+
+/// A retired key as a section declares it: the dotted key, what took its
+/// place, and `since`, the version of the declaring crate that retired it.
+///
+/// `since` is written as a literal (never `env!("CARGO_PKG_VERSION")`,
+/// which would follow the version and never go stale).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retired {
+    key: &'static str,
+    instead: Instead,
+    since: &'static str,
+}
+
+/// What took a declared key's place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Instead {
+    /// The key or keys to write instead, with the form of their value.
+    By(&'static str),
+    /// Nothing: why the key went.
+    Nothing(&'static str),
+}
+
+impl Retired {
+    /// The key `key`, replaced by `replacement` (the key to write instead
+    /// and the form of its value) in the release `since`.
+    #[must_use]
+    pub const fn replaced(
+        key: &'static str,
+        replacement: &'static str,
+        since: &'static str,
+    ) -> Self {
+        Self {
+            key,
+            instead: Instead::By(replacement),
+            since,
+        }
+    }
+
+    /// The key `key`, retired with nothing in its place, for `reason`, in
+    /// the release `since`.
+    #[must_use]
+    pub const fn removed(key: &'static str, reason: &'static str, since: &'static str) -> Self {
+        Self {
+            key,
+            instead: Instead::Nothing(reason),
+            since,
+        }
+    }
+
+    /// The dotted key.
+    #[must_use]
+    pub const fn key(&self) -> &'static str {
+        self.key
+    }
+
+    /// The version of the declaring crate that retired the key.
+    #[must_use]
+    pub const fn since(&self) -> &'static str {
+        self.since
+    }
+
+    /// The removal of the key at `key`, as the sources set it.
+    fn removal(&self, key: String) -> Removal {
+        Removal {
+            key,
+            replacement: match self.instead {
+                Instead::By(replacement) => Replacement::By(replacement.to_owned()),
+                Instead::Nothing(reason) => Replacement::None(reason.to_owned()),
+            },
+        }
+    }
+}
+
+/// The declarations among `retired` whose release is not `version`, the
+/// declaring crate's own (`env!("CARGO_PKG_VERSION")`): each is past the
+/// one release it lives for and is deleted.
+#[must_use]
+pub fn stale<'a>(retired: &'a [Retired], version: &str) -> Vec<&'a Retired> {
+    retired
+        .iter()
+        .filter(|declared| declared.since != version)
+        .collect()
 }
 
 /// One retired key the sources set.
@@ -154,30 +249,20 @@ impl Removals {
         Self { found: Vec::new() }
     }
 
-    /// Records `key` when `removed` is set: it was replaced by
-    /// `replacement`, the key to write instead and the form of its value.
-    pub fn replaced(
-        &mut self,
-        removed: Removed,
-        key: impl Into<String>,
-        replacement: impl Into<String>,
-    ) {
+    /// Records `retired` when `removed`, its field, is set.
+    pub fn check(&mut self, removed: Removed, retired: &Retired) {
         if removed.is_set() {
-            self.found.push(Removal {
-                key: key.into(),
-                replacement: Replacement::By(replacement.into()),
-            });
+            self.found.push(retired.removal(retired.key.to_owned()));
         }
     }
 
-    /// Records `key` when `removed` is set: it was retired with nothing in
-    /// its place, for `reason`.
-    pub fn retired(&mut self, removed: Removed, key: impl Into<String>, reason: impl Into<String>) {
+    /// Records `retired` when `removed` is set, its key read under the
+    /// dotted `table`, for a key of a table that repeats, such as
+    /// `auth.issuer[0]`.
+    pub fn check_under(&mut self, removed: Removed, retired: &Retired, table: &str) {
         if removed.is_set() {
-            self.found.push(Removal {
-                key: key.into(),
-                replacement: Replacement::None(reason.into()),
-            });
+            self.found
+                .push(retired.removal(format!("{table}.{}", retired.key)));
         }
     }
 

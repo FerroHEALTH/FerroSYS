@@ -59,12 +59,6 @@ pub fn check_report<T: Serialize>(loaded: &Loaded<T>) -> Result<String, ConfigEr
         Some(path) => format!("# file: {}", path.display()),
         None => "# file: none".to_owned(),
     }];
-    for deprecation in loaded.deprecations() {
-        lines.push(format!(
-            "# deprecated: {} is read as {}, and is refused from {}",
-            deprecation.old, deprecation.new, deprecation.refused_in
-        ));
-    }
     let mut keys = BTreeSet::new();
     leaves("", &table, &mut keys);
     for key in keys {

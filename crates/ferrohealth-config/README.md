@@ -36,8 +36,8 @@ console reads its configuration the same way, so an operator learns it once.
   every other variable under the prefix is left alone, because product
   prefixes nest (`FERROTERM` and `FERROTERM_CONSOLE`). No refusal quotes a
   value.
-- `Loaded::table_with_secrets` is the table the sources set, the renames
-  and the typed overrides applied and the defaults left out, for a product
+- `Loaded::table_with_secrets` is the table the sources set, the typed
+  overrides applied and the defaults left out, for a product
   that stores its configuration as revisions. It holds secrets as read.
 - `provenance::Provenance` says where each key came from: the default, the
   file or the environment, with the variable; `Provenance::secret_source`
@@ -54,6 +54,10 @@ console reads its configuration the same way, so an operator learns it once.
 - `removed::Removed` keeps a retired key readable so that
   `removed::Removals` can refuse every retired key a file sets, all at
   once, each naming its replacement. A key is never read under two names.
+  Each section declares its retired keys as `removed::Retired` with the
+  release that retired them, and one unit test runs `removed::stale` over
+  them, so a refusal is deleted in the next release: a removal aid lives
+  for one release.
 - `tls::TlsClientSection` is the TLS table of every outbound call, read by
   `ferrohealth-server`'s `tls_client::TlsClient`, and `tls::TlsVersion` the
   oldest TLS version a listener or a client speaks.
