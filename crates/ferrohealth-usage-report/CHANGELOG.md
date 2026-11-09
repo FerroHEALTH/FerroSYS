@@ -10,6 +10,22 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- Feature `receive`: `received::read` reads a received report back into
+  the closed `envelope::Report`, under every rule of the vendored envelope
+  v2 schema. An unknown, repeated or missing member, a value outside its
+  set, bound or pattern, and a `first_start` or `metrics` on the other
+  event are refused as `received::Refusal`, which names the member as a
+  JSON Pointer and the rule (`received::Rule`). The product's `status` is
+  checked against the generic `status` rules and kept as raw JSON
+  (`received::Status`). Every report the reporter writes reads back equal
+  (#294).
+- `envelope` holds every bound and pattern of the envelope for a reader:
+  `MAX_STATUS_MEMBERS`, `MAX_TOKENS`, `MAX_NAME_LEN`, `MAX_VERSION_LEN`,
+  `is_git_sha`, `is_token`, `is_instance_id` and `is_version`, beside the
+  bounds it held, so FerroPULSE's collector can drop its own copy (#294).
+
 ## [0.2.1] - 2026-11-05
 
 ### Changed

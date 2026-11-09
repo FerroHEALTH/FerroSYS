@@ -463,3 +463,44 @@ fn the_host_memory_reads_meminfo() {
     );
     assert_eq!(None, meminfo_total_bytes("MemFree: 1 kB\n"));
 }
+
+#[cfg(feature = "receive")]
+#[tokio::test]
+async fn every_report_the_reporter_writes_reads_back_equal() {
+    let dir = tempfile::tempdir().expect("a state directory");
+    let reporter = reporter("http://127.0.0.1:9/v1/report", dir.path());
+    let first = reporter.start_report().await;
+    let again = reporter.start_report().await;
+    let daily = reporter.daily_report().await;
+    let idle = reporter.daily_report().await;
+    for written in [first, again, daily, idle] {
+        let body = serde_json::to_vec(&written).expect("the report serializes");
+        let read = crate::received::read(&body).expect("the report reads back");
+        assert_eq!(written.event, read.event, "the event and its members");
+        assert_eq!(
+            (written.product, written.licence, written.deployment),
+            (read.product, read.licence, read.deployment),
+            "the closed sets"
+        );
+        assert_eq!(
+            (&written.instance_id, &written.version, &written.git_sha),
+            (&read.instance_id, &read.version, &read.git_sha),
+            "the identity"
+        );
+        assert_eq!(
+            (written.uptime_s, written.cpu_bucket, written.memory_bucket),
+            (read.uptime_s, read.cpu_bucket, read.memory_bucket),
+            "the host"
+        );
+        assert_eq!(
+            serde_json::to_value(&written.status).expect("the status serializes"),
+            Value::Object(read.status.clone().into_map()),
+            "the status, as raw JSON"
+        );
+        assert_eq!(
+            serde_json::to_value(&written).expect("serializes"),
+            serde_json::to_value(&read).expect("serializes"),
+            "the whole report"
+        );
+    }
+}
