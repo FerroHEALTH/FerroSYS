@@ -14,8 +14,20 @@
 #
 #   semver.sh [<crate>...]   check the named crates, or every crate past
 #                            0.0.0
+#   semver.sh --changed <base>
+#                            check every crate past 0.0.0 when the change
+#                            from <base> to HEAD reaches a crate, and
+#                            nothing otherwise
 #   semver.sh --pin          print the cargo-semver-checks version pinned in
 #                            docs/VERSIONS.md, which CI installs
+#
+# A change that reaches no crate leaves every public API as it is on its
+# base, so judging it would only judge the base: a pull request opened
+# before a release and checked after it would be refused for the release's
+# own changes. A change reaches the crates when it touches crates/, the
+# workspace manifest or lock, the toolchain, the pin or this check; it then
+# checks every crate, since one crate's change can reach another's API
+# through a re-export.
 #
 # The installed cargo-semver-checks must be the pinned version. Exit 1 when
 # a crate breaks its API without the bump, 2 on a usage or setup error.
@@ -47,6 +59,18 @@ fi
 # A crate at 0.0.0 has no release on crates.io to compare against: it holds
 # its name or waits for its first release, so it is left out.
 args=()
+if [[ "${1:-}" == "--changed" ]]; then
+  [[ "$#" -eq 2 ]] || { echo "usage: semver.sh --changed <base>" >&2; exit 2; }
+  if ! changed="$(git -C "$root" diff --name-only "$2" HEAD)"; then
+    echo "semver: cannot compare $2 with HEAD" >&2
+    exit 2
+  fi
+  if ! grep -qE '^(crates/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$|docs/VERSIONS\.md$|scripts/checks/semver\.sh$)' <<<"$changed"; then
+    echo "semver: the change from $2 reaches no crate; every public API is its base's"
+    exit 0
+  fi
+  set --
+fi
 if [[ "$#" -eq 0 ]]; then
   for manifest in "$root"/crates/*/Cargo.toml; do
     crate="$(basename "$(dirname "$manifest")")"
