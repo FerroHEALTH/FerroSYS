@@ -15,9 +15,11 @@
 //! rule of 2026-11-09), and the strict load refuses the key as unknown
 //! after it. [`stale`] holds a crate to that: run in one unit test over the
 //! crate's declarations, it names every refusal whose release is not the
-//! crate's version, so the pull request that moves the version past it
-//! fails until the refusal is deleted. No specification governs this: our
-//! own design.
+//! release being prepared, so the pull request that moves past that release
+//! fails until the refusal is deleted. A crate whose version moves early
+//! passes its own version, and a product whose version moves at the release
+//! cut passes the release it prepares ([`stale`] names both). No
+//! specification governs this: our own design.
 //!
 //! ```
 //! use ferrohealth_config::removed::{Removals, Removed, Retired, stale};
@@ -174,14 +176,47 @@ impl Retired {
     }
 }
 
-/// The declarations among `retired` whose release is not `version`, the
-/// declaring crate's own (`env!("CARGO_PKG_VERSION")`): each is past the
+/// The declarations among `retired` whose release is not `preparing`, the
+/// release the declaring crate or product is preparing: each is past the
 /// one release it lives for and is deleted.
+///
+/// What a caller passes as `preparing` follows how its version moves:
+///
+/// - **The version names the coming release.** A crate whose manifest
+///   version moves before the release is cut (by its first breaking change,
+///   or at the start of the cycle) passes `env!("CARGO_PKG_VERSION")`.
+/// - **The version moves at the release cut.** A product that keeps its
+///   workspace at the last release's version until the release pull request
+///   (FerroFED, FerroEHR) passes the release it is preparing, a literal it
+///   keeps beside its declarations. Its version would name the release
+///   before, so a refusal declared for the coming release would read as
+///   stale until the cut. The release pull request moves the version to that
+///   literal, and the first pull request after the cut moves the literal to
+///   the next release, which then names every refusal of the release just
+///   cut.
+///
+/// ```
+/// use ferrohealth_config::removed::{Retired, stale};
+///
+/// const RETIRED: [Retired; 1] = [Retired::removed("server.swagger_ui", "the UI is gone", "0.5.0")];
+///
+/// // The version moves early: the manifest already says 0.5.0.
+/// assert!(stale(&RETIRED, "0.5.0").is_empty());
+///
+/// // The version moves at the cut: the workspace still says 0.4.4 while
+/// // 0.5.0 is prepared, so the product names 0.5.0 itself.
+/// const PREPARING: &str = "0.5.0";
+/// assert!(stale(&RETIRED, PREPARING).is_empty());
+/// assert_eq!(1, stale(&RETIRED, "0.4.4").len(), "the workspace version would refuse it");
+///
+/// // After the cut the literal moves on, and the refusal is past its release.
+/// assert_eq!(1, stale(&RETIRED, "0.5.1").len());
+/// ```
 #[must_use]
-pub fn stale<'a>(retired: &'a [Retired], version: &str) -> Vec<&'a Retired> {
+pub fn stale<'a>(retired: &'a [Retired], preparing: &str) -> Vec<&'a Retired> {
     retired
         .iter()
-        .filter(|declared| declared.since != version)
+        .filter(|declared| declared.since != preparing)
         .collect()
 }
 
