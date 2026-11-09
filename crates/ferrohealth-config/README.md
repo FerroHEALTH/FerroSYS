@@ -64,7 +64,7 @@ console reads its configuration the same way, so an operator learns it once.
 
 ```toml
 [dependencies]
-ferrohealth-config = "=0.2.10"
+ferrohealth-config = "=0.3.0"
 ```
 
 ```rust
