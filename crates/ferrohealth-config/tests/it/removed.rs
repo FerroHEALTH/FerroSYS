@@ -134,3 +134,9 @@ fn a_deprecated_tls_version_is_refused_naming_the_minimum() {
     assert!(shown.contains("RFC 8996"), "{shown}");
     assert!(shown.contains("`1.2` or `1.3`"), "{shown}");
 }
+
+#[test]
+fn the_higher_of_two_minimums_is_their_max() {
+    assert!(TlsVersion::Tls12 < TlsVersion::Tls13);
+    assert_eq!(TlsVersion::Tls13, TlsVersion::Tls12.max(TlsVersion::Tls13));
+}

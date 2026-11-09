@@ -55,7 +55,12 @@ impl TlsClientSection {
 /// deployment may lower the minimum to TLS 1.2, which RFC 9325 §3.1.1 allows,
 /// with the suites of RFC 9325 §4.2. TLS 1.0 and 1.1 are deprecated (RFC
 /// 8996) and refused when the configuration is read.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+///
+/// The versions order oldest first, so the higher of two minimums is their
+/// `max`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+)]
 #[serde(try_from = "String", into = "String")]
 pub enum TlsVersion {
     /// TLS 1.2 and 1.3.
