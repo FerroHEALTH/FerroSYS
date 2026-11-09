@@ -12,7 +12,6 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 
-use ferrohealth_config::removed::{Removals, Removed, RemovedKeys};
 use ferrohealth_config::tls::TlsVersion;
 use ferrohealth_config::units::{ByteSize, Duration};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -158,14 +157,6 @@ struct RawServer {
     caller_rate: Option<CallerRate>,
     compression: bool,
     compression_min_size: ByteSize,
-    request_timeout_ms: Removed,
-    header_read_timeout_ms: Removed,
-    idle_timeout_ms: Removed,
-    body_limit_bytes: Removed,
-    drain_delay_ms: Removed,
-    shutdown_timeout_ms: Removed,
-    retry_after_s: Removed,
-    compression_min_bytes: Removed,
 }
 
 impl Default for RawServer {
@@ -188,14 +179,6 @@ impl Default for RawServer {
             caller_rate: section.caller_rate,
             compression: section.compression,
             compression_min_size: section.compression_min_size,
-            request_timeout_ms: Removed::default(),
-            header_read_timeout_ms: Removed::default(),
-            idle_timeout_ms: Removed::default(),
-            body_limit_bytes: Removed::default(),
-            drain_delay_ms: Removed::default(),
-            shutdown_timeout_ms: Removed::default(),
-            retry_after_s: Removed::default(),
-            compression_min_bytes: Removed::default(),
         }
     }
 }
@@ -204,10 +187,6 @@ impl Default for RawServer {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServerSectionError {
-    /// The table sets keys of 0.6 that name their unit; each is named with
-    /// its replacement.
-    #[error(transparent)]
-    Removed(#[from] RemovedKeys),
     /// A bound that must hold some time is zero.
     #[error("server.{key} is zero; it bounds a connection, so give it a duration such as `30s`")]
     Zero {
@@ -224,61 +203,10 @@ pub enum ServerSectionError {
     BodyLimit,
 }
 
-/// The 0.6 keys of `[server]`, each with what replaced it.
-fn removals(raw: &RawServer) -> Removals {
-    let mut removals = Removals::new();
-    for (removed, key, replacement) in [
-        (
-            raw.request_timeout_ms,
-            "request_timeout_ms",
-            "server.request_timeout, a duration such as `30s`",
-        ),
-        (
-            raw.header_read_timeout_ms,
-            "header_read_timeout_ms",
-            "server.header_read_timeout, a duration such as `30s`",
-        ),
-        (
-            raw.idle_timeout_ms,
-            "idle_timeout_ms",
-            "server.idle_timeout, a duration such as `2min`",
-        ),
-        (
-            raw.body_limit_bytes,
-            "body_limit_bytes",
-            "server.body_limit, a size such as `1MiB`",
-        ),
-        (
-            raw.drain_delay_ms,
-            "drain_delay_ms",
-            "server.drain_delay, a duration such as `5s`",
-        ),
-        (
-            raw.shutdown_timeout_ms,
-            "shutdown_timeout_ms",
-            "server.shutdown_timeout, a duration such as `10s`",
-        ),
-        (
-            raw.retry_after_s,
-            "retry_after_s",
-            "server.retry_after, a duration in whole seconds such as `1s`",
-        ),
-        (
-            raw.compression_min_bytes,
-            "compression_min_bytes",
-            "server.compression_min_size, a size such as `1KiB`",
-        ),
-    ] {
-        removals.replaced(removed, format!("server.{key}"), replacement);
-    }
-    removals
-}
-
 impl TryFrom<RawServer> for ServerSection {
     type Error = ServerSectionError;
 
     fn try_from(raw: RawServer) -> Result<Self, Self::Error> {
-        removals(&raw).finish()?;
         for (key, bound) in [
             ("header_read_timeout", raw.header_read_timeout),
             ("idle_timeout", raw.idle_timeout),
@@ -327,8 +255,6 @@ struct RawTls {
     healthcheck_identity_file: Option<std::path::PathBuf>,
     #[serde(default)]
     min_version: TlsVersion,
-    #[serde(default)]
-    reload_interval_s: Removed,
 }
 
 /// A `[server.tls]` table whose `client_auth` names no CA.
@@ -352,9 +278,6 @@ pub enum ClientAuthError {
          client_ca_file"
     )]
     UnusedClientCa,
-    /// The table sets `reload_interval_s`, the key of 0.6.
-    #[error(transparent)]
-    Removed(#[from] RemovedKeys),
     /// `reload_interval` is zero.
     #[error(
         "server.tls.reload_interval is zero; give it a duration such as `1h`, or leave it unset"
@@ -366,13 +289,6 @@ impl TryFrom<RawTls> for TlsSection {
     type Error = ClientAuthError;
 
     fn try_from(raw: RawTls) -> Result<Self, Self::Error> {
-        let mut removals = Removals::new();
-        removals.replaced(
-            raw.reload_interval_s,
-            "server.tls.reload_interval_s",
-            "server.tls.reload_interval, a duration such as `1h`",
-        );
-        removals.finish()?;
         if raw.client_auth != ClientAuth::None && raw.client_ca_file.is_none() {
             return Err(NoClientCa.into());
         }

@@ -10,6 +10,13 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Removed
+
+- The named refusal of `telemetry.otlp.trust_roots_file` and
+  `client_identity_file`, retired in 0.3.0, is deleted under the owner's
+  rule that a removal aid lives for the one release that retires it; both
+  are refused as unknown keys when the table loads (#328).
+
 ## [0.3.0] - 2026-11-09
 
 ### Changed

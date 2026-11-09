@@ -194,45 +194,26 @@ fn the_client_ca_refusal_reads_in_full_through_the_loader() {
 }
 
 #[test]
-fn every_key_of_0_6_is_refused_at_once_naming_its_replacement() {
-    let error = load(
-        "[server]\nrequest_timeout_ms = 1\nheader_read_timeout_ms = 1\nidle_timeout_ms = 1\nbody_limit_bytes = 1\ndrain_delay_ms = 1\nshutdown_timeout_ms = 1\nretry_after_s = 1\ncompression_min_bytes = 1\n",
-    )
-    .expect_err("the keys of 0.6 are refused");
-    let shown = error.to_string();
-    for (old, new) in [
-        ("request_timeout_ms", "server.request_timeout, a duration"),
-        (
-            "header_read_timeout_ms",
-            "server.header_read_timeout, a duration",
-        ),
-        ("idle_timeout_ms", "server.idle_timeout, a duration"),
-        ("body_limit_bytes", "server.body_limit, a size"),
-        ("drain_delay_ms", "server.drain_delay, a duration"),
-        ("shutdown_timeout_ms", "server.shutdown_timeout, a duration"),
-        (
-            "retry_after_s",
-            "server.retry_after, a duration in whole seconds",
-        ),
-        (
-            "compression_min_bytes",
-            "server.compression_min_size, a size",
-        ),
+fn every_key_of_0_6_is_an_unknown_key() {
+    for key in [
+        "request_timeout_ms",
+        "header_read_timeout_ms",
+        "idle_timeout_ms",
+        "body_limit_bytes",
+        "drain_delay_ms",
+        "shutdown_timeout_ms",
+        "retry_after_s",
+        "compression_min_bytes",
     ] {
         assert!(
-            shown.contains(&format!("server.{old} was replaced by {new}")),
-            "{old} in {shown}"
+            load(&format!("[server]\n{key} = 1\n")).is_err(),
+            "{key} is no key of [server]"
         );
     }
-    let error = load(
-        "[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nreload_interval_s = 60\n",
-    )
-    .expect_err("reload_interval_s is refused");
     assert!(
-        error
-            .to_string()
-            .contains("server.tls.reload_interval_s was replaced by server.tls.reload_interval"),
-        "{error}"
+        load("[server.tls]\ncertificate_file = \"a.pem\"\nkey_file = \"a.key\"\nreload_interval_s = 60\n")
+            .is_err(),
+        "reload_interval_s is no key of [server.tls]"
     );
 }
 
