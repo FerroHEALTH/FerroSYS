@@ -116,6 +116,36 @@ fn a_refusal_is_stale_once_the_version_moves_past_its_release() {
 }
 
 #[test]
+fn a_product_whose_version_moves_at_the_cut_names_the_release_it_prepares() {
+    // The workspace still carries 0.2.9 while 0.3.0, the release that
+    // retired the keys, is prepared.
+    let workspace = "0.2.9";
+    let preparing = "0.3.0";
+    assert_eq!(
+        2,
+        stale(&RETIRED, workspace).len(),
+        "the workspace version names the release before"
+    );
+    assert!(
+        stale(&RETIRED, preparing).is_empty(),
+        "the release being prepared keeps its refusals"
+    );
+    assert!(
+        stale(&RETIRED, "0.3.0").is_empty(),
+        "the release pull request moves the version to the prepared release"
+    );
+    let next: Vec<&str> = stale(&RETIRED, "0.3.1")
+        .into_iter()
+        .map(Retired::key)
+        .collect();
+    assert_eq!(
+        vec!["server.request_timeout_ms", "server.swagger_ui"],
+        next,
+        "the next release prepared after the cut names them"
+    );
+}
+
+#[test]
 fn a_key_of_a_repeated_table_is_named_under_it() {
     let tree = load("[server]\nrequest_timeout_ms = 1\n");
     let mut removals = Removals::new();

@@ -56,8 +56,10 @@ console reads its configuration the same way, so an operator learns it once.
   once, each naming its replacement. A key is never read under two names.
   Each section declares its retired keys as `removed::Retired` with the
   release that retired them, and one unit test runs `removed::stale` over
-  them, so a refusal is deleted in the next release: a removal aid lives
-  for one release.
+  them with the release being prepared (the crate's version, or the
+  product's next release when its version moves only at the cut), so a
+  refusal is deleted in the next release: a removal aid lives for one
+  release.
 - `tls::TlsClientSection` is the TLS table of every outbound call, read by
   `ferrohealth-server`'s `tls_client::TlsClient`, and `tls::TlsVersion` the
   oldest TLS version a listener or a client speaks.

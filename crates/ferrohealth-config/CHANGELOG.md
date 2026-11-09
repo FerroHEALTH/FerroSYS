@@ -10,6 +10,16 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- `removed::stale` takes `preparing`, the release being prepared, and its
+  documentation names the two ways a version moves: a crate whose version
+  moves early passes `env!("CARGO_PKG_VERSION")`, and a product whose
+  workspace version moves only at the release cut (FerroFED, FerroEHR)
+  passes the release it prepares, so it calls `stale` directly and needs no
+  test of its own that accepts the current or the next version. The
+  signature is unchanged (#339).
+
 ## [0.4.0] - 2026-11-09
 
 ### Added
