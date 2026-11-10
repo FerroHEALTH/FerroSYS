@@ -10,6 +10,22 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `revocation::RevocationCheck::config`, the gated rustls client
+  configuration of the link (the client identity, the roots alone, and the
+  gate that admits only a chain `RevocationCheck::clear` cleared), and
+  `revocation::RevocationCheck::certificate`, the end-entity certificate it
+  presents. A product hands both to an outbound client that builds its own
+  HTTP engine, such as `ferrohealth-smart`'s `client::PresentedTls::new`,
+  so that client's connections pass the same gate (#348).
+
+### Changed
+
+- `revocation::RevocationCheck::http_client` builds on
+  `RevocationCheck::config`, so the client and the configuration share one
+  gated path (#348).
+
 ## [0.8.1] - 2026-11-09
 
 ### Added

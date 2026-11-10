@@ -8,6 +8,8 @@
 
 mod front;
 
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ferrohealth_config::tls::TlsClientSection;
@@ -17,6 +19,10 @@ use ferrohealth_server::revocation::{
     RevocationCheck, RevocationError, RevocationSetupError, StatusError,
 };
 use ferrohealth_server::tls_client::TlsClient;
+use rustls::ClientConfig;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, ServerName};
+use tokio_rustls::TlsConnector;
 use url::Url;
 
 use self::front::{Front, Source, Standing};
@@ -262,6 +268,91 @@ async fn an_endpoint_that_is_no_https_url_is_refused() {
         matches!(checked, Err(RevocationError::Endpoint)),
         "an http endpoint is refused: {checked:?}"
     );
+}
+
+/// Completes a TLS handshake with the front over `config`, sending nothing,
+/// as an outbound client built over the configuration does.
+async fn handshake(front: &Front, config: &Arc<ClientConfig>) -> std::io::Result<()> {
+    let port = ping(front).port().expect("the front names its port");
+    let stream = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
+    let name = ServerName::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST).into());
+    TlsConnector::from(Arc::clone(config))
+        .connect(name, stream)
+        .await
+        .map(drop)
+}
+
+#[tokio::test]
+async fn the_config_refuses_a_chain_no_check_cleared() {
+    let front = Front::start(Source::Crl, Standing::Good).await;
+    let refused = handshake(&front, check(&front).config()).await;
+    assert!(
+        refused.is_err(),
+        "an unchecked chain ends at the handshake: {refused:?}"
+    );
+    assert_eq!(0, front.requests(), "nothing was sent");
+}
+
+#[tokio::test]
+async fn the_config_refuses_a_revoked_chain() {
+    let front = Front::start(Source::Ocsp, Standing::Revoked).await;
+    let check = check(&front);
+    let checked = check.clear(&ping(&front), WITHIN).await;
+    assert!(checked.is_err(), "the chain is revoked: {checked:?}");
+    let refused = handshake(&front, check.config()).await;
+    assert!(
+        refused.is_err(),
+        "a revoked chain ends at the handshake: {refused:?}"
+    );
+    assert_eq!(0, front.requests(), "nothing was sent");
+}
+
+#[tokio::test]
+async fn the_config_connects_over_a_chain_a_clone_of_the_check_cleared() {
+    let front = Front::start(Source::Crl, Standing::Good).await;
+    let check = check(&front);
+    let url = ping(&front);
+    check
+        .clone()
+        .clear(&url, WITHIN)
+        .await
+        .expect("the chain clears");
+    handshake(&front, check.config())
+        .await
+        .expect("a cleared chain completes the handshake");
+    let status = reqwest::Client::builder()
+        .tls_backend_preconfigured(ClientConfig::clone(check.config()))
+        .build()
+        .expect("a client builds over the configuration")
+        .get(url)
+        .send()
+        .await
+        .expect("the front answers")
+        .status();
+    assert_eq!(
+        http::StatusCode::OK,
+        status,
+        "the front admits the identity"
+    );
+}
+
+#[test]
+fn the_certificate_is_the_end_entity_of_the_identity() {
+    let pki = front::Pki::generate();
+    let end_entity = CertificateDer::pem_slice_iter(pki.client_identity().as_bytes())
+        .next()
+        .expect("the identity holds a certificate")
+        .expect("the certificate reads");
+    let presenting = RevocationCheck::from_pem(
+        &pki.root_pem(),
+        Some(&Secret::new(pki.client_identity())),
+        TlsVersion::Tls13,
+    )
+    .expect("the material reads");
+    assert_eq!(Some(&end_entity), presenting.certificate());
+    let anonymous = RevocationCheck::from_pem(&pki.root_pem(), None, TlsVersion::Tls13)
+        .expect("the roots read");
+    assert_eq!(None, anonymous.certificate(), "no identity, no certificate");
 }
 
 /// The front's roots and identity, written to files and read as a table.
