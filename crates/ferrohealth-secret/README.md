@@ -30,7 +30,7 @@ of the type, so a secret or a patient value cannot reach a log line, a
 
 ```toml
 [dependencies]
-ferrohealth-secret = "=0.2.0"
+ferrohealth-secret = "=0.2.1"
 ```
 
 ```rust
