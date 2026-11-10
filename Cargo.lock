@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-secret"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "schemars",
  "secrecy",
