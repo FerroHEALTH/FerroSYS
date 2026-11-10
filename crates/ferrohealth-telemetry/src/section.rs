@@ -171,7 +171,6 @@ impl Serialize for Filter {
 pub struct OtlpSection {
     /// The collector's OTLP/gRPC endpoint; `https://` speaks TLS. It may
     /// carry a credential, so it renders masked.
-    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub endpoint: SecretUrl,
     /// Whether the product's spans are exported.
     pub traces: bool,
@@ -388,5 +387,31 @@ mod tests {
             matches!(&error, ConfigError::Invalid { suggestion: Some(suggestion), .. } if suggestion == "json"),
             "{error:?}"
         );
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn the_otlp_table_takes_the_secret_schemas() {
+        let otlp =
+            serde_json::to_value(schemars::schema_for!(super::OtlpSection)).expect("the schema");
+        assert_eq!(
+            serde_json::json!("#/$defs/SecretUrl"),
+            otlp["properties"]["endpoint"]["$ref"],
+            "{otlp}"
+        );
+        let url = &otlp["$defs"]["SecretUrl"];
+        assert_eq!(serde_json::json!("string"), url["type"], "{otlp}");
+        let description = url["description"].as_str().expect("a description");
+        assert!(description.contains("`<key>_file`"), "{description}");
+        assert!(description.contains("userinfo"), "{description}");
+        let identity = &otlp["$defs"]["TlsClientSection"]["properties"]["client_identity"];
+        assert_eq!(
+            serde_json::json!([{ "$ref": "#/$defs/Secret" }, { "type": "null" }]),
+            identity["anyOf"],
+            "{otlp}"
+        );
+        let secret = &otlp["$defs"]["Secret"];
+        assert_eq!(serde_json::json!("string"), secret["type"], "{otlp}");
+        assert_eq!(serde_json::json!(true), secret["writeOnly"], "{otlp}");
     }
 }

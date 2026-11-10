@@ -40,7 +40,7 @@ schemars = { version = "1.2.2", default-features = false, features = ["derive", 
 # of the crates built on it; cargo-semver-checks keeps every patch compatible
 # (https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements).
 ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "0.2.1" }
-ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.4.0" }
+ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.4.4" }
 # ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
 # provider read by Prometheus and pushed over OTLP, on the lines FerroFED
 # resolves. Verified against crates.io on 2026-10-26.
