@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-10
+
 ### Changed
 
 - `tls_client::TlsClient::platform_config` builds the platform's verifier
@@ -680,7 +682,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.3...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.4...HEAD
+[0.8.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.3...ferrohealth-server-v0.8.4
 [0.8.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.2...ferrohealth-server-v0.8.3
 [0.8.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.1...ferrohealth-server-v0.8.2
 [0.8.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.0...ferrohealth-server-v0.8.1
