@@ -55,3 +55,9 @@ pub mod report;
 pub mod strict;
 pub mod tls;
 pub mod units;
+
+// The Rust example of the repository's README compiles as a doctest of this
+// crate, which reaches both crates it uses.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct RootReadme;

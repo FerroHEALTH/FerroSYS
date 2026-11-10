@@ -33,7 +33,8 @@ On the branch `release/<tag>`:
    needs (`.claude/rules/crates-publishing.md`), so a release moves a
    requirement in `[workspace.dependencies]` only when a dependant needs
    what the release added. Move the install line
-   of the crate's `README.md`, its crates.io page, to the new version.
+   of the crate's `README.md`, its crates.io page, and the crate's line in
+   the root `README.md` to the new version.
 3. **Cut the changelog.** Rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD` and open a fresh, empty `## [Unreleased]` above
    it. The date is the day of the cut: the release notes count the support
@@ -55,7 +56,7 @@ opens `## [X.Y.0]` with the breaking entries and leaves `## [Unreleased]`
 empty above it (ferrohealth-usage-report 0.2.0, #126, is the worked
 example). The release pull request that follows only sets the section's
 date to the day of the cut, refreshes the link references and moves the
-`README.md` install line; steps 2 and 3 above have nothing else left to do.
+install lines of the two `README.md` files; steps 2 and 3 above have nothing else left to do.
 A patch or an additive minor change leaves the version to the release pull
 request as described.
 
@@ -112,7 +113,7 @@ tracker, and the pinned `cargo-semver-checks` installed
 | The crate's public API breaks nothing its version does not allow, against its newest version on crates.io (`cargo-semver-checks` at the version `docs/VERSIONS.md` pins, on the default feature heuristic and with `--only-explicit-features`), and a public dependency moved to another compatibility line comes with the next minor at patch 0; a crate's first release has nothing there and passes, and the check names a crate it leaves out for having no release | `scripts/checks/semver.sh` |
 | Every section of the changelog holds Keep a Changelog types, each once | `scripts/checks/changelog-structure.sh` |
 | `[Unreleased]` compares from the tag, and the cut version has its link | `plan.sh` |
-| The crate's `README.md` install line pins the version being released (a pre-release is exempt) | `plan.sh` |
+| The crate's `README.md` and the root `README.md` pin the version being released on every install line of the crate (a pre-release is exempt) | `plan.sh` |
 | The section being cut opens its `### Security` with the reason when it sits beside other changes, and every Security entry names a GHSA id or an existing `security/vex/` path | `scripts/checks/changelog-security.sh --section X.Y.Z` |
 | The changelog section becomes the notes, with the support period appended: the month five years after the heading's date (Regulation (EU) 2024/2847 Art 13(19)) | `plan.sh notes` |
 
