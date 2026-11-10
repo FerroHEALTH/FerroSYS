@@ -14,9 +14,11 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 - With the `schema` feature, `OtlpSection::endpoint` takes the `SecretUrl`
   schema of ferrohealth-secret 0.2.1, a string that names its `<key>_file`
-  form and its masked userinfo and query, in place of a plain string. The
-  `schema` feature now enables `ferrohealth-secret/schema`, and the crate
-  requires ferrohealth-secret 0.2.1 (#369).
+  form and its masked userinfo and query, in place of a plain string, and
+  the `TlsClientSection` it reaches takes the `writeOnly` `Secret` schema on
+  `client_identity`. The `schema` feature now enables
+  `ferrohealth-secret/schema`, and the crate requires ferrohealth-secret
+  0.2.1 and ferrohealth-config 0.4.4 (#369).
 
 ## [0.4.0] - 2026-11-09
 

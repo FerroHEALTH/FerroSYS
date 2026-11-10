@@ -391,7 +391,7 @@ mod tests {
 
     #[cfg(feature = "schema")]
     #[test]
-    fn the_otlp_endpoint_takes_the_secret_url_schema() {
+    fn the_otlp_table_takes_the_secret_schemas() {
         let otlp =
             serde_json::to_value(schemars::schema_for!(super::OtlpSection)).expect("the schema");
         assert_eq!(
@@ -404,5 +404,14 @@ mod tests {
         let description = url["description"].as_str().expect("a description");
         assert!(description.contains("`<key>_file`"), "{description}");
         assert!(description.contains("userinfo"), "{description}");
+        let identity = &otlp["$defs"]["TlsClientSection"]["properties"]["client_identity"];
+        assert_eq!(
+            serde_json::json!([{ "$ref": "#/$defs/Secret" }, { "type": "null" }]),
+            identity["anyOf"],
+            "{otlp}"
+        );
+        let secret = &otlp["$defs"]["Secret"];
+        assert_eq!(serde_json::json!("string"), secret["type"], "{otlp}");
+        assert_eq!(serde_json::json!(true), secret["writeOnly"], "{otlp}");
     }
 }
