@@ -836,7 +836,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "ferrohealth-config"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "ferrohealth-secret",
  "percent-encoding",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-server"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "aws-lc-rs",
  "axum",
