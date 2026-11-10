@@ -10,6 +10,27 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Loader::defaults` drops a secret of a product's defaults: a secret
+  serializes as its redaction marker, and the marker used to stand as the
+  secret's value, a password of `***`. The tree's `Default` now stands for
+  it, as the documentation said. A default that holds the marker among
+  other text, such as a URL whose userinfo or query serialized masked, is
+  refused with the dotted key, where it used to stand as the masked URL. A
+  default of a secret or of its `<key>_file` sibling is left out where a
+  source sets the other half, so a partial table never holds both (#345).
+- A product's defaults for a shared section it embeds, such as the
+  `EndpointSection` of `ferrohealth-smart`, are kept key by key under an
+  operator's partial table when the product passes them to
+  `Loader::defaults`
+  (`.defaults("server_admin", &Config::default().server_admin)`), which
+  every release since 0.2.6 offers; the tests now hold it for a section of
+  that shape. FerroTERM's `ferroterm-sync` should pass its
+  `[server_admin]` defaults this way and drop the guidance in its book and
+  scripts that tells an operator to write `timeout = "30min"` and
+  `retry.max_attempts = 1` out in full (#345).
+
 ## [0.4.1] - 2026-11-09
 
 ### Changed

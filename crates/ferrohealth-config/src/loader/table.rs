@@ -107,8 +107,15 @@ pub(super) fn overlay(below: &mut toml::Table, above: toml::Table) {
 
 /// Puts every key of `defaults` that `table` does not hold into it, into
 /// the tables both hold too.
+///
+/// A secret and its `<key>_file` sibling are one key: a default of either
+/// is left out where `table` holds the other, so a default never sets the
+/// second half of a pair the sources already set.
 pub(super) fn fill(table: &mut toml::Table, defaults: &toml::Table) {
     for (key, default) in defaults {
+        if !table.contains_key(key) && sibling_is_set(table, key) {
+            continue;
+        }
         match table.get_mut(key) {
             Some(toml::Value::Table(set)) => {
                 if let toml::Value::Table(default) = default {
@@ -120,6 +127,57 @@ pub(super) fn fill(table: &mut toml::Table, defaults: &toml::Table) {
                 table.insert(key.clone(), default.clone());
             }
         }
+    }
+}
+
+/// Whether `table` holds the other half of the secret pair `key` names:
+/// `<key>_file` for a secret, the secret for a `<key>_file`.
+fn sibling_is_set(table: &toml::Table, key: &str) -> bool {
+    let other = key
+        .strip_suffix("_file")
+        .map_or_else(|| format!("{key}_file"), str::to_owned);
+    table.contains_key(&other)
+}
+
+/// Removes every value of `table` that is a secret's redaction marker, and
+/// returns the dotted key of the first value that holds the marker inside
+/// other text, such as a URL with its userinfo masked.
+///
+/// A secret serializes as [`ferrohealth_secret::REDACTED`], so a default
+/// read from a serialized tree holds the marker where the secret stood: the
+/// key is dropped and the tree's `Default` stands for it. A value that
+/// holds the marker among other text cannot be told from a masked one.
+pub(super) fn strip_redacted(table: &mut toml::Table) -> Option<String> {
+    let marker = ferrohealth_secret::REDACTED;
+    table.retain(|_, value| value.as_str() != Some(marker));
+    for (key, value) in table.iter_mut() {
+        let masked = match value {
+            toml::Value::Table(inner) => {
+                strip_redacted(inner).map(|below| format!("{key}.{below}"))
+            }
+            toml::Value::String(text) => text.contains(marker).then(|| key.clone()),
+            toml::Value::Array(elements) => elements
+                .iter()
+                .any(|element| holds_marker(element, marker))
+                .then(|| key.clone()),
+            _ => None,
+        };
+        if masked.is_some() {
+            return masked;
+        }
+    }
+    None
+}
+
+/// Whether `value` or anything inside it holds `marker`.
+fn holds_marker(value: &toml::Value, marker: &str) -> bool {
+    match value {
+        toml::Value::String(text) => text.contains(marker),
+        toml::Value::Array(elements) => {
+            elements.iter().any(|element| holds_marker(element, marker))
+        }
+        toml::Value::Table(inner) => inner.values().any(|element| holds_marker(element, marker)),
+        _ => false,
     }
 }
 
