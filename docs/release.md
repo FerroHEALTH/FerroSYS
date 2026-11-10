@@ -109,7 +109,7 @@ tracker, and the pinned `cargo-semver-checks` installed
 |---|---|
 | The milestone titled as the tag holds no open item | `scripts/release/milestone.sh check` |
 | The crate's version names the tag's version | `plan.sh` |
-| The crate's public API breaks nothing its version does not allow, against its newest version on crates.io (`cargo-semver-checks` at the version `docs/VERSIONS.md` pins); a crate's first release has nothing there and passes, and the pull-request check leaves out a crate at 0.0.0 | `scripts/checks/semver.sh` |
+| The crate's public API breaks nothing its version does not allow, against its newest version on crates.io (`cargo-semver-checks` at the version `docs/VERSIONS.md` pins, on the default feature heuristic and with `--only-explicit-features`), and a public dependency moved to another compatibility line comes with the next minor at patch 0; a crate's first release has nothing there and passes, and the check names a crate it leaves out for having no release | `scripts/checks/semver.sh` |
 | Every section of the changelog holds Keep a Changelog types, each once | `scripts/checks/changelog-structure.sh` |
 | `[Unreleased]` compares from the tag, and the cut version has its link | `plan.sh` |
 | The crate's `README.md` install line pins the version being released (a pre-release is exempt) | `plan.sh` |
