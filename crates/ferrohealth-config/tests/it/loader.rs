@@ -4,6 +4,7 @@
 //! The loader: the fixtures every test of it shares.
 
 mod arrays;
+mod defaults;
 mod refusals;
 mod sources;
 

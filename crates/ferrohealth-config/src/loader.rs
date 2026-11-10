@@ -267,7 +267,10 @@ impl Loader {
     /// this call and an earlier one set takes this call's value. A key
     /// `value` does not serialize, such as an `Option` that is `None`, falls
     /// back to the tree's `Default`. A secret serializes as its redaction
-    /// marker, so a secret takes no product default.
+    /// marker, so a secret takes no product default: the marker is dropped
+    /// and the tree's `Default` stands for it. A secret and its
+    /// `<key>_file` sibling are one key, so a default of either is left out
+    /// where a source sets the other.
     ///
     /// # Examples
     ///
@@ -313,7 +316,9 @@ impl Loader {
     /// # Errors
     ///
     /// Returns [`ConfigError::Assemble`] when `value` does not serialize to
-    /// a TOML table.
+    /// a TOML table, or when a value of it holds the redaction marker among
+    /// other text, such as a URL whose userinfo or query serialized masked,
+    /// which would otherwise stand as the masked text.
     pub fn defaults<D: Serialize + ?Sized>(
         mut self,
         key: &str,
@@ -330,6 +335,18 @@ impl Loader {
             }
             Err(source) => return Err(ConfigError::Assemble { source }),
         };
+        if let Some(masked) = table::strip_redacted(&mut table) {
+            let masked = if key.is_empty() {
+                masked
+            } else {
+                format!("{key}.{masked}")
+            };
+            return Err(ConfigError::Assemble {
+                source: <toml::ser::Error as serde::ser::Error>::custom(format!(
+                    "the product default of `{masked}` holds a masked secret"
+                )),
+            });
+        }
         if !key.is_empty() {
             for segment in key.rsplit('.') {
                 table = toml::Table::from_iter([(segment.to_owned(), toml::Value::Table(table))]);
