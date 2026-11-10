@@ -55,7 +55,7 @@ prometheus = ["dep:opentelemetry-prometheus", "dep:prometheus"]
 axum = ["dep:axum", "dep:http", "dep:pin-project-lite", "dep:tower"]
 # `schemars::JsonSchema` on the `[telemetry]` section and every type it
 # reaches, for a product that generates its configuration reference.
-schema = ["dep:schemars", "ferrohealth-config/schema"]
+schema = ["dep:schemars", "ferrohealth-config/schema", "ferrohealth-secret/schema"]
 
 [dependencies]
 ferrohealth-config.workspace = true
