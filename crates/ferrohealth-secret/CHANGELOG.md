@@ -10,6 +10,14 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- Feature `schema`: `schemars::JsonSchema` for `secret::Secret` (a
+  `writeOnly` string) and `secret_url::SecretUrl` (a string whose userinfo
+  and query render masked), each describing the inline form and the
+  `<key>_file` sibling and carrying no value, for a product that generates
+  its configuration reference from its types (#360).
+
 ## [0.2.0] - 2026-10-26
 
 ### Added

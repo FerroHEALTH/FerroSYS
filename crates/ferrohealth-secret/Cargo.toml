@@ -17,7 +17,14 @@ keywords = ["secret", "redaction", "configuration", "healthcare"]
 categories = ["config"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 
+[features]
+default = []
+# `schemars::JsonSchema` on `secret::Secret` and `secret_url::SecretUrl`, for
+# a product that generates its configuration reference from its types.
+schema = ["dep:schemars"]
+
 [dependencies]
+schemars = { workspace = true, optional = true }
 secrecy.workspace = true
 serde.workspace = true
 thiserror.workspace = true

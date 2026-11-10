@@ -21,6 +21,10 @@ of the type, so a secret or a patient value cannot reach a log line, a
 - `file::read_secret` and `file::require_secret` read a secret from its key
   or from the file its `<key>_file` sibling names, exactly one of the two,
   with the trailing line ending removed and an empty file refused.
+- Feature `schema` implements `schemars::JsonSchema` for `Secret` and
+  `SecretUrl`, for a product that generates its configuration reference.
+  Each schema is a string whose description names the `<key>_file` form and
+  what renders masked; none carries a default, an example or a pattern.
 
 ## Use
 
