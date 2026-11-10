@@ -7,7 +7,8 @@
 #   1. `guards` runs the workflow, shell and repository guards, the
 #      forwarder ratchet and the publish dry run, all without a build cache.
 #   2. `lint` runs rustfmt, clippy with and without every feature, the
-#      wasm32 documents, rustdoc and cargo-deny over one build cache.
+#      wasm32 documents, rustdoc, the public dependency declarations and
+#      cargo-deny over one build cache.
 #   3. `nextest` runs the tests and the doctests.
 #   4. `cargo-semver-checks` runs on a pull request and in the merge queue.
 #
@@ -143,6 +144,12 @@ jobs:
       - name: The crate version guard refuses what it claims to
         if: ${{ !cancelled() }}
         run: bash scripts/checks/crate-version-guard.sh --self-test
+      - name: The SemVer judge's public dependency verdict refuses what it claims to
+        if: ${{ !cancelled() }}
+        run: bash scripts/checks/semver.sh --self-test
+      - name: The public surface check refuses what it claims to
+        if: ${{ !cancelled() }}
+        run: bash scripts/checks/public-surface.sh --self-test
       - name: The version, the lock and the changelog agree
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
@@ -216,6 +223,12 @@ jobs:
       - name: rustdoc
         if: ${{ !cancelled() }}
         run: cargo doc --locked --workspace --all-features --no-deps --document-private-items
+      # Each crate's declared third-party public dependencies are the crates
+      # its rustdoc JSON API names, so the SemVer guards count their line
+      # moves (.claude/rules/crates-publishing.md).
+      - name: public dependencies
+        if: ${{ !cancelled() }}
+        run: bash scripts/checks/public-surface.sh
       - name: cargo-deny
         if: ${{ !cancelled() }}
         run: cargo deny check

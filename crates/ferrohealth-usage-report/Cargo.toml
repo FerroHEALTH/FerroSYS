@@ -17,6 +17,21 @@ keywords = ["usage-report", "telemetry", "installation", "healthcare"]
 categories = ["web-programming::http-client"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 
+# The third-party crates whose items the public API names, kept true by
+# scripts/checks/public-surface.sh: a line move of one takes the next minor.
+[package.metadata.ferrohealth]
+public-dependencies = [
+  "http",
+  "jiff",
+  "reqwest",
+  "schemars",
+  "serde",
+  "serde_json",
+  "tokio",
+  "url",
+  "uuid",
+]
+
 [features]
 default = []
 # The `Recorder` through which the shared request log of

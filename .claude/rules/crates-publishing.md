@@ -64,21 +64,46 @@ a product changes, or by keeping the API; never by skipping the check.
 
 ## A public dependency on another line is a break
 
-A crate that exposes the types of a public dependency, a `ferrohealth-*`
-crate, breaks when it moves that requirement to another compatibility line
-(`0.4` to `0.5`): the exposed types become other types, and code that built
-against the crate stops building, which The Cargo Book's "SemVer
-Compatibility" introduction counts as a breaking change. The
-`cargo-semver-checks` README lists "breaking type changes, for example in
-the type of a field or function parameter" among what the tool does not
-catch, so `scripts/lib/public-deps.sh` compares each such requirement's
-line itself, after FerroBRIDGE's `scripts/checks/lib/public-deps.sh`.
+A crate that exposes the types of a dependency breaks when it moves that
+requirement to another compatibility line (`0.4` to `0.5`, `1` to `2`):
+the exposed types become other types, and code that built against the
+crate stops building. The introduction of The Cargo Book's "SemVer
+Compatibility" chapter names these as the breaks it is about: "changes that
+will cause cargo and rustc to fail to build something that previously
+worked". The `cargo-semver-checks` README lists
+"breaking type changes, for example in the type of a field or function
+parameter" among what the tool does not catch, so `scripts/lib/public-deps.sh`
+compares each such requirement's line itself, after FerroBRIDGE's
+`scripts/checks/lib/public-deps.sh`.
 `scripts/checks/crate-version-guard.sh` compares the pull request's base
 with its head, and `semver.sh` the crate's newest release with the tree;
 both ask for the next minor at patch 0 (SemVer 2.0.0 §7) when a line
-moved. Which
-dependencies count as public is our own design: every `ferrohealth-*`
-requirement, since no specification says which of its items a crate
+moved. Neither asks more than that: a minor that skips a line, or a minor
+with no break, passes.
+
+A public dependency is any of these:
+
+- every `ferrohealth-*` requirement and every sibling crate of this
+  workspace, optional ones included, since the rule assumes a crate exposes
+  them all;
+- every third-party crate the crate declares in the `public-dependencies`
+  array of its `[package.metadata.ferrohealth]` table: `rustls` and `axum`
+  for `ferrohealth-server`, whose `RevocationCheck::config()` hands out a
+  `rustls::ClientConfig` and whose router is an `axum::Router`.
+
+`scripts/checks/public-surface.sh` keeps the declaration true. In the
+`lint` job it builds each crate's rustdoc JSON with every feature, collects
+the crates whose items the public API names (a signature, a field, a bound,
+a trait implementation, a re-export), attributes a crate that is not a
+direct dependency (`axum_core`, `serde_core`, `rustls_pki_types`) to each
+direct dependency whose source re-exports it, and fails when the
+declaration misses an attributed crate or names one the API does not
+reach. It leaves out the standard library, the blanket and auto-trait
+implementations rustdoc adds, and paths through a `__`-prefixed module,
+the hidden support of a macro. A dependency either side of a pull request
+declares counts for the guard, so dropping the declaration in the change
+that moves the line does not hide the move. Which items make a dependency
+public is our own design: no specification says which of its items a crate
 exposes.
 
 ## Official documentation (durable citations)
@@ -86,6 +111,7 @@ exposes.
 - Caret requirements: <https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements>
 - SemVer compatibility: <https://doc.rust-lang.org/cargo/reference/semver.html>
 - What cargo-semver-checks does not catch: <https://github.com/obi1kenobi/cargo-semver-checks#will-cargo-semver-checks-catch-every-semver-violation>
+- The rustdoc JSON output: <https://doc.rust-lang.org/rustdoc/unstable-features.html#json-output>
 - cargo-semver-checks: <https://github.com/obi1kenobi/cargo-semver-checks>
 - SemVer 2.0.0 §7: <https://semver.org/#spec-item-7>
 - `cargo publish`: <https://doc.rust-lang.org/cargo/commands/cargo-publish.html>
