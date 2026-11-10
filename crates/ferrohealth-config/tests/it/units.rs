@@ -273,3 +273,20 @@ fn the_schema_carries_each_grammar() {
     .expect("the schema");
     assert!(tls["properties"]["min_version"].is_object(), "{tls}");
 }
+
+#[cfg(feature = "schema")]
+#[test]
+fn the_client_identity_takes_the_secret_schema() {
+    let tls = serde_json::to_value(schemars::schema_for!(
+        ferrohealth_config::tls::TlsClientSection
+    ))
+    .expect("the schema");
+    assert_eq!(
+        serde_json::json!([{ "$ref": "#/$defs/Secret" }, { "type": "null" }]),
+        tls["properties"]["client_identity"]["anyOf"],
+        "{tls}"
+    );
+    let secret = &tls["$defs"]["Secret"];
+    assert_eq!(serde_json::json!(true), secret["writeOnly"], "{tls}");
+    assert_eq!(serde_json::json!("string"), secret["type"], "{tls}");
+}

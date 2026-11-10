@@ -21,8 +21,8 @@ include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 default = []
 # `schemars::JsonSchema` on `units::Duration`, `units::ByteSize`,
 # `removed::Removed` and the `tls` types, for a product that generates its
-# configuration reference from its types.
-schema = ["dep:schemars"]
+# configuration reference from its types; the secret types bring their own.
+schema = ["dep:schemars", "ferrohealth-secret/schema"]
 
 [dependencies]
 ferrohealth-secret.workspace = true

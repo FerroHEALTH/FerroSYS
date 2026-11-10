@@ -39,7 +39,7 @@ schemars = { version = "1.2.2", default-features = false, features = ["derive", 
 # release it needs, so a patch of one reaches the products without a release
 # of the crates built on it; cargo-semver-checks keeps every patch compatible
 # (https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#caret-requirements).
-ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "0.2.0" }
+ferrohealth-secret = { path = "crates/ferrohealth-secret", version = "0.2.1" }
 ferrohealth-config = { path = "crates/ferrohealth-config", version = "0.4.0" }
 # ferrohealth-telemetry: the console, the request log, and one OpenTelemetry
 # provider read by Prometheus and pushed over OTLP, on the lines FerroFED

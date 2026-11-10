@@ -10,6 +10,14 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- With the `schema` feature, `tls::TlsClientSection::client_identity` takes
+  the `Secret` schema of ferrohealth-secret 0.2.1, a `writeOnly` string that
+  names its `<key>_file` form, in place of a plain string; the `schema`
+  feature now enables `ferrohealth-secret/schema`, and the crate requires
+  ferrohealth-secret 0.2.1 (#368).
+
 ## [0.4.3] - 2026-11-10
 
 ### Added

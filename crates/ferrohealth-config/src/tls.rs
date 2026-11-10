@@ -27,7 +27,6 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct TlsClientSection {
     /// The client certificate chain and its private key, in one PEM.
-    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
     pub client_identity: Option<Secret>,
     /// A file holding `client_identity`.
     pub client_identity_file: Option<PathBuf>,
