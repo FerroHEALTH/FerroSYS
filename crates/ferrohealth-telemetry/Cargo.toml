@@ -17,6 +17,25 @@ keywords = ["telemetry", "tracing", "opentelemetry", "logging", "healthcare"]
 categories = ["development-tools::debugging"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 
+# The third-party crates whose items the public API names, kept true by
+# scripts/checks/public-surface.sh: a line move of one takes the next minor.
+[package.metadata.ferrohealth]
+public-dependencies = [
+  "axum",
+  "http",
+  "opentelemetry",
+  "opentelemetry-otlp",
+  "opentelemetry_sdk",
+  "prometheus",
+  "rustls",
+  "schemars",
+  "serde",
+  "tonic",
+  "tower",
+  "tracing",
+  "tracing-subscriber",
+]
+
 [features]
 default = []
 # The OTLP export of spans and metrics over gRPC, with TLS to the collector.

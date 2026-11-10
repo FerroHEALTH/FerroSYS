@@ -17,6 +17,23 @@ keywords = ["performance", "benchmark", "ci", "healthcare"]
 categories = ["command-line-utilities", "development-tools::profiling"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 
+# The third-party crates whose items the public API names, kept true by
+# scripts/checks/public-surface.sh: a line move of one takes the next minor.
+[package.metadata.ferrohealth]
+public-dependencies = [
+  "base64",
+  "hdrhistogram",
+  "http",
+  "reqwest",
+  "rustls",
+  "serde",
+  "serde_json",
+  "tokio",
+  "tokio-postgres",
+  "toml",
+  "url",
+]
+
 [[bin]]
 name = "ferrohealth-perf"
 path = "src/main.rs"

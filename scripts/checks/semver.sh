@@ -26,6 +26,8 @@
 #                            nothing otherwise
 #   semver.sh --pin          print the cargo-semver-checks version pinned in
 #                            docs/VERSIONS.md, which CI installs
+#   semver.sh --self-test    run the public dependency verdict over fixtures,
+#                            with no judge and no network
 #
 # A change that reaches no crate leaves every public API as it is on its
 # base, so judging it would only judge the base: a pull request opened
@@ -46,9 +48,87 @@ cd "$root"
 . scripts/lib/public-deps.sh
 
 usage() {
-  echo "usage: semver.sh [<crate>...] | --changed <base> | --pin" >&2
+  echo "usage: semver.sh [<crate>...] | --changed <base> | --pin | --self-test" >&2
   exit 2
 }
+
+# The verdict on the public dependencies of crate $1 at $2 against its release
+# $3, whose normal dependencies the crates.io document $4 lists, read with the
+# manifests of the working directory. A public dependency on another line
+# breaks the crate where the judge cannot see it: it needs the next minor, at
+# patch 0.
+dependency_verdict() {
+  local crate="$1" current="$2" previous="$3" release="$4" declared moved
+  declared="$(declared_public < "crates/$crate/Cargo.toml")"
+  moved="$(moved_lines \
+    "$(jq -r '.dependencies[] | select(.kind == "normal") | "\(.crate_id) \(.req)"' "$release" | public_lines "$declared")" \
+    "$(manifest_requirements Cargo.toml "crates/$crate/Cargo.toml" | public_lines "$declared")")"
+  [[ -n "$moved" ]] || return 0
+  if answers_move "$previous" "$current"; then
+    echo "semver: $crate leaves its line for its public dependencies ($moved)"
+    return 0
+  fi
+  echo "::error::semver: $crate moves from $previous to $current while a public dependency moves to another compatibility line ($moved); that breaks its consumers, so it takes the next minor at patch 0 (.claude/rules/crates-publishing.md)." >&2
+  return 1
+}
+
+# Each case writes a one-crate workspace whose crate declares rustls and axum
+# public, and a crates.io dependency document of its release.
+self_test() {
+  local tmp failures=0
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' RETURN
+  mkdir -p "$tmp/crates/demo"
+  # The tree requiring ferrohealth-demo on $1, serde on $2, rustls on $3 and
+  # axum on $4; the release required 0.4.0, 1.0.0, 0.23.0 and 0.8.0.
+  tree() {
+    printf '[workspace]\nmembers = ["crates/demo"]\n\n[workspace.dependencies]\nrustls = { version = "%s", default-features = false }\n' "$3" > "$tmp/Cargo.toml"
+    printf '[package]\nname = "demo"\n\n[package.metadata.ferrohealth]\npublic-dependencies = ["rustls", "axum"]\n\n[dependencies]\nferrohealth-demo = "%s"\nserde = "%s"\nrustls.workspace = true\naxum = { version = "%s", default-features = false }\n' "$1" "$2" "$4" > "$tmp/crates/demo/Cargo.toml"
+  }
+  printf '%s' '{"dependencies": [
+    {"crate_id": "ferrohealth-demo", "req": "^0.4.0", "kind": "normal"},
+    {"crate_id": "serde", "req": "^1.0.0", "kind": "normal"},
+    {"crate_id": "rustls", "req": "^0.23.0", "kind": "normal"},
+    {"crate_id": "axum", "req": "^0.8.0", "kind": "normal"},
+    {"crate_id": "tokio", "req": "^1.0.0", "kind": "dev"}]}' > "$tmp/release.json"
+  expect() {
+    local want="$1" label="$2" got=0
+    shift 2
+    (cd "$tmp" && dependency_verdict demo "$@" "$tmp/release.json" > /dev/null 2>&1) || got=1
+    if [[ "$got" -ne "$want" ]]; then
+      echo "semver: self-test: $label: exit $got, wanted $want" >&2
+      failures=$((failures + 1))
+    fi
+  }
+
+  tree 0.4.2 1.0.0 0.23.9 0.8.4
+  expect 0 "patch steps on every line" 0.1.4 0.1.3
+  tree 0.4.0 2.0.0 0.23.0 0.8.0
+  expect 0 "a private dependency on another line with a patch step" 0.1.4 0.1.3
+  tree 0.5.0 1.0.0 0.23.0 0.8.0
+  expect 1 "a family dependency on another line with a patch step" 0.1.4 0.1.3
+  tree 0.4.0 1.0.0 0.24.0 0.8.0
+  expect 1 "a declared rustls on another line with a patch step" 0.1.4 0.1.3
+  expect 1 "a declared rustls on another line at the released version" 0.1.3 0.1.3
+  expect 0 "a declared rustls on another line with the next minor" 0.2.0 0.1.3
+  tree 0.4.0 1.0.0 0.23.0 0.9.0
+  expect 1 "a declared axum on another line with a patch step" 0.1.4 0.1.3
+  expect 1 "a declared axum on another line with a minor step off patch 0" 0.2.1 0.1.3
+  expect 0 "a declared axum on another line with the next minor" 0.2.0 0.1.3
+  expect 0 "a declared axum on another line with a minor that skips one" 0.3.0 0.1.3
+
+  if [[ "$failures" -ne 0 ]]; then
+    echo "semver: self-test: $failures case(s) failed" >&2
+    return 1
+  fi
+  echo "semver: self-test passed"
+}
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  [[ "$#" -eq 1 ]] || usage
+  self_test
+  exit
+fi
 
 # The Pin cell of the cargo-semver-checks row, its backticks stripped.
 pin="$(awk -F'|' '$2 ~ /^ *cargo-semver-checks *$/ { v = $3; gsub(/[^0-9.]/, "", v); print v; exit }' \
@@ -103,12 +183,6 @@ crates_io() {
     "https://crates.io/api/v1/crates/$1" 2>/dev/null || true
 }
 
-# Whether $1 and $2 share their compatibility line: the major, and the minor
-# too while the major is 0 (the Cargo caret rule).
-same_line() {
-  [[ "$(compat_line "$1")" == "$(compat_line "$2")" ]]
-}
-
 # Judges crate $1 at $2 against its release $3 in one feature pass, named $4,
 # with the extra arguments given to the judge. Only a summary the judge
 # printed counts as a judgement: a judge that could not build is named apart
@@ -161,24 +235,12 @@ for crate in "${crates[@]}"; do
   verdict=0
   judge "$crate" "$current" "$previous" "the default feature heuristic" || verdict=1
   judge "$crate" "$current" "$previous" "no default features" --only-explicit-features || verdict=1
-  # A public dependency on another line breaks the crate where the judge
-  # cannot see it: it needs the next minor, at patch 0.
   status="$(crates_io "$crate/$previous/dependencies")"
   if [[ "$status" != "200" ]]; then
     echo "semver: crates.io answered $status for the dependencies of $crate $previous" >&2
     exit 2
   fi
-  moved="$(moved_lines \
-    "$(jq -r '.dependencies[] | select(.kind == "normal") | "\(.crate_id) \(.req)"' "$document" | public_lines)" \
-    "$(manifest_requirements Cargo.toml "crates/$crate/Cargo.toml" | public_lines)")"
-  if [[ -n "$moved" ]]; then
-    if same_line "$previous" "$current" || [[ "${current##*.}" != "0" ]]; then
-      echo "::error::semver: $crate moves from $previous to $current while a public dependency moves to another compatibility line ($moved); that breaks its consumers, so it takes the next minor at patch 0 (.claude/rules/crates-publishing.md)." >&2
-      verdict=1
-    else
-      echo "semver: $crate leaves its line for its public dependencies ($moved)"
-    fi
-  fi
+  dependency_verdict "$crate" "$current" "$previous" "$document" || verdict=1
   [[ "$verdict" -eq 0 ]] || failed="$failed $crate"
 done
 

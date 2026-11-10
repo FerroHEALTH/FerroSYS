@@ -31,15 +31,18 @@ self_test() {
   trap 'rm -rf "$tmp"' RETURN
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   t_git() { git -C "$tmp/repo" -c user.name=self-test -c user.email=self-test@example.invalid -c commit.gpgsign=false -c tag.gpgsign=false "$@"; }
-  # The crate at version $1, requiring ferrohealth-demo on $2 and serde on $3.
+  # The crate at version $1, requiring ferrohealth-demo on $2, serde on $3,
+  # rustls on $4 and axum on $5, with rustls and axum declared public unless
+  # $6 names the declaration to write instead.
   state() {
-    printf '[workspace]\nmembers = ["crates/demo"]\n\n[workspace.dependencies]\nferrohealth-demo = "%s"\nserde = "%s"\n' "$2" "$3" > "$tmp/repo/Cargo.toml"
-    printf '[package]\nname = "demo"\nversion = "%s"\n\n[dependencies]\nferrohealth-demo.workspace = true\nserde = { workspace = true, optional = true }\n' "$1" > "$tmp/repo/crates/demo/Cargo.toml"
+    local declared="${6-\"rustls\", \"axum\"}"
+    printf '[workspace]\nmembers = ["crates/demo"]\n\n[workspace.dependencies]\nferrohealth-demo = "%s"\nserde = "%s"\nrustls = { version = "%s", default-features = false }\n' "$2" "$3" "$4" > "$tmp/repo/Cargo.toml"
+    printf '[package]\nname = "demo"\nversion = "%s"\n\n[package.metadata.ferrohealth]\npublic-dependencies = [%s]\n\n[dependencies]\nferrohealth-demo.workspace = true\nserde = { workspace = true, optional = true }\nrustls.workspace = true\naxum = { version = "%s", default-features = false }\n' "$1" "$declared" "$5" > "$tmp/repo/crates/demo/Cargo.toml"
     printf '[[package]]\nname = "demo"\nversion = "%s"\n' "$1" > "$tmp/repo/Cargo.lock"
     grep -qF "## [$1]" "$tmp/repo/crates/demo/CHANGELOG.md" 2> /dev/null ||
       printf '## [%s]\n' "$1" >> "$tmp/repo/crates/demo/CHANGELOG.md"
     t_git add -A
-    t_git commit -qm "demo $1 on ferrohealth-demo $2, serde $3"
+    t_git commit -qm "demo $1 on ferrohealth-demo $2, serde $3, rustls $4, axum $5"
   }
   expect() {
     local want="$1" label="$2" got=0
@@ -56,28 +59,51 @@ self_test() {
   cp "$guard" "$tmp/repo/scripts/checks/"
   cp "$PWD/scripts/lib/public-deps.sh" "$tmp/repo/scripts/lib/"
   t_git remote add origin "$tmp/repo"
-  state 0.1.3 0.4.0 1.0.0
+  state 0.1.3 0.4.0 1.0.0 0.23.0 0.8.0
   t_git tag demo-v0.1.3
   t_git branch released
 
-  state 0.1.4 0.4.2 1.0.0
-  expect 0 "a patch step on the public dependency's line" released HEAD
-  state 0.1.2 0.4.2 1.0.0
+  state 0.1.4 0.4.2 1.0.0 0.23.9 0.8.4
+  expect 0 "a patch step on the public dependencies' lines" released HEAD
+  state 0.1.2 0.4.2 1.0.0 0.23.0 0.8.0
   expect 1 "a version that moves backwards" released HEAD
-  state 0.1.3 0.5.0 1.0.0
+  state 0.1.3 0.5.0 1.0.0 0.23.0 0.8.0
   expect 1 "a public dependency on another line at the released version" released HEAD
-  state 0.1.4 0.5.0 1.0.0
+  state 0.1.4 0.5.0 1.0.0 0.23.0 0.8.0
   expect 1 "a public dependency on another line with a patch step" released HEAD
-  state 0.2.1 0.5.0 1.0.0
+  state 0.2.1 0.5.0 1.0.0 0.23.0 0.8.0
   expect 1 "a public dependency on another line with a minor step off patch 0" released HEAD
-  state 0.2.0 0.5.0 1.0.0
+  state 0.2.0 0.5.0 1.0.0 0.23.0 0.8.0
   expect 0 "a public dependency on another line with the next minor" released HEAD
   t_git branch opened
-  state 0.2.0 0.6.0 1.0.0
+  state 0.2.0 0.6.0 1.0.0 0.23.0 0.8.0
   expect 0 "a second move on a minor no release carries yet" opened HEAD
   t_git checkout -q -b private released
-  state 0.1.4 0.4.0 2.0.0
+  state 0.1.4 0.4.0 2.0.0 0.23.0 0.8.0
   expect 0 "a private dependency on another line with a patch step" released HEAD
+  t_git checkout -q -b rustls released
+  state 0.1.4 0.4.0 1.0.0 0.24.0 0.8.0
+  expect 1 "a declared rustls on another line with a patch step" released HEAD
+  state 0.2.0 0.4.0 1.0.0 0.24.0 0.8.0
+  expect 0 "a declared rustls on another line with the next minor" released HEAD
+  t_git checkout -q -b axum released
+  state 0.1.3 0.4.0 1.0.0 0.23.0 0.9.0
+  expect 1 "a declared axum on another line at the released version" released HEAD
+  state 0.2.1 0.4.0 1.0.0 0.23.0 0.9.0
+  expect 1 "a declared axum on another line with a minor step off patch 0" released HEAD
+  state 0.2.0 0.4.0 1.0.0 0.23.0 0.9.0
+  expect 0 "a declared axum on another line with the next minor" released HEAD
+  state 0.3.0 0.4.0 1.0.0 0.23.0 0.10.0
+  expect 0 "a declared axum on another line with a minor that skips one" released HEAD
+  t_git checkout -q -b dropped released
+  state 0.1.4 0.4.0 1.0.0 0.23.0 0.9.0 '"rustls"'
+  expect 1 "an axum the change stops declaring, on another line with a patch step" released HEAD
+  t_git checkout -q -b undeclared released
+  state 0.1.3 0.4.0 1.0.0 0.23.0 0.8.0 '"rustls"'
+  t_git tag -f demo-v0.1.3 > /dev/null
+  t_git branch -f released
+  state 0.1.4 0.4.0 1.0.0 0.23.0 0.9.0 '"rustls"'
+  expect 0 "an undeclared axum on another line with a patch step" released HEAD
 
   if [[ "$failures" -ne 0 ]]; then
     echo "crate-version-guard: self-test: $failures case(s) failed" >&2
@@ -133,10 +159,13 @@ while IFS= read -r manifest; do
     [[ "$newest" == "$want" ]] || fail "$crate moves backwards, $was to $want"
   fi
   if [[ -n "$was" && "$was" != "0.0.0" ]]; then
+    # A dependency either side declares public counts on both: one that stops
+    # being public in the same change still moved under its consumers.
+    declared="$( (git show "$base:$manifest" | declared_public; git show "$head:$manifest" | declared_public) | LC_ALL=C sort -u)"
     moved="$(moved_lines \
-      "$(manifest_requirements <(git show "$base:Cargo.toml") <(git show "$base:$manifest") | public_lines)" \
-      "$(manifest_requirements <(git show "$head:Cargo.toml") <(git show "$head:$manifest") | public_lines)")"
-    if [[ -n "$moved" ]]; then
+      "$(manifest_requirements <(git show "$base:Cargo.toml") <(git show "$base:$manifest") | public_lines "$declared")" \
+      "$(manifest_requirements <(git show "$head:Cargo.toml") <(git show "$head:$manifest") | public_lines "$declared")")"
+    if [[ -n "$moved" ]] && ! answers_move "$was" "$want"; then
       if [[ "$(compat_line "$was")" == "$(compat_line "$want")" ]]; then
         released=0
         git ls-remote --exit-code --tags --refs origin "refs/tags/$crate-v$was" > /dev/null || released=$?
@@ -145,7 +174,7 @@ while IFS= read -r manifest; do
           2) ;;
           *) fail "cannot read the tags of origin to tell whether $crate $was is released" ;;
         esac
-      elif [[ "${want##*.}" != "0" ]]; then
+      else
         fail "$crate leaves its line at $want while a public dependency moves ($moved); the next minor starts at patch 0"
       fi
     fi

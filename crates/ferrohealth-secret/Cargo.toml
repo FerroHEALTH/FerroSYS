@@ -17,6 +17,11 @@ keywords = ["secret", "redaction", "configuration", "healthcare"]
 categories = ["config"]
 include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 
+# The third-party crates whose items the public API names, kept true by
+# scripts/checks/public-surface.sh: a line move of one takes the next minor.
+[package.metadata.ferrohealth]
+public-dependencies = ["secrecy", "serde"]
+
 [dependencies]
 secrecy.workspace = true
 serde.workspace = true
