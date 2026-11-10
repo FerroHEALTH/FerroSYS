@@ -35,7 +35,8 @@ baseline the product committed.
 2. **Load phase.** The request set is sent open-loop at a fixed rate, after
    a warm-up. Each latency is timed from the instant the request was due,
    so a stalled server raises the latency of every request it held back. A
-   run whose own generator lagged is refused. It records per request group
+   run whose own generator lagged by more than its bound is refused (see
+   [The generator's lag](#the-generators-lag)). It records per request group
    the p50, p95 and p99 with their 95 % rank intervals (a quantile with too
    few samples is withheld: p99 needs 100), and overall the throughput,
    the peak memory, the CPU time per request and the transactions per
@@ -115,7 +116,7 @@ duration_secs = 60                 # the measured window
 max_in_flight = 256
 saturation_ms = 5000               # a wait this long for a slot fails the run
 timeout_ms = 10000
-max_lag_ms = 10                    # the generator's lag p99 limit
+# max_lag_ms = 10                  # the generator's lag p99 limit; half an interval, 500 / rate ms, when unset
 sample_ms = 100                    # how often memory is sampled
 settle_secs = 11                   # wait after it, before the transaction count
 stall_ratio = 10.0                 # p99 over this times p50 on every route marks a stall
@@ -263,14 +264,51 @@ ferrohealth-perf ab --plan perf/plan.toml \
    `[tolerance]` and that floor, and it fails only when the head also
    breaches against the base in most of the pairs, so a stall in one phase
    clears and a regression, which repeats, fails.
-4. **What cannot be judged.** A phase that stalled, whose generator lagged
-   or whose window was not steady makes the run exit 2, so the product's
-   job can retry it on a fresh runner; a stalled phase is left out of the
-   medians and the pairs. A base that falls behind the schedule exits 2
+4. **What cannot be judged.** A pair cannot be judged when a phase of it
+   stalled or its generator lagged past the bound, or when the comparison
+   moved within the window: the head's second half over its first, over
+   the base's, outside 0.8 to 1.25 on p50 or p95. Each arm's window is not
+   held to that band on its own, because the two run at once and a drift
+   of the runner reaches both: in FerroFED's gate on 4-vCPU runners 31 of
+   72 phases moved on their own while the comparison moved in 6 of 36
+   pairs (#358). The run then measures one more pair, led by the arm whose
+   judgeable pairs fall short, up to two beyond `--pairs`, and judges the
+   pairs it wanted, half led by each arm; each left-out pair is a warning.
+   A run that still lacks them judges every pair and exits 2, so the
+   product's job can retry it on a fresh runner, unless a metric breaches;
+   a stalled phase is left out of the medians and the pairs. A base that falls behind the schedule exits 2
    too, while a head that falls behind where the base kept up fails.
    Requests the head answered other than expected fail the run; those the
    base answered other than expected (a route the change adds, say) are
    noted, and a metric only one arm measured is noted and not judged.
+
+### The generator's lag
+
+The generator sleeps until each arrival's intended instant and sends it;
+its lag is how late the send starts, and the report holds its p99 over the
+measured window. Every latency is timed from the intended instant, so a
+lag is charged to the server as latency and hides nothing from it (the
+coordinated-omission correction). What the lag can change is the arrival
+process: the bound keeps it the plan's. It is the plan's `max_lag_ms` or,
+when the plan names none, half the interval between two arrivals of one
+arm, `500 / rate` ms in whole milliseconds and at least 1: 10 ms at the
+default 50 per second, 25 ms at 20. An arrival less than half an interval
+late still comes after the one before it and before the next, at least
+half an interval from each, and in an A/B pair, whose arms are half an
+interval apart, before the other arm's next arrival, so the servers keep
+taking turns. A generator that falls further behind is refused.
+
+The bound assumes nothing of the host's size, and that is the point: the
+lag a host adds depends on what else runs on it. On GitHub's 4-vCPU
+`ubuntu-24.04` runners, with the servers of a product's quickstart on the
+same host, the generator's lag p99 over FerroFED's 72 phases of
+2026-11-10 at 20 per second ran from 5.4 to 16.8 ms, median 11.8 ms. The
+lag is the wake-up of the generator's thread on a host whose CPUs the
+servers keep busy; the generator's own work is under a millisecond an
+arrival. It reached both arms of each pair alike, since they share one
+generator, and the throughput held the plan's rate in every phase. The
+fixed 10 ms of 0.8.0 refused two thirds of those phases while their
+schedule held. No specification governs this: our own design (#357).
 
 ### Values per arm
 

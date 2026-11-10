@@ -342,7 +342,7 @@ pub(crate) async fn load_phase(
         sent: outcome.sent,
         saturated: outcome.saturated,
         lag_p99_ms: quantile(&outcome.lag, QuantileName::P99).value_ms(),
-        max_lag_ms: load.max_lag_ms,
+        max_lag_ms: load.lag_bound_ms(),
         stall_ratio: Some(load.stall_ratio),
         peak_memory_bytes: peak,
         cpu_ms: cpu_between(first, last).map(|cpu| cpu.as_secs_f64() * 1_000.0),
