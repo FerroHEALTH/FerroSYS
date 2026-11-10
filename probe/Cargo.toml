@@ -1,0 +1,10 @@
+[package]
+name = "lag-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[dependencies]
+tokio = { version = "1.53", features = ["rt-multi-thread", "time", "macros", "sync"] }
+reqwest = { version = "0.13", default-features = false }
+hdrhistogram = "7.5"
+[workspace]
