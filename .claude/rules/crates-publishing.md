@@ -22,8 +22,9 @@ and the compatibility of each release are hard rules.
   (FerroAUTH, FerroAUDIT): a caret on the newest release this crate needs.
 - **The products pin each shared crate exactly** (`ferrohealth-server =
   "=0.3.2"`) and move one pull request at a time; their lockfile is what
-  makes a build reproducible. Each crate README's install line shows that
-  exact pin, and the release plan checks it.
+  makes a build reproducible. Each crate README's install line and the
+  crate's line in the root README show that exact pin, and the release plan
+  checks both.
 - A release moves a requirement in `[workspace.dependencies]` only when a
   dependant needs something the new release added.
 

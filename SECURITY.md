@@ -11,11 +11,10 @@ of the family book, written by the manufacturer, Cadasto B.V.:
 
 ## Supported versions
 
-FerroSYS has no release yet, so no version is supported. `main` is
-development code that is not supplied for use.
-
-Once a release exists, only the newest release is supported. When a new
-release is published, every earlier release stops receiving fixes: there are
+Each FerroSYS crate is released on its own version line, and only the
+newest release of each crate is supported. `main` is development code that
+is not supplied for use. When a new release of a crate is published, every
+earlier release of that crate stops receiving fixes: there are
 no maintenance branches, no long-term-support line and no backports. If you
 are not on the newest release, upgrade; upgrading is free. Under the Cyber
 Resilience Act, Cadasto B.V. commits to keep publishing security fixes for
@@ -24,7 +23,7 @@ Art 13(8)) and ships them only in the newest release (Art 13(10)).
 
 | Artifact | Supported version | Where fixes ship |
 | --- | --- | --- |
-| Every published FerroSYS artifact | the newest published release | the newest release |
+| Every published FerroSYS crate | the newest published release of that crate | the newest release of that crate |
 
 - **Where fixes ship:** a security fix ships in a new release. Where it is
   technically feasible, that release is a patch with the fix alone, so the

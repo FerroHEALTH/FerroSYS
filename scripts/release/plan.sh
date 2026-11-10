@@ -258,29 +258,36 @@ readme_pins() {
   '
 }
 
-# The crate README is its crates.io page: its install line pins the version
-# being released. A pre-release keeps the line of the release before it.
+# The crate README is its crates.io page and the root README lists every
+# crate: each install line of the crate in either pins the version being
+# released. A pre-release keeps the line of the release before it.
 check_readme_pin() {
-  local readme="crates/$CRATE/README.md" pins stale
+  local readme pins stale failed=0
   if [[ "$VERSION" == *-* ]]; then
     echo "a pre-release moves no install line"
     return 0
   fi
-  if [[ ! -f "$readme" ]]; then
-    echo "::error::$CRATE has no $readme." >&2
-    return 1
-  fi
-  pins="$(readme_pins "$CRATE" <"$readme")"
-  if [[ -z "$pins" ]]; then
-    echo "::error::$readme has no install line pinning $CRATE as '$CRATE = \"=$VERSION\"'." >&2
-    return 1
-  fi
-  stale="$(grep -vxF "$VERSION" <<<"$pins" || true)"
-  if [[ -n "$stale" ]]; then
-    echo "::error::$readme pins $CRATE at $(paste -sd, - <<<"$stale"); the release is $VERSION." >&2
-    return 1
-  fi
-  echo "OK: $readme pins $VERSION"
+  for readme in "crates/$CRATE/README.md" README.md; do
+    if [[ ! -f "$readme" ]]; then
+      echo "::error::$CRATE has no $readme." >&2
+      failed=1
+      continue
+    fi
+    pins="$(readme_pins "$CRATE" <"$readme")"
+    if [[ -z "$pins" ]]; then
+      echo "::error::$readme has no install line pinning $CRATE as '$CRATE = \"=$VERSION\"'." >&2
+      failed=1
+      continue
+    fi
+    stale="$(grep -vxF "$VERSION" <<<"$pins" || true)"
+    if [[ -n "$stale" ]]; then
+      echo "::error::$readme pins $CRATE at $(paste -sd, - <<<"$stale"); the release is $VERSION." >&2
+      failed=1
+      continue
+    fi
+    echo "OK: $readme pins $VERSION"
+  done
+  return "$failed"
 }
 
 check_notes() {
@@ -307,7 +314,7 @@ check_semver The public API breaks nothing its version does not allow (cargo-sem
 check_changelog_structure Changelog structure (no duplicate subsections, Keep a Changelog types only)
 check_changelog_links The changelog links compare from the tag being cut
 check_changelog_security The Security section of the cut names its advisories and its reason
-check_readme_pin The crate README's install line pins the version being released
+check_readme_pin The crate README and the root README pin the version being released
 check_notes The changelog section for this tag becomes the release notes
 check_notes_content The release notes carry the support period
 EOF
