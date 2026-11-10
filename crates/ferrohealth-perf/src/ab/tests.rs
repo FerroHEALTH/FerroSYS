@@ -36,6 +36,7 @@ fn ab(base: &[u64], head: &[u64]) -> AbReport {
         head: run.target,
         idle: run.idle,
         pairs,
+        wanted: 0,
         verdict: None,
     }
 }
@@ -143,7 +144,7 @@ fn a_stalled_phase_cannot_be_judged_and_is_left_out() {
 }
 
 #[test]
-fn an_unsteady_window_cannot_be_judged() {
+fn a_window_that_moves_one_arm_cannot_be_judged() {
     let mut report = ab(&[10, 10, 10], &[10, 10, 10]);
     let mut slow_half = fixture::load(10, 250);
     let other = fixture::load(30, 250);
@@ -158,10 +159,106 @@ fn an_unsteady_window_cannot_be_judged() {
         verdict
             .problems
             .iter()
-            .any(|p| p.starts_with("the base's phase of pair 1: the window is not steady")),
+            .any(|p| p.starts_with("pair 1: the comparison is not steady")),
         "{:?}",
         verdict.problems
     );
+}
+
+/// A load phase whose second half is `second` ms where its first is
+/// `first` ms.
+fn drifting(first: u64, second: u64) -> LoadReport {
+    let mut phase = fixture::load(first, 250);
+    let later = fixture::load(second, 250);
+    let group = phase.groups.get_mut("read").unwrap();
+    group
+        .second_half
+        .clone_from(&later.groups["read"].second_half);
+    phase
+}
+
+#[test]
+fn a_host_drift_that_reaches_both_arms_is_judged() {
+    let mut report = ab(&[10, 10, 10, 10], &[10, 10, 10, 10]);
+    report.pairs[1].base = drifting(10, 30);
+    report.pairs[1].head = drifting(10, 31);
+    let verdict = judge(&report).unwrap();
+    assert!(
+        !report.pairs[1].base.steadiness().unwrap().steady(),
+        "each arm alone moved"
+    );
+    assert!(verdict.problems.is_empty(), "{:?}", verdict.problems);
+    assert_eq!(Outcome::Pass, verdict.outcome, "{verdict:?}");
+}
+
+#[test]
+fn a_lag_over_the_phase_s_bound_cannot_be_judged() {
+    let mut report = ab(&[10, 10], &[10, 10]);
+    report.pairs[1].head.max_lag_ms = 25;
+    report.pairs[1].head.lag_p99_ms = Some(25.5);
+    report.pairs[0].base.max_lag_ms = 25;
+    report.pairs[0].base.lag_p99_ms = Some(16.8);
+    let verdict = judge(&report).unwrap();
+    assert_eq!(Outcome::Invalid, verdict.outcome, "{verdict:?}");
+    assert_eq!(
+        vec![
+            "the head's phase of pair 2: the generator's lag p99 is 25.50 ms, over 25 ms: it \
+             could not keep the schedule"
+                .to_owned()
+        ],
+        verdict.problems
+    );
+}
+
+#[test]
+fn a_pair_measured_in_place_of_an_unjudgeable_one_is_judged() {
+    let mut report = ab(&[10, 10, 10, 10, 10], &[10, 10, 10, 10, 10]);
+    report.wanted = 4;
+    report.pairs[1].head = drifting(10, 30);
+    report.pairs[4].first = Arm::Head;
+    let verdict = judge(&report).unwrap();
+    assert_eq!(Outcome::Pass, verdict.outcome, "{verdict:?}");
+    assert!(verdict.problems.is_empty(), "{:?}", verdict.problems);
+    assert!(
+        verdict
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("pair 2: the comparison is not steady")
+                && w.ends_with("a later pair led by the head judged in its place")),
+        "{:?}",
+        verdict.warnings
+    );
+    assert_eq!(
+        4,
+        check(&verdict, "read.p50_ms").runs,
+        "the left-out pair is not judged"
+    );
+}
+
+#[test]
+fn a_replacement_led_by_the_other_arm_does_not_stand_in() {
+    let mut report = ab(&[10, 10, 10, 10, 10], &[10, 10, 10, 10, 10]);
+    report.wanted = 4;
+    report.pairs[1].head = drifting(10, 30);
+    report.pairs[4].first = Arm::Base;
+    let verdict = judge(&report).unwrap();
+    assert_eq!(Outcome::Invalid, verdict.outcome, "{verdict:?}");
+    assert_eq!(
+        5,
+        check(&verdict, "read.p50_ms").runs,
+        "every pair is judged"
+    );
+}
+
+#[test]
+fn a_breach_outranks_pairs_that_could_not_be_judged() {
+    let mut report = ab(&[10, 10, 10, 10, 10, 10], &[14, 14, 14, 14, 14, 14]);
+    report.wanted = 4;
+    for pair in [0, 1, 4] {
+        report.pairs[pair].head.lag_p99_ms = Some(40.0);
+    }
+    let verdict = judge(&report).unwrap();
+    assert_eq!(Outcome::Fail, verdict.outcome, "{verdict:?}");
 }
 
 #[test]

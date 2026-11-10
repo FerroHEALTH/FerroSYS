@@ -155,8 +155,10 @@ pub struct LoadSettings {
     /// milliseconds.
     pub timeout_ms: u64,
     /// The p99 of the generator's own lag above which the run is refused,
-    /// in milliseconds.
-    pub max_lag_ms: u64,
+    /// in milliseconds; when absent, half the interval between two
+    /// arrivals ([`LoadSettings::lag_bound_ms`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_lag_ms: Option<u64>,
     /// How often the server's memory is sampled for its peak, in
     /// milliseconds.
     pub sample_ms: u64,
@@ -189,7 +191,7 @@ impl Default for LoadSettings {
             max_in_flight: 256,
             saturation_ms: 5_000,
             timeout_ms: 10_000,
-            max_lag_ms: 10,
+            max_lag_ms: None,
             sample_ms: 100,
             settle_secs: 11,
             // NOTE: no specification governs this: our own design; a healthy run's p99 was 1.5 to 3 times its p50, a stalled 9V74 runner's 20 to 60 times.
@@ -212,6 +214,27 @@ impl LoadSettings {
             min_version: self.min_version,
             ..TlsClientSection::default()
         }
+    }
+
+    /// The p99 of the generator's own lag above which a phase is refused,
+    /// in milliseconds: the plan's `max_lag_ms`, or else half the interval
+    /// between two arrivals, `500 / rate`, in whole milliseconds and at
+    /// least one.
+    ///
+    /// Every latency is timed from the arrival's intended instant, so the
+    /// lag is charged to the server and hides nothing from it; the bound
+    /// keeps the arrival process the plan's. An arrival less than half an
+    /// interval late still comes after the one before it and before the
+    /// next, at least half an interval from each, and in an A/B pair, whose
+    /// arms are half an interval apart, before the other arm's next one, so
+    /// the servers keep taking turns. At the default 50 per second that is
+    /// 10 ms. No specification governs this: our own design (#357).
+    #[must_use]
+    pub fn lag_bound_ms(&self) -> u64 {
+        self.max_lag_ms.unwrap_or_else(|| {
+            let half = Duration::try_from_secs_f64(0.5 / self.rate).unwrap_or(Duration::MAX);
+            u64::try_from(half.as_millis()).unwrap_or(u64::MAX).max(1)
+        })
     }
 
     /// The warm-up.
@@ -487,6 +510,24 @@ mod tests {
             (idle.max_transactions_per_second - 5.0).abs() < f64::EPSILON,
             "5/s"
         );
+    }
+
+    #[test]
+    fn the_lag_bound_is_half_an_interval_unless_the_plan_names_one() {
+        let at = |rate, max_lag_ms| {
+            LoadSettings {
+                rate,
+                max_lag_ms,
+                ..LoadSettings::default()
+            }
+            .lag_bound_ms()
+        };
+        assert_eq!(10, at(50.0, None), "the 10 ms of 0.8.0 at the default rate");
+        assert_eq!(25, at(20.0, None));
+        assert_eq!(16, at(30.0, None), "whole milliseconds, rounded down");
+        assert_eq!(1, at(2_000.0, None), "at least one");
+        assert_eq!(100, at(5.0, None));
+        assert_eq!(10, at(20.0, Some(10)), "the plan's own bound");
     }
 
     #[test]

@@ -26,9 +26,12 @@
 //! noise floor, the worse of the two arms' spread ([`crate::baseline::across`]).
 //! The metric fails when that median breaches the limit and the head
 //! breaches it in most of the pairs, so a stall in one phase does not fail
-//! the gate and a real regression, which repeats, does. A phase that
-//! stalled, lagged or was not steady makes the run one that cannot be
-//! judged, exit 2, as in a run against a baseline; a breach outranks it.
+//! the gate and a real regression, which repeats, does. A pair whose phase
+//! stalled or lagged, or whose comparison moved within the window (the
+//! head's ratio of halves over the base's), cannot be judged; the run
+//! measures up to [`EXTRA_PAIRS`] more in its place, and without the pairs
+//! it wanted it exits 2, as in a run against a baseline; a breach outranks
+//! it.
 //!
 //! [`run_with`] fills each arm's copy of the plan with that arm's
 //! [`Values`], so a request can name an id each arm's server assigned on
@@ -46,7 +49,7 @@ use thiserror::Error;
 use tokio::time::Instant;
 
 use crate::baseline::{Tolerances, across};
-use crate::compare::{Check, Findings, Limit, Verdict, add_failures, schedule_problems};
+use crate::compare::{Check, Findings, Limit, Verdict, add_failures, lag_problem, unsteady};
 use crate::fingerprint::Fingerprint;
 use crate::load::Endpoints;
 use crate::metric::{self, Metric};
@@ -65,6 +68,10 @@ pub const SCHEMA: u32 = 1;
 /// The pairs of load phases a run measures unless told otherwise, an even
 /// count.
 pub const DEFAULT_PAIRS: u32 = 4;
+
+/// The most pairs a run measures beyond the count it was given, each in
+/// place of a pair that could not be judged.
+pub const EXTRA_PAIRS: u32 = 2;
 
 /// How long before the leading arm's schedule starts a pair is set up, so
 /// both arms read their databases' counts first.
@@ -191,6 +198,10 @@ pub struct AbReport {
     pub idle: IdleReport,
     /// The pairs of load phases, in the order they ran.
     pub pairs: Vec<Pair>,
+    /// The judgeable pairs the run set out to measure, half led by each
+    /// arm; zero in a report written before 0.9.0, which judges every pair.
+    #[serde(default)]
+    pub wanted: u32,
     /// The judgement the run wrote, for a reader; [`judge`] derives it
     /// again from the phases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -396,10 +407,22 @@ async fn carry_out(
     };
     let started = now();
     let idle = idle_phase(plan, &arms.head.instruments).await?;
-    let mut pairs = Vec::new();
+    let mut pairs: Vec<Pair> = Vec::new();
     let lag = Duration::try_from_secs_f64(0.5 / plan.load.rate).unwrap_or(Duration::ZERO);
-    for index in 0..even_pairs(options.pairs) {
-        let first = Arm::first_of(index);
+    let wanted = even_pairs(options.pairs);
+    let half = wanted.div_euclid(2);
+    let mut kept = BTreeMap::from([(Arm::Base, 0_u32), (Arm::Head, 0_u32)]);
+    let count = |kept: &BTreeMap<Arm, u32>, arm| kept.get(&arm).copied().unwrap_or(0);
+    for index in 0..wanted.saturating_add(EXTRA_PAIRS) {
+        let first = if index < wanted {
+            Arm::first_of(index)
+        } else if count(&kept, Arm::Base) < half {
+            Arm::Base
+        } else if count(&kept, Arm::Head) < half {
+            Arm::Head
+        } else {
+            break;
+        };
         let lead = Instant::now()
             .checked_add(PHASE_LEAD)
             .unwrap_or_else(Instant::now);
@@ -412,7 +435,13 @@ async fn carry_out(
             Arm::Base => (one, two),
             Arm::Head => (two, one),
         };
-        pairs.push(Pair { first, base, head });
+        let pair = Pair { first, base, head };
+        if pair_problems(&pair)?.is_empty()
+            && let Some(judgeable) = kept.get_mut(&first)
+        {
+            *judgeable = judgeable.saturating_add(1);
+        }
+        pairs.push(pair);
     }
     let describe = |server: &Server, side: &Side| TargetInfo {
         process: server.target.describe(),
@@ -436,6 +465,7 @@ async fn carry_out(
         head: describe(&options.head, &arms.head),
         idle,
         pairs,
+        wanted,
         verdict: None,
     };
     let verdict = judge(&report)?;
@@ -487,10 +517,10 @@ type Measured = (
     Vec<Option<BTreeMap<Metric, f64>>>,
 );
 
-fn measured(report: &AbReport, arm: Arm) -> Result<Measured, ReportError> {
+fn measured(pairs: &[&Pair], arm: Arm) -> Result<Measured, ReportError> {
     let mut phases = Vec::new();
     let mut by_pair = Vec::new();
-    for pair in &report.pairs {
+    for pair in pairs {
         let phase = pair.of(arm);
         if phase.stalled() {
             by_pair.push(None);
@@ -516,9 +546,10 @@ pub fn judge(report: &AbReport) -> Result<Verdict, ReportError> {
         mut problems,
         mut warnings,
     } = Findings::idle(&report.idle);
-    phase_problems(report, &mut checks, &mut problems)?;
-    let (base_phases, base_pairs) = measured(report, Arm::Base)?;
-    let (head_phases, head_pairs) = measured(report, Arm::Head)?;
+    let judged = judged_pairs(report, &mut problems, &mut warnings)?;
+    saturation(report, &mut checks, &mut problems);
+    let (base_phases, base_pairs) = measured(&judged, Arm::Base)?;
+    let (head_phases, head_pairs) = measured(&judged, Arm::Head)?;
     let (base, base_noise) = across(&base_phases);
     let (head, head_noise) = across(&head_phases);
     for (metric, measured) in &head {
@@ -579,37 +610,97 @@ pub fn judge(report: &AbReport) -> Result<Verdict, ReportError> {
     .verdict(failures))
 }
 
-/// The problems of every phase, by arm and pair, and the head's saturation:
-/// a head that fell behind its schedule where the base kept it fails, and a
-/// base that fell behind cannot be compared with.
-fn phase_problems(
-    report: &AbReport,
-    checks: &mut Vec<Check>,
-    problems: &mut Vec<String>,
-) -> Result<(), ReportError> {
-    let mut saturated = BTreeMap::from([(Arm::Base, 0_u32), (Arm::Head, 0_u32)]);
-    for (index, pair) in report.pairs.iter().enumerate() {
-        for arm in [pair.first, pair.first.other()] {
-            let phase = pair.of(arm);
-            let mut found = Vec::new();
-            schedule_problems(phase, &mut found)?;
-            if phase.stalled() {
-                found.push(format!(
+/// Why `pair` cannot be judged, each problem with the arm whose phase it
+/// is, or none for the comparison of the two: a generator that fell behind,
+/// a runner that stalled, a comparison that moved within the window.
+///
+/// # Errors
+///
+/// [`ReportError::Histogram`] when a histogram of the pair does not decode.
+fn pair_problems(pair: &Pair) -> Result<Vec<(Option<Arm>, String)>, ReportError> {
+    let mut found = Vec::new();
+    for arm in [pair.first, pair.first.other()] {
+        let phase = pair.of(arm);
+        found.extend(lag_problem(phase).map(|problem| (Some(arm), problem)));
+        if phase.stalled() {
+            found.push((
+                Some(arm),
+                format!(
                     "the runner stalled: every route's p99 is over {} times its p50 at once, so \
                      the phase is not judged; re-run the job on a fresh runner",
                     phase.stall_ratio.unwrap_or(0.0)
-                ));
-            }
-            if phase.saturated
+                ),
+            ));
+        }
+    }
+    // NOTE: no specification governs this: our own design (#357); a drift of the host reaches both arms at once and cancels in the head over the base.
+    let steadiness = pair.head.steadiness()?.over(&pair.base.steadiness()?);
+    found.extend(
+        unsteady(
+            &steadiness,
+            "the comparison is not steady: the head's second half over its first, over the \
+             base's, on p50 and p95,",
+        )
+        .map(|problem| (None, problem)),
+    );
+    Ok(found)
+}
+
+/// The pairs the metrics are judged on. When the run holds the pairs it
+/// wanted that can be judged, half led by each arm, those are judged and
+/// each other pair is left out with a warning; otherwise every pair is
+/// judged and each problem makes the run one that cannot be judged.
+fn judged_pairs<'a>(
+    report: &'a AbReport,
+    problems: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<&'a Pair>, ReportError> {
+    let mut found = Vec::new();
+    let mut kept = BTreeMap::from([(Arm::Base, 0_u32), (Arm::Head, 0_u32)]);
+    for (index, pair) in report.pairs.iter().enumerate() {
+        let problems = pair_problems(pair)?;
+        if problems.is_empty()
+            && let Some(count) = kept.get_mut(&pair.first)
+        {
+            *count = count.saturating_add(1);
+        }
+        found.push((index, pair, problems));
+    }
+    let half = report.wanted.div_euclid(2);
+    let replaced = report.wanted > 0 && kept.values().all(|count| *count >= half);
+    let mut judged = Vec::new();
+    for (index, pair, found) in found {
+        let number = index.saturating_add(1);
+        let lines = found.into_iter().map(|(arm, problem)| match arm {
+            Some(arm) => format!("the {arm}'s phase of pair {number}: {problem}"),
+            None => format!("pair {number}: {problem}"),
+        });
+        if !replaced {
+            problems.extend(lines);
+            judged.push(pair);
+        } else if lines.len() == 0 {
+            judged.push(pair);
+        } else {
+            warnings.extend(lines.map(|line| {
+                format!("{line}; the pair is left out and a later pair led by the {} judged in its place", pair.first)
+            }));
+        }
+    }
+    Ok(judged)
+}
+
+/// The arms' saturation over every pair: a head that fell behind its
+/// schedule where the base kept it fails, and a base that fell behind
+/// cannot be compared with.
+fn saturation(report: &AbReport, checks: &mut Vec<Check>, problems: &mut Vec<String>) {
+    let mut saturated = BTreeMap::from([(Arm::Base, 0_u32), (Arm::Head, 0_u32)]);
+    for pair in &report.pairs {
+        for arm in [Arm::Base, Arm::Head] {
+            if pair.of(arm).saturated
                 && let Some(count) = saturated.get_mut(&arm)
             {
                 *count = count.saturating_add(1);
             }
-            problems.extend(
-                found
-                    .into_iter()
-                    .map(|problem| format!("the {arm}'s phase of pair {}: {problem}", index + 1)),
-            );
         }
     }
     let count = |arm| saturated.get(&arm).copied().unwrap_or(0);
@@ -636,7 +727,6 @@ fn phase_problems(
             floor: None,
         });
     }
-    Ok(())
 }
 
 /// The requests `arm` answered other than expected over all its phases, by

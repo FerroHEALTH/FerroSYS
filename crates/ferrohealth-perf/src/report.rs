@@ -191,6 +191,22 @@ impl Steadiness {
             .collect();
         !ratios.is_empty() && ratios.iter().all(|r| (STEADY.0..=STEADY.1).contains(r))
     }
+
+    /// The steadiness of one arm over another's measured at the same time:
+    /// each ratio of `self` over the same ratio of `other`. A drift of the
+    /// host reaches both arms and cancels; what is left is how far the
+    /// comparison of the two moved from the first half to the second.
+    #[must_use]
+    pub fn over(&self, other: &Self) -> Self {
+        let over = |a: Option<f64>, b: Option<f64>| {
+            let (a, b) = (a?, b?);
+            (b > 0.0).then_some(a / b)
+        };
+        Self {
+            p50_ratio: over(self.p50_ratio, other.p50_ratio),
+            p95_ratio: over(self.p95_ratio, other.p95_ratio),
+        }
+    }
 }
 
 /// A report that cannot be read, derived from or written.
