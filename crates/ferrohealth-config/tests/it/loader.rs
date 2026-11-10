@@ -6,6 +6,7 @@
 mod arrays;
 mod defaults;
 mod refusals;
+mod scoped;
 mod sources;
 
 use std::collections::BTreeMap;

@@ -48,6 +48,7 @@ pub struct Provenance {
     file_keys: BTreeSet<String>,
     environment: BTreeMap<String, String>,
     sets: BTreeSet<String>,
+    written: Option<BTreeSet<String>>,
 }
 
 impl Provenance {
@@ -69,7 +70,33 @@ impl Provenance {
             file_keys,
             environment,
             sets,
+            written: None,
         }
+    }
+
+    /// Returns this provenance with `sources`, the table the sources wrote
+    /// once merged, as the keys any source wrote: a key outside it is
+    /// [`Source::Default`], such as a key a product default filled into an
+    /// element of an array of tables the file wrote.
+    pub(crate) fn written_by(mut self, sources: &toml::Table) -> Self {
+        let mut written = BTreeSet::new();
+        written_leaves("", sources, &mut written);
+        self.written = Some(written);
+        self
+    }
+
+    /// Whether a source wrote the dotted key `key`, a key above it, or an
+    /// element of it when it names an array of tables or one element.
+    fn writes(&self, key: &str) -> bool {
+        let Some(written) = &self.written else {
+            return true;
+        };
+        covers(written, key)
+            || written.iter().any(|set| {
+                set.strip_prefix(key).is_some_and(|rest| {
+                    rest.starts_with('[') || (key.ends_with(']') && rest.starts_with('.'))
+                })
+            })
     }
 
     /// Returns the file the load read, when it read one from a path.
@@ -86,6 +113,9 @@ impl Provenance {
     /// strongest layer that set it or one of its elements.
     #[must_use]
     pub fn source(&self, key: &str) -> Source {
+        if !self.writes(key) {
+            return Source::Default;
+        }
         let elements = format!("{key}[");
         let an_element = |set: &String| set.starts_with(&elements);
         if covers(&self.sets, key) || self.sets.iter().any(an_element) {
@@ -210,15 +240,51 @@ fn covers(keys: &BTreeSet<String>, key: &str) -> bool {
     above(key).iter().any(|candidate| keys.contains(*candidate))
 }
 
+/// Adds to `out` the dotted key of every value under `table` as
+/// [`leaves`] does, with an array of tables read element by element, as
+/// `pixm.manager[0].url`; an empty element or an empty array is a key of its
+/// own.
+fn written_leaves(prefix: &str, table: &toml::Table, out: &mut BTreeSet<String>) {
+    for (name, value) in table {
+        let key = joined(prefix, name);
+        match value {
+            toml::Value::Table(inner) => written_leaves(&key, inner, out),
+            toml::Value::Array(elements)
+                if !elements.is_empty() && elements.iter().all(toml::Value::is_table) =>
+            {
+                for (index, element) in elements.iter().enumerate() {
+                    let element_key = format!("{key}[{index}]");
+                    match element {
+                        toml::Value::Table(inner) if !inner.is_empty() => {
+                            written_leaves(&element_key, inner, out);
+                        }
+                        _ => {
+                            out.insert(element_key);
+                        }
+                    }
+                }
+            }
+            _ => {
+                out.insert(key);
+            }
+        }
+    }
+}
+
+/// The dotted key of `name` below `prefix`, `name` alone at the top.
+fn joined(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
 /// Adds to `out` the dotted key of every value under `table` that is not a
 /// table, below `prefix`.
 pub(crate) fn leaves(prefix: &str, table: &toml::Table, out: &mut BTreeSet<String>) {
     for (name, value) in table {
-        let key = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}.{name}")
-        };
+        let key = joined(prefix, name);
         match value {
             toml::Value::Table(inner) => leaves(&key, inner, out),
             _ => {
