@@ -1,0 +1,73 @@
+# Throwaway reproduction for #357; this branch is never merged. FerroFED's
+# gate over its main commit d20274b1 (run 42786956492), with the arms that
+# run built, judged by ferrohealth-perf 0.8.0 and by the fix branch.
+name: FerroFED gate reproduction
+on:
+  push:
+    branches: [test/perf-lag-probe]
+permissions: {}
+jobs:
+  gate:
+    name: gate (${{ matrix.tool }} ${{ matrix.n }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        tool: [new]
+        n: [1, 2, 3, 4]
+        include:
+          - tool: old
+            n: 1
+          - tool: old
+            n: 2
+    env:
+      FERROFED__USAGE_REPORT__ENABLED: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FerroHEALTH/FerroFED
+          ref: d20274b1f4047ca0aed2a12587222124aa9a44b2
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.tool == 'new'
+        with:
+          ref: fix/perf-lag-bound
+          path: ferrosys
+          persist-credentials: false
+      - name: Fetch the arms
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          gh api repos/FerroHEALTH/FerroFED/actions/artifacts/13751811526/zip > arms.zip
+          unzip -q arms.zip -d target
+          rm arms.zip
+          bash scripts/perf/gate.sh unpack target/perf-arms.tar
+          target/perf-tools/ferrohealth-perf --version || true
+      - name: Build the fix branch's tool
+        if: matrix.tool == 'new'
+        run: |
+          set -euo pipefail
+          cd ferrosys
+          cargo build --release --locked -p ferrohealth-perf
+          cp target/release/ferrohealth-perf ../target/perf-tools/ferrohealth-perf
+          ../target/perf-tools/ferrohealth-perf --version || true
+      - name: Gate
+        run: |
+          set -uo pipefail
+          start=$(date +%s)
+          code=0
+          PATH="$PWD/target/perf-tools:$PATH" bash scripts/perf/gate.sh run || code=$?
+          echo "gate exit $code after $(( $(date +%s) - start )) s"
+          latest="$(find target/perf -name latest.json -not -path '*busy-loop*' -print -quit)"
+          jq -c '{tool, wanted, pairs: [.pairs[] | {first, base: .base.lag_p99_ms, head: .head.lag_p99_ms, bound: .head.max_lag_ms}], outcome: .verdict.outcome, problems: .verdict.problems, warnings: .verdict.warnings}' "$latest" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: report-${{ matrix.tool }}-${{ matrix.n }}
+          path: target/perf
+          retention-days: 7
