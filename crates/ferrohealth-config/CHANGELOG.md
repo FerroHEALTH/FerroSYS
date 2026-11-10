@@ -10,6 +10,28 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `Loader::defaults_if_written(table, key, value)`: a product's defaults
+  for `key` inside the table at `table`, applied only when a source writes
+  that table, so an optional table such as FerroFED's `[pdqm]`, `[pmir]`,
+  `[registry.mcsd]`, `[nl_gf.mitz]` and `[nl_gf.nvi]` stays absent until
+  the operator writes it, and takes the product's endpoint defaults when
+  they do (#353).
+- `Loader::defaults_each(array, key, value)`: the same defaults inside every
+  element of an array of tables a source writes, such as FerroFED's
+  `[[pixm.manager]]` and `[[xcpd.gateway]]` (#353). Both keep the source
+  precedence, `deny_unknown_fields`, the secret pairs and the redaction
+  marker handling of `Loader::defaults`, and a scoped default wins over a
+  `Loader::defaults` default of the same key.
+
+### Fixed
+
+- `Provenance::source` reports `Default` for a key no source wrote inside
+  an element of an array of tables, or inside a table an environment
+  variable or a `--set` pair wrote whole. It used to report the layer that
+  wrote the array or the table (#353).
+
 ## [0.4.2] - 2026-11-10
 
 ### Fixed

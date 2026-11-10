@@ -17,9 +17,11 @@ use crate::provenance::Provenance;
 
 mod environment;
 mod refusal;
+mod scoped;
 mod table;
 
 use refusal::{collected, follows_a_drop, invalid};
+use scoped::{Reach, Scoped, serialized};
 use table::{dropped_path, fill, overlay, remove};
 
 /// The loader of one product's configuration.
@@ -78,6 +80,7 @@ pub struct Loader {
     aliases: Vec<Alias>,
     reserved: Vec<String>,
     defaults: toml::Table,
+    scoped: Vec<Scoped>,
 }
 
 /// A transform of an alias's value, such as a port into a listen address.
@@ -253,6 +256,7 @@ impl Loader {
             aliases: Vec::new(),
             reserved: Vec::new(),
             defaults: toml::Table::new(),
+            scoped: Vec::new(),
         })
     }
 
@@ -324,35 +328,99 @@ impl Loader {
         key: &str,
         value: &D,
     ) -> Result<Self, ConfigError> {
-        let mut table = match toml::Value::try_from(value) {
-            Ok(toml::Value::Table(table)) => table,
-            Ok(_) => {
-                return Err(ConfigError::Assemble {
-                    source: <toml::ser::Error as serde::ser::Error>::custom(
-                        "the defaults of a key are a table",
-                    ),
-                });
-            }
-            Err(source) => return Err(ConfigError::Assemble { source }),
-        };
-        if let Some(masked) = table::strip_redacted(&mut table) {
-            let masked = if key.is_empty() {
-                masked
-            } else {
-                format!("{key}.{masked}")
-            };
-            return Err(ConfigError::Assemble {
-                source: <toml::ser::Error as serde::ser::Error>::custom(format!(
-                    "the product default of `{masked}` holds a masked secret"
-                )),
-            });
-        }
-        if !key.is_empty() {
-            for segment in key.rsplit('.') {
-                table = toml::Table::from_iter([(segment.to_owned(), toml::Value::Table(table))]);
-            }
-        }
+        let table = serialized(key, key, value)?;
         overlay(&mut self.defaults, table);
+        Ok(self)
+    }
+
+    /// Layers `value` as the product's defaults for the dotted key `key`
+    /// inside the table at the dotted key `table`, the table itself when
+    /// `key` is empty, only when a source writes that table.
+    ///
+    /// It is [`Loader::defaults`] for an optional table, such as an
+    /// `Option` of a section that turns a service on: a table no source
+    /// writes stays absent, and a table a source writes, in part or in
+    /// full, takes the product's value for every key no source sets, with
+    /// the provenance [`Source::Default`](crate::provenance::Source::Default).
+    /// A key this call and [`Loader::defaults`] both set takes this call's
+    /// value, and a key two such calls set takes the later one's. Secrets
+    /// are handled as [`Loader::defaults`] handles them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    ///
+    /// use ferrohealth_config::loader::Loader;
+    /// use ferrohealth_config::provenance::Source;
+    ///
+    /// #[derive(Debug, Default, serde::Deserialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Config {
+    ///     pdqm: Option<Service>,
+    /// }
+    ///
+    /// #[derive(Debug, serde::Deserialize)]
+    /// #[serde(deny_unknown_fields)]
+    /// struct Service {
+    ///     url: String,
+    ///     #[serde(default)]
+    ///     endpoint: Endpoint,
+    /// }
+    ///
+    /// // The section of a shared crate, with the shared crate's defaults.
+    /// #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+    /// #[serde(default, deny_unknown_fields)]
+    /// struct Endpoint {
+    ///     timeout_ms: u64,
+    ///     max_attempts: u32,
+    /// }
+    ///
+    /// let product = Endpoint { timeout_ms: 1_000, max_attempts: 1 };
+    /// let loader = Loader::new("FERROSYS")?.defaults_if_written("pdqm", "endpoint", &product)?;
+    /// let none = loader.load_sources::<Config>(None, None, &BTreeMap::new())?;
+    /// assert!(none.settings().pdqm.is_none(), "an unwritten table stays absent");
+    /// let text = "[pdqm]\nurl = \"https://pdqm.example\"\n";
+    /// let some = loader.load_sources::<Config>(Some(text), None, &BTreeMap::new())?;
+    /// assert_eq!(Some(1_000), some.settings().pdqm.as_ref().map(|s| s.endpoint.timeout_ms));
+    /// assert_eq!(Source::Default, some.provenance().source("pdqm.endpoint.timeout_ms"));
+    /// # Ok::<(), ferrohealth_config::error::ConfigError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`Loader::defaults`].
+    pub fn defaults_if_written<D: Serialize + ?Sized>(
+        mut self,
+        table: &str,
+        key: &str,
+        value: &D,
+    ) -> Result<Self, ConfigError> {
+        let defaults = serialized(&scoped_name(table, key), key, value)?;
+        self.scoped.push(Scoped::new(table, Reach::Table, defaults));
+        Ok(self)
+    }
+
+    /// Layers `value` as the product's defaults for the dotted key `key`
+    /// inside every element of the array of tables at the dotted key
+    /// `array`, the element itself when `key` is empty, such as each
+    /// `[[pixm.manager]]` with its `endpoint`.
+    ///
+    /// Each element a source writes takes the product's value for every key
+    /// no source sets in it, as [`Loader::defaults_if_written`] does for a
+    /// table, and an array no source writes stays absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`Loader::defaults`].
+    pub fn defaults_each<D: Serialize + ?Sized>(
+        mut self,
+        array: &str,
+        key: &str,
+        value: &D,
+    ) -> Result<Self, ConfigError> {
+        let defaults = serialized(&scoped_name(&format!("{array}[]"), key), key, value)?;
+        self.scoped.push(Scoped::new(array, Reach::Each, defaults));
         Ok(self)
     }
 
@@ -575,6 +643,9 @@ impl Loader {
                 remove(&mut table, path);
             }
             let mut filled = table.clone();
+            for scoped in self.scoped.iter().rev() {
+                scoped.fill(&table, &mut filled);
+            }
             fill(&mut filled, &self.defaults);
             // The merged tree is written and read again so every refusal
             // carries the position of its key, which a `Table` cannot report.
@@ -584,7 +655,7 @@ impl Loader {
                 Ok(settings) if errors.is_empty() => {
                     return Ok(Loaded {
                         settings,
-                        provenance,
+                        provenance: provenance.written_by(&table),
                         table,
                     });
                 }
@@ -652,5 +723,14 @@ impl Loader {
             overrides.push(Override::new(&format!("--set {key}"), key, raw)?);
         }
         Ok(overrides)
+    }
+}
+
+/// The dotted key a refusal of scoped defaults names: `key` inside `at`.
+fn scoped_name(at: &str, key: &str) -> String {
+    if key.is_empty() {
+        at.to_owned()
+    } else {
+        format!("{at}.{key}")
     }
 }
