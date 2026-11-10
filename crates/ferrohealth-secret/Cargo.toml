@@ -4,7 +4,7 @@
 name = "ferrohealth-secret"
 description = "The secret and redaction types of the FerroHEALTH products: secrets that never render, URLs with their credentials masked, and the key-or-file rule"
 # Its own version line, released by the tag ferrohealth-secret-v<version>.
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -20,9 +20,16 @@ include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 # The third-party crates whose items the public API names, kept true by
 # scripts/checks/public-surface.sh: a line move of one takes the next minor.
 [package.metadata.ferrohealth]
-public-dependencies = ["secrecy", "serde"]
+public-dependencies = ["schemars", "secrecy", "serde"]
+
+[features]
+default = []
+# `schemars::JsonSchema` on `secret::Secret` and `secret_url::SecretUrl`, for
+# a product that generates its configuration reference from its types.
+schema = ["dep:schemars"]
 
 [dependencies]
+schemars = { workspace = true, optional = true }
 secrecy.workspace = true
 serde.workspace = true
 thiserror.workspace = true

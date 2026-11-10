@@ -10,6 +10,16 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-10
+
+### Added
+
+- Feature `schema`: `schemars::JsonSchema` on `section::UsageReportSection`
+  and every type it holds, each key's doc comment its `description` and the
+  section's defaults its `default`, for a product that generates its
+  configuration reference from its types. `section::Endpoint` is a `uri`
+  string whose description states the admission rule (#361).
+
 ## [0.4.0] - 2026-11-09
 
 ### Changed
@@ -117,7 +127,8 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
   reports, a refusal logged with the collector's status, and a daily report
   that does not arrive keeping its counts for the next try (#18).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.4.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.4.1...HEAD
+[0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.4.0...ferrohealth-usage-report-v0.4.1
 [0.4.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.3.0...ferrohealth-usage-report-v0.4.0
 [0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.2.1...ferrohealth-usage-report-v0.3.0
 [0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.2.0...ferrohealth-usage-report-v0.2.1

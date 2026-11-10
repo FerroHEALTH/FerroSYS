@@ -111,6 +111,24 @@ impl Serialize for SecretUrl {
     }
 }
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for SecretUrl {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("SecretUrl")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ferrohealth_secret::secret_url::SecretUrl")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "A URL or connection string, as a plain string under its key or read from the file its `<key>_file` sibling names, exactly one of the two. Its userinfo and its query are secret: every rendering shows them as `***`, and a connection string with no `://` as `***` whole."
+        })
+    }
+}
+
 /// A view of URL text that renders with its userinfo and its query
 /// redacted, for a URL the product shows but does not hold as a
 /// [`SecretUrl`].

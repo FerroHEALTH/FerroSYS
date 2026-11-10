@@ -890,8 +890,9 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-secret"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
+ "schemars",
  "secrecy",
  "serde",
  "serde_json",
@@ -978,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-usage-report"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "axum",
  "ferrohealth-config",
@@ -987,6 +988,7 @@ dependencies = [
  "jiff",
  "jsonschema",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

@@ -109,6 +109,27 @@ impl Serialize for Secret {
     }
 }
 
+// NOTE: JSON Schema 2020-12 Validation §9.4; `writeOnly` says the value never
+// comes back from the owner, as `Serialize` writes `***` in its place.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Secret {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Secret")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ferrohealth_secret::secret::Secret")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "writeOnly": true,
+            "description": "A secret, as a plain string under its key or read from the file its `<key>_file` sibling names, exactly one of the two. Every rendering shows `***`."
+        })
+    }
+}
+
 /// A secret on its one trip to the server that stores it.
 ///
 /// A console sends a secret an operator typed to its server in the body of

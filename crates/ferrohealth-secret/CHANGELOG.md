@@ -10,6 +10,16 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-10
+
+### Added
+
+- Feature `schema`: `schemars::JsonSchema` for `secret::Secret` (a
+  `writeOnly` string) and `secret_url::SecretUrl` (a string whose userinfo
+  and query render masked), each describing the inline form and the
+  `<key>_file` sibling and carrying no value, for a product that generates
+  its configuration reference from its types (#360).
+
 ## [0.2.0] - 2026-10-26
 
 ### Added
@@ -36,6 +46,7 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
   ending removed, an empty file refused, and every error naming the key and
   never the secret (#13).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.1...HEAD
+[0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.0...ferrohealth-secret-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.1.0...ferrohealth-secret-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-secret-v0.1.0
