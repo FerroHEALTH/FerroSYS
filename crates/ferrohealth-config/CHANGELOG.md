@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-10
+
 ### Added
 
 - `Loader::defaults_if_written(table, key, value)`: a product's defaults
@@ -293,7 +295,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.2...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.3...HEAD
+[0.4.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.2...ferrohealth-config-v0.4.3
 [0.4.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.1...ferrohealth-config-v0.4.2
 [0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.0...ferrohealth-config-v0.4.1
 [0.4.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.3.0...ferrohealth-config-v0.4.0
