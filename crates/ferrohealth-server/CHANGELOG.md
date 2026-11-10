@@ -10,6 +10,14 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- `tls_client::TlsClient::platform_config` builds the platform's verifier
+  once per process for each set of extra roots and shares it after. On
+  Linux each build read and parsed the whole system root store, about 25 ms
+  on a CI runner, so a product that resolves its configuration repeatedly
+  paid it on every resolve (#372).
+
 ## [0.8.3] - 2026-11-10
 
 ### Changed
