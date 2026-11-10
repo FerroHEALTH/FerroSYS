@@ -17,6 +17,7 @@ pub const CI_VARIABLES: [&str; 2] = ["GITHUB_ACTIONS", "CI"];
 
 /// The `[usage_report]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct UsageReportSection {
     /// The off switch: `false` sends nothing.
@@ -43,6 +44,7 @@ impl Default for UsageReportSection {
 
 /// How the product is deployed, as the envelope names it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Deployment {
     /// The Helm chart.
@@ -138,6 +140,25 @@ impl Serialize for Endpoint {
         S: Serializer,
     {
         serializer.serialize_str(self.0.as_str())
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Endpoint {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Endpoint")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ferrohealth_usage_report::section::Endpoint")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "uri",
+            "description": "The collector's URL: https, or http to a loopback host, and never with userinfo."
+        })
     }
 }
 
