@@ -14,10 +14,11 @@
 //! decides. A revoked certificate fails the check. So does a certificate
 //! that no source answers for: a source that cannot be reached, a CRL that
 //! is stale or carries a critical extension the check does not process, or
-//! an OCSP status of `unknown`. The client [`RevocationCheck::http_client`]
-//! builds admits only a chain a check cleared in the last five minutes, so
-//! a request sent after a failed check, or with no check at all, ends at
-//! the handshake and sends nothing.
+//! an OCSP status of `unknown`. The configuration [`RevocationCheck::config`]
+//! returns, and the client [`RevocationCheck::http_client`] builds on it,
+//! admit only a chain a check cleared in the last five minutes, so a
+//! request sent after a failed check, or with no check at all, ends at the
+//! handshake and sends nothing.
 //!
 //! No specification governs the order of the sources, the five-minute
 //! window, the hour a good status is kept, or failing closed when no source
@@ -72,7 +73,8 @@ pub struct RevocationCheck {
 struct Inner {
     anchors: Vec<Certificate>,
     probe: Arc<ClientConfig>,
-    gated: ClientConfig,
+    gated: Arc<ClientConfig>,
+    certificate: Option<CertificateDer<'static>>,
     fetch: reqwest::Client,
     cleared: Arc<Cleared>,
     kept: Mutex<BTreeMap<[u8; 32], u64>>,
@@ -343,6 +345,9 @@ impl RevocationCheck {
                 .map_err(RevocationSetupError::Root)?;
         }
         let identity = identity.map(|(chain, key)| (chain.to_vec(), key.clone_key()));
+        let certificate = identity
+            .as_ref()
+            .and_then(|(chain, _key)| chain.first().cloned());
         let provider = crate::tls::provider();
         let webpki = WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider.clone())
             .build()
@@ -380,7 +385,8 @@ impl RevocationCheck {
             inner: Arc::new(Inner {
                 anchors,
                 probe: Arc::new(probe),
-                gated,
+                gated: Arc::new(gated),
+                certificate,
                 fetch,
                 cleared,
                 kept: Mutex::new(BTreeMap::new()),
@@ -388,9 +394,32 @@ impl RevocationCheck {
         })
     }
 
-    /// The HTTP client of the link: it presents the client identity, trusts
-    /// the roots alone, follows no redirect, and completes a handshake only
-    /// over a chain [`RevocationCheck::clear`] cleared.
+    /// The rustls configuration of the link: it presents the client
+    /// identity, trusts the roots alone, and completes a handshake only over
+    /// a chain [`RevocationCheck::clear`] cleared.
+    ///
+    /// A product hands it, with [`RevocationCheck::certificate`], to an
+    /// outbound client that builds its own HTTP engine, so that client's
+    /// connections pass the same gate as [`RevocationCheck::http_client`]'s.
+    /// Every clone of the check shares one gate, so a check that clears a
+    /// chain admits it to every connection over this configuration.
+    #[must_use]
+    pub fn config(&self) -> &Arc<ClientConfig> {
+        &self.inner.gated
+    }
+
+    /// The end-entity certificate the link presents in the handshake, the
+    /// first certificate of its client identity (RFC 8446 §4.4.2), or `None`
+    /// when it presents no identity.
+    #[must_use]
+    pub fn certificate(&self) -> Option<&CertificateDer<'static>> {
+        self.inner.certificate.as_ref()
+    }
+
+    /// The HTTP client of the link over [`RevocationCheck::config`]: it
+    /// presents the client identity, trusts the roots alone, follows no
+    /// redirect, and completes a handshake only over a chain
+    /// [`RevocationCheck::clear`] cleared.
     ///
     /// # Errors
     ///
@@ -398,14 +427,14 @@ impl RevocationCheck {
     pub fn http_client(&self) -> Result<reqwest::Client, RevocationSetupError> {
         reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .tls_backend_preconfigured(self.inner.gated.clone())
+            .tls_backend_preconfigured(ClientConfig::clone(self.config()))
             .build()
             .map_err(RevocationSetupError::Client)
     }
 
     /// Checks the chain `endpoint` presents within `within`, and on success
-    /// admits it to the [`RevocationCheck::http_client`] connections for
-    /// the next five minutes at most.
+    /// admits it to the connections over [`RevocationCheck::config`] and
+    /// [`RevocationCheck::http_client`] for the next five minutes at most.
     ///
     /// # Errors
     ///
