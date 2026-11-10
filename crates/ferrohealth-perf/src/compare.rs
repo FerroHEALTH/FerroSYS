@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::baseline::{Baseline, Baselines, Shape};
 use crate::metric::{Kind, Metric};
-use crate::report::{IdleReport, LoadReport, Report, ReportError, STEADY};
+use crate::report::{IdleReport, LoadReport, Report, ReportError, STEADY, Steadiness};
 
 /// The problem of a run judged with no baseline.
 const NO_BASELINE: &str = "there is no baseline; write one with --update";
@@ -380,26 +380,37 @@ pub(crate) fn schedule_problems(
     phase: &LoadReport,
     problems: &mut Vec<String>,
 ) -> Result<(), ReportError> {
-    if let Some(lag) = phase.lag_p99_ms
-        && lag > crate::quantile::exact_f64(phase.max_lag_ms)
-    {
-        problems.push(format!(
+    problems.extend(lag_problem(phase));
+    problems.extend(unsteady(
+        &phase.steadiness()?,
+        "the window is not steady: the second half's p50 and p95 over the first's",
+    ));
+    Ok(())
+}
+
+/// The problem of a phase whose generator's lag p99 is over its bound.
+pub(crate) fn lag_problem(phase: &LoadReport) -> Option<String> {
+    let lag = phase.lag_p99_ms?;
+    (lag > crate::quantile::exact_f64(phase.max_lag_ms)).then(|| {
+        format!(
             "the generator's lag p99 is {lag:.2} ms, over {} ms: it could not keep the schedule",
             phase.max_lag_ms
-        ));
-    }
-    let steadiness = phase.steadiness()?;
-    if !steadiness.steady() {
-        problems.push(format!(
-            "the window is not steady: the second half's p50 and p95 over the first's are \
-             {} and {}, outside {} to {}",
+        )
+    })
+}
+
+/// The problem of `steadiness` outside [`STEADY`], its ratios named by
+/// `what`.
+pub(crate) fn unsteady(steadiness: &Steadiness, what: &str) -> Option<String> {
+    (!steadiness.steady()).then(|| {
+        format!(
+            "{what} are {} and {}, outside {} to {}",
             ratio(steadiness.p50_ratio),
             ratio(steadiness.p95_ratio),
             STEADY.0,
             STEADY.1
-        ));
-    }
-    Ok(())
+        )
+    })
 }
 
 /// The failed requests of the first load phase and its confirmations.
