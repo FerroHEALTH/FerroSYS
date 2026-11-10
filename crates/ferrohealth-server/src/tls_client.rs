@@ -19,6 +19,9 @@
 
 use std::path::PathBuf;
 
+#[cfg(feature = "platform-verifier")]
+mod platform;
+
 use ferrohealth_config::tls::TlsClientSection;
 use ferrohealth_secret::secret::Secret;
 use rustls::pki_types::pem::PemObject as _;
@@ -247,7 +250,10 @@ impl TlsClient {
     /// `rustls` feature verifies through the same platform verifier, so a
     /// product that speaks TLS outside HTTP, such as MLLP, reaches the
     /// servers its HTTP client reaches. The protocol versions and cipher
-    /// suites are those of [`TlsClient::client_config`].
+    /// suites are those of [`TlsClient::client_config`]. The platform's
+    /// verifier is built once per process for each set of extra roots and
+    /// shared after, since on Linux each build reads the whole system root
+    /// store (#372).
     ///
     /// # Errors
     ///
@@ -256,15 +262,12 @@ impl TlsClient {
     #[cfg(feature = "platform-verifier")]
     pub fn platform_config(&self) -> Result<ClientConfig, TlsClientError> {
         let provider = crate::tls::provider();
-        let verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(
-            self.roots.iter().cloned(),
-            std::sync::Arc::clone(&provider),
-        )
-        .map_err(|source| self.refused("trust_roots_file", source))?;
+        let verifier = platform::verifier(&self.roots, std::sync::Arc::clone(&provider))
+            .map_err(|source| self.refused("trust_roots_file", source))?;
         let builder = self
             .versions(provider)?
             .dangerous()
-            .with_custom_certificate_verifier(std::sync::Arc::new(verifier));
+            .with_custom_certificate_verifier(verifier);
         self.authenticate(builder)
     }
 
