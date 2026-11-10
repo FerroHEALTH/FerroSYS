@@ -10,6 +10,17 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-10
+
+### Changed
+
+- The manifest declares the third-party crates whose items the public API
+  names (axum, clap, der, http, hyper, reqwest, rustls, schemars, serde,
+  serde_json, tokio and url) under `[package.metadata.ferrohealth]`. A later
+  release that moves one of them to another compatibility line takes the
+  next minor version, since code that names those types stops building.
+  The API itself is unchanged (#356).
+
 ## [0.8.2] - 2026-11-10
 
 ### Added
@@ -661,7 +672,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.2...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.3...HEAD
+[0.8.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.2...ferrohealth-server-v0.8.3
 [0.8.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.1...ferrohealth-server-v0.8.2
 [0.8.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.0...ferrohealth-server-v0.8.1
 [0.8.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.7.1...ferrohealth-server-v0.8.0
