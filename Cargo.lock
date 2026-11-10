@@ -987,6 +987,7 @@ dependencies = [
  "jiff",
  "jsonschema",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

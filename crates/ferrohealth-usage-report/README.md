@@ -13,6 +13,8 @@ own `status`.
 - `section::UsageReportSection` is the `[usage_report]` section: the off
   switch, the collector (`https`, or `http` to loopback, with no userinfo),
   the state directory and the deployment kind. A CI run sends nothing.
+  Feature `schema` derives `schemars::JsonSchema` on it and every type it
+  holds, for a product that generates its configuration reference.
 - `state::StateDir` creates the instance id once under `state_dir` and reads
   it back on every start; a damaged id is refused rather than replaced.
 - `state::Store` is where the report keeps that state. `StateDir` is the

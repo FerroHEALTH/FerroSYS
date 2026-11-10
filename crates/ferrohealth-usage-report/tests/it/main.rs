@@ -9,3 +9,5 @@
 
 #[cfg(feature = "receive")]
 mod received;
+#[cfg(feature = "schema")]
+mod schema;

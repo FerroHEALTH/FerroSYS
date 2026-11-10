@@ -10,6 +10,14 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- Feature `schema`: `schemars::JsonSchema` on `section::UsageReportSection`
+  and every type it holds, each key's doc comment its `description` and the
+  section's defaults its `default`, for a product that generates its
+  configuration reference from its types. `section::Endpoint` is a `uri`
+  string whose description states the admission rule (#361).
+
 ## [0.4.0] - 2026-11-09
 
 ### Changed

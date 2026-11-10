@@ -25,12 +25,17 @@ telemetry = ["dep:ferrohealth-telemetry"]
 # `received`: a report read back under every rule of envelope v2, for the
 # collector that receives it.
 receive = []
+# `schemars::JsonSchema` on the `[usage_report]` section and every type it
+# holds, for a product that generates its configuration reference from its
+# types.
+schema = ["dep:schemars"]
 
 [dependencies]
 ferrohealth-telemetry = { workspace = true, features = ["axum"], optional = true }
 http.workspace = true
 jiff.workspace = true
 reqwest.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
