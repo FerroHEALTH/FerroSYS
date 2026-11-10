@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-server"
-version = "0.8.3"
+version = "0.8.4"
 dependencies = [
  "aws-lc-rs",
  "axum",
