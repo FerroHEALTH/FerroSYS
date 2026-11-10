@@ -31,7 +31,7 @@ checksum in its manifest; the check refuses any other installed version.
 
 | Tool | Pin | Check |
 |---|---|---|
-| cargo-semver-checks | `0.51.0` | `scripts/checks/semver.sh` (CI on every pull request, `scripts/release/plan.sh` at every release) |
+| cargo-semver-checks | `0.51.0` | `scripts/checks/semver.sh` (CI on every pull request and in the merge queue, `scripts/release/plan.sh` at every release) |
 
 The clone detector of `scripts/checks/duplication.sh` also runs on a
 developer machine, so its pins live here and the guard reads them from this

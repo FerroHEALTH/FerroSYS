@@ -95,7 +95,9 @@ milestone set and its crates.io name reserved, which needs the owner.
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
   version rule, the advisory exceptions, and
-  `semver.sh`, cargo-semver-checks against crates.io), and the three ratchets
+  `semver.sh`, cargo-semver-checks against crates.io in two feature passes,
+  with `scripts/lib/public-deps.sh` counting a public dependency's line move
+  as a break), and the three ratchets
   of `.claude/rules/rust-style.md` that fail a rise and pass a fall:
   `duplication.sh`, jscpd at 50 tokens over 5 lines holding the duplicated
   lines to `duplication.count` with its baseline of block keys, and

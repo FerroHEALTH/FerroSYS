@@ -9,7 +9,7 @@
 #   2. `lint` runs rustfmt, clippy with and without every feature, the
 #      wasm32 documents, rustdoc and cargo-deny over one build cache.
 #   3. `nextest` runs the tests and the doctests.
-#   4. `cargo-semver-checks` runs on a pull request only.
+#   4. `cargo-semver-checks` runs on a pull request and in the merge queue.
 #
 # Every job starts at once and pays one runner queue wait: the hosted runner
 # pool is shared across the organisation, so each job pays the wait for a
@@ -140,6 +140,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bash scripts/checks/todo-issues.sh
+      - name: The crate version guard refuses what it claims to
+        if: ${{ !cancelled() }}
+        run: bash scripts/checks/crate-version-guard.sh --self-test
       - name: The version, the lock and the changelog agree
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         env:
@@ -262,19 +265,22 @@ jobs:
       - run: cargo nextest run --workspace --all-features --locked --no-tests=warn
       - run: cargo test --doc --workspace --all-features --locked
 
-  # Every crate's public API against its newest version on crates.io: a break
-  # the manifest version does not answer with a minor bump fails, so the caret
+  # Every crate's public API against its newest version on crates.io, on the
+  # default feature heuristic and with no default features: a break the
+  # manifest version does not answer with a minor bump fails, and so does a
+  # public dependency moved to another line without one, so the caret
   # requirements between the crates stay safe (scripts/checks/semver.sh).
   semver:
     name: cargo-semver-checks
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
-      # The pull request's merge commit and its first parent, the base, so
-      # the check judges only a change that reaches a crate.
+      # The pull request's merge commit, or the merge group's commit, and its
+      # first parent, the base, so the check judges only a change that
+      # reaches a crate.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
