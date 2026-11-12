@@ -10,6 +10,16 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-12
+
+### Changed
+
+- Breaking: `HistogramError::Base64` carries `histogram::NotBase64`, the
+  crate's own type, in place of `base64::DecodeError`. Its `Display` is the
+  decoder's account of the offending symbol or length, as before, and the
+  crate's API names no `base64` type, so a later move of that dependency's
+  line is no break. The crate takes base64 0.23.1 (#383).
+
 ## [0.9.0] - 2026-11-10
 
 ### Changed
@@ -311,6 +321,7 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   differs from the baseline's (#249).
 
 [Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.9.0...HEAD
+[0.10.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.9.0...ferrohealth-perf-v0.10.0
 [0.9.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.8.0...ferrohealth-perf-v0.9.0
 [0.8.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.7.0...ferrohealth-perf-v0.8.0
 [0.7.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.6.0...ferrohealth-perf-v0.7.0

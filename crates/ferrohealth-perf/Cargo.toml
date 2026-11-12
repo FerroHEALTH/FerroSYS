@@ -4,7 +4,7 @@
 name = "ferrohealth-perf"
 description = "The performance gate of the FerroHEALTH servers: idle CPU and transaction limits, open-loop load latency, memory and CPU per request, judged against the change's base on the same host or a committed baseline"
 # Its own version line, released by the tag ferrohealth-perf-v<version>.
-version = "0.9.0"
+version = "0.10.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,7 +21,6 @@ include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 # scripts/checks/public-surface.sh: a line move of one takes the next minor.
 [package.metadata.ferrohealth]
 public-dependencies = [
-  "base64",
   "hdrhistogram",
   "http",
   "reqwest",
