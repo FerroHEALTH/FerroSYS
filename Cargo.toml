@@ -103,7 +103,7 @@ x509-ocsp = { version = "0.3.0-rc.0", default-features = false }
 # PostgreSQL client that reads pg_stat_database. Verified against crates.io
 # on 2026-11-06.
 hdrhistogram = { version = "7.6.0", default-features = false, features = ["serialization"] }
-base64 = "0.22.1"
+base64 = "0.23.1"
 tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime"] }
 # ferrohealth-perf's MLLP client verifies a TLS listener against the
 # platform's roots beside the plan's, as reqwest does for its HTTP requests,
