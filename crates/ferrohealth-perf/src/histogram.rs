@@ -37,11 +37,20 @@ pub enum HistogramError {
     Encode(#[source] hdrhistogram::serialization::V2SerializeError),
     /// The text is not base64.
     #[error("the histogram encoding is not base64")]
-    Base64(#[source] base64::DecodeError),
+    Base64(#[source] NotBase64),
     /// The bytes are not a V2 serialization.
     #[error("the histogram encoding does not decode")]
     Decode(#[source] hdrhistogram::serialization::DeserializeError),
 }
+
+/// Why a histogram's text is not base64: the decoder's own account, which
+/// names the offending symbol or length.
+///
+/// The base64 decoder stays behind this type, so the crate's API names no
+/// type of it and a move of its line is not a break.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct NotBase64(base64::DecodeError);
 
 /// Builds an empty latency histogram over microseconds.
 ///
@@ -99,7 +108,9 @@ pub fn encode(histogram: &Histogram<u64>) -> Result<String, HistogramError> {
 /// [`HistogramError::Base64`] or [`HistogramError::Decode`] for text that is
 /// not one.
 pub fn decode(text: &str) -> Result<Histogram<u64>, HistogramError> {
-    let bytes = STANDARD.decode(text).map_err(HistogramError::Base64)?;
+    let bytes = STANDARD
+        .decode(text)
+        .map_err(|e| HistogramError::Base64(NotBase64(e)))?;
     Deserializer::new()
         .deserialize(&mut bytes.as_slice())
         .map_err(HistogramError::Decode)
@@ -122,6 +133,14 @@ mod tests {
             Err(HistogramError::Base64(_))
         ));
         assert!(matches!(decode("AAAA"), Err(HistogramError::Decode(_))));
+    }
+
+    #[test]
+    fn text_that_is_not_base64_carries_the_decoder_account_as_its_cause() {
+        let error = decode("not base64!").unwrap_err();
+        let cause = std::error::Error::source(&error).unwrap();
+        assert!(cause.downcast_ref::<NotBase64>().is_some());
+        assert!(cause.to_string().contains("Invalid symbol"));
     }
 
     #[test]
