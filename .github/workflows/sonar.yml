@@ -62,7 +62,7 @@ jobs:
           # llvm-tools-preview carries the profdata reader cargo-llvm-cov needs.
           components: llvm-tools-preview
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - name: Instrumented tests to lcov
@@ -78,6 +78,6 @@ jobs:
 
       # No sonar.projectVersion: each crate carries its own version, so the
       # new-code window is the project's own setting.
-      - uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+      - uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
