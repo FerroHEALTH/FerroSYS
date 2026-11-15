@@ -29,7 +29,6 @@ use tracing_subscriber::filter::{self, EnvFilter, FilterExt as _, LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{Layer, reload};
 
 use crate::console::{self, BoxedLayer};
@@ -146,12 +145,31 @@ pub enum InitError {
         #[source]
         source: reload::Error,
     },
-    /// A subscriber is already installed in this process.
+    /// A subscriber was already installed in this process, as `install`
+    /// reported before 0.4.3; it reports [`InitError::Subscriber`] now.
+    #[deprecated(
+        since = "0.4.3",
+        note = "Telemetry::install reports InitError::Subscriber or InitError::Logger"
+    )]
     #[error("a log subscriber is already installed")]
     AlreadyInstalled {
         /// What `tracing-subscriber` reported.
         #[source]
         source: tracing_subscriber::util::TryInitError,
+    },
+    /// A subscriber is already installed in this process.
+    #[error("a process subscriber is already installed")]
+    Subscriber {
+        /// What `tracing` reported.
+        #[source]
+        source: tracing::subscriber::SetGlobalDefaultError,
+    },
+    /// A `log` logger is already installed in this process.
+    #[error("a log logger is already installed")]
+    Logger {
+        /// What `log` reported.
+        #[source]
+        source: log::SetLoggerError,
     },
     /// `[telemetry.otlp]` is present and names no endpoint.
     #[error("telemetry.otlp.endpoint is not set, and its table is present")]
@@ -430,23 +448,22 @@ impl Telemetry {
         })
     }
 
-    /// Installs the process-wide subscriber on stdout and returns the handle
-    /// that replaces the console filter.
+    /// Installs the process-wide subscriber on stdout with the `log` bridge
+    /// ([`crate::log_bridge::install`]) and returns the handle that replaces
+    /// the console filter.
     ///
     /// # Errors
     ///
-    /// Returns [`InitError::Filter`] when the filter does not parse and
-    /// [`InitError::AlreadyInstalled`] when the process has a subscriber.
+    /// Returns [`InitError::Filter`] when the filter does not parse,
+    /// [`InitError::Subscriber`] when the process has a subscriber and
+    /// [`InitError::Logger`] when it has a `log` logger.
     pub fn install(
         &self,
         section: &TelemetrySection,
         console: &Console,
     ) -> Result<FilterHandle, InitError> {
         let Layers { layers, filter } = self.layers(section, console, io::stdout)?;
-        tracing_subscriber::registry()
-            .with(layers)
-            .try_init()
-            .map_err(|source| InitError::AlreadyInstalled { source })?;
+        crate::log_bridge::install(tracing_subscriber::registry().with(layers))?;
         Ok(filter)
     }
 

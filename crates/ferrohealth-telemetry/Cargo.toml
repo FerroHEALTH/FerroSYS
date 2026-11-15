@@ -4,7 +4,7 @@
 name = "ferrohealth-telemetry"
 description = "The telemetry of the FerroHEALTH products: the console, the request log that never carries a body, the panic hook, and one OpenTelemetry provider for traces and metrics"
 # Its own version line, released by the tag ferrohealth-telemetry-v<version>.
-version = "0.4.2"
+version = "0.4.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -23,6 +23,7 @@ include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
 public-dependencies = [
   "axum",
   "http",
+  "log",
   "opentelemetry",
   "opentelemetry-otlp",
   "opentelemetry_sdk",
@@ -65,7 +66,9 @@ opentelemetry_sdk.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+log.workspace = true
 tracing.workspace = true
+tracing-core.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 axum = { workspace = true, optional = true }

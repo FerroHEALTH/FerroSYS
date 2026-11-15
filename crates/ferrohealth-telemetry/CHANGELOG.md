@@ -10,6 +10,41 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-15
+
+### Added
+
+- `log_bridge::install` installs the process subscriber with the crate's own
+  bridge from the `log` crate, for a product that builds its subscriber from
+  `Telemetry::layers` and layers of its own. `InitError::Subscriber` and
+  `InitError::Logger` report a subscriber or a `log` logger the process
+  already has (#389).
+
+### Changed
+
+- `Telemetry::install` installs the `log` bridge beside the subscriber in
+  place of `tracing-subscriber`'s `try_init`, which installed `tracing-log`'s
+  `LogTracer` whenever a crate in the build enabled that feature (#389).
+
+### Deprecated
+
+- `InitError::AlreadyInstalled`: `Telemetry::install` no longer returns it;
+  it reports `InitError::Subscriber` or `InitError::Logger` (#389).
+
+### Fixed
+
+- A `log` check no longer drops the next event on its thread. Under a
+  console filter that lets a target through above its default level, such
+  as `info,ferrohealth_smart=debug`, a dependency's `log::log_enabled!` at
+  `debug` (sqlx asks it for every query) reached the per-layer console
+  filter through `LogTracer`, which answered false and left that decision on
+  the thread, so `tracing-subscriber` 0.3.23 dropped the next event of a
+  callsite whose interest it had cached (#388): in a running product, the
+  request line of every request that ran a query. The bridge answers
+  `log::Log::enabled` from the global maximum level and dispatches each
+  record as the event of a callsite registered for its target and level, so
+  every layer decides on it through callsite interest (#389).
+
 ## [0.4.2] - 2026-11-15
 
 ### Fixed

@@ -910,13 +910,14 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-telemetry"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "axum",
  "ferrohealth-config",
  "ferrohealth-secret",
  "http",
  "hyper-util",
+ "log",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-prometheus",
@@ -936,6 +937,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "tracing-core",
  "tracing-opentelemetry",
  "tracing-subscriber",
 ]
