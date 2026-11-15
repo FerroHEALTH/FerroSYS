@@ -10,6 +10,18 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-15
+
+### Fixed
+
+- The span export no longer loses request spans after a `tracing` or `log`
+  check that no event follows, such as a dependency's `log::log_enabled!`
+  through `LogTracer`. The export filter of `Telemetry::layers` cached its
+  answer per callsite, so the registry stopped asking it about the request
+  span and read a stale per-thread decision left by that check; in a
+  running product most request spans never reached the collector. The
+  filter now answers every span of an exported crate per call (#386).
+
 ## [0.4.1] - 2026-11-10
 
 ### Changed
@@ -215,7 +227,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.2...HEAD
+[0.4.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.1...ferrohealth-telemetry-v0.4.2
 [0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.0...ferrohealth-telemetry-v0.4.1
 [0.4.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.3.0...ferrohealth-telemetry-v0.4.0
 [0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.2.5...ferrohealth-telemetry-v0.3.0

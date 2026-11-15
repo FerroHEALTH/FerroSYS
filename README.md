@@ -80,7 +80,7 @@ lockfile alone decides the build:
 [dependencies]
 ferrohealth-secret = "=0.2.1"
 ferrohealth-config = "=0.4.4"
-ferrohealth-telemetry = { version = "=0.4.1", features = ["otlp", "prometheus", "axum"] }
+ferrohealth-telemetry = { version = "=0.4.2", features = ["otlp", "prometheus", "axum"] }
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
 ferrohealth-server = { version = "=0.8.4", features = ["otlp"] }
 ferrohealth-usage-report = { version = "=0.4.1", features = ["telemetry"] }

@@ -12,6 +12,7 @@ use axum::routing::get;
 use opentelemetry::trace::{SpanId, TraceId};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tower::ServiceExt as _;
+use tracing::instrument::WithSubscriber as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use super::{Capture, app, request};
@@ -160,4 +161,46 @@ fn an_unknown_method_is_other_everywhere_and_a_server_error_marks_the_span() {
         !format!("{spans:?}").contains("QZ7METHOD"),
         "no span carries the client's token"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_event_checked_and_never_written_takes_no_request_span_from_the_export() {
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let telemetry = Telemetry::with_tracers(Service::new("ferrosys", "0.0.0"), provider);
+    let section = TelemetrySection::default();
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::registry().with(
+            telemetry
+                .layers(&section, &Console::new(false, None), std::io::sink)
+                .expect("the layers build")
+                .layers,
+        ),
+    );
+    let requests = 64;
+    let mut served = Vec::new();
+    for _ in 0..requests {
+        // An INFO event the console writes and the export never does, checked
+        // the way `log::log_enabled!` checks it through `LogTracer`, with no
+        // event after the check, and then a request on the same worker thread.
+        served.push(tokio::spawn(
+            async {
+                assert!(tracing::enabled!(target: "sqlx::query", tracing::Level::INFO));
+                app(RequestLog::default())
+                    .oneshot(request())
+                    .await
+                    .expect("the request is served")
+                    .status()
+            }
+            .with_subscriber(dispatch.clone()),
+        ));
+    }
+    for status in served {
+        assert_eq!(http::StatusCode::OK, status.await.expect("the task ends"));
+    }
+    let spans = exporter.get_finished_spans().expect("the spans");
+    telemetry.shutdown().expect("the providers stop");
+    assert_eq!(requests, spans.len(), "every request span is exported");
 }

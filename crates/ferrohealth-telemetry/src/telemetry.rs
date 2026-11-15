@@ -23,8 +23,9 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::trace::{Sampler, SdkTracer, SdkTracerProvider};
+use tracing::subscriber::Interest;
 use tracing::{Metadata, Subscriber};
-use tracing_subscriber::filter::{EnvFilter, FilterExt as _, FilterFn, LevelFilter};
+use tracing_subscriber::filter::{self, EnvFilter, FilterExt as _, LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
@@ -403,12 +404,23 @@ impl Telemetry {
         ];
         if let Some(tracer) = self.tracer() {
             let service = self.service.clone();
+            let callsites = self.service.clone();
+            // NOTE: no specification governs this: our own design; an exported callsite
+            // is asked per call, so a check left without its event never skips a span (#386).
+            let exports = filter::dynamic_filter_fn(move |metadata, _| service.exports(metadata))
+                .with_callsite_filter(move |metadata| {
+                    if callsites.exports(metadata) {
+                        Interest::sometimes()
+                    } else {
+                        Interest::never()
+                    }
+                });
             layers.push(
                 tracing_opentelemetry::layer()
                     .with_tracer(tracer)
                     .with_threads(false)
                     .with_location(false)
-                    .with_filter(FilterFn::new(move |metadata| service.exports(metadata)))
+                    .with_filter(exports)
                     .boxed(),
             );
         }
