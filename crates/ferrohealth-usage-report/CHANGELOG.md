@@ -136,7 +136,8 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
   reports, a refusal logged with the collector's status, and a daily report
   that does not arrive keeping its counts for the next try (#18).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.4.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.5.0...HEAD
+[0.5.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.4.1...ferrohealth-usage-report-v0.5.0
 [0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.4.0...ferrohealth-usage-report-v0.4.1
 [0.4.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.3.0...ferrohealth-usage-report-v0.4.0
 [0.3.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-usage-report-v0.2.1...ferrohealth-usage-report-v0.3.0
