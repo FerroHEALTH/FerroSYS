@@ -10,6 +10,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-11-15
+
 ### Fixed
 
 - `provenance::Provenance::default()` equals the provenance of a load that
@@ -314,7 +316,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.4...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.5...HEAD
+[0.4.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.4...ferrohealth-config-v0.4.5
 [0.4.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.3...ferrohealth-config-v0.4.4
 [0.4.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.2...ferrohealth-config-v0.4.3
 [0.4.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.1...ferrohealth-config-v0.4.2
