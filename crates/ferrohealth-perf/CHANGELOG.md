@@ -10,6 +10,14 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-15
+
+### Changed
+
+- The gate builds on ferrohealth-server 0.9, which builds on
+  ferrohealth-telemetry 0.5; the CLI, its flags and its report are unchanged
+  (#391).
+
 ## [0.10.0] - 2026-11-12
 
 ### Changed

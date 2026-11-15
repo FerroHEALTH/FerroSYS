@@ -80,16 +80,16 @@ lockfile alone decides the build:
 [dependencies]
 ferrohealth-secret = "=0.2.1"
 ferrohealth-config = "=0.4.4"
-ferrohealth-telemetry = { version = "=0.4.3", features = ["otlp", "prometheus", "axum"] }
+ferrohealth-telemetry = { version = "=0.5.0", features = ["otlp", "prometheus", "axum"] }
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
-ferrohealth-server = { version = "=0.8.4", features = ["otlp"] }
-ferrohealth-usage-report = { version = "=0.4.1", features = ["telemetry"] }
+ferrohealth-server = { version = "=0.9.0", features = ["otlp"] }
+ferrohealth-usage-report = { version = "=0.5.0", features = ["telemetry"] }
 ```
 
 The performance gate is a binary:
 
 ```sh
-cargo install ferrohealth-perf --version =0.10.0 --locked
+cargo install ferrohealth-perf --version =0.11.0 --locked
 ```
 
 The release plan of each crate refuses a tag while this page or the crate's

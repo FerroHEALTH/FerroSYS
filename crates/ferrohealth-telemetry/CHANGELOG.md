@@ -10,7 +10,7 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
-## [0.4.3] - 2026-11-15
+## [0.5.0] - 2026-11-15
 
 ### Added
 
@@ -26,10 +26,10 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   place of `tracing-subscriber`'s `try_init`, which installed `tracing-log`'s
   `LogTracer` whenever a crate in the build enabled that feature (#389).
 
-### Deprecated
+### Removed
 
-- `InitError::AlreadyInstalled`: `Telemetry::install` no longer returns it;
-  it reports `InitError::Subscriber` or `InitError::Logger` (#389).
+- Breaking: `InitError::AlreadyInstalled`. `Telemetry::install` reports
+  `InitError::Subscriber` or `InitError::Logger` in its place (#389, #391).
 
 ### Fixed
 

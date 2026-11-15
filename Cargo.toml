@@ -64,9 +64,9 @@ http = "1.5.0"
 # 2026-11-15.
 log = { version = "0.4.34", default-features = false, features = ["std"] }
 tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }
-ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.4.0" }
+ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.5.0" }
 ferrohealth-health = { path = "crates/ferrohealth-health", version = "0.1.1" }
-ferrohealth-server = { path = "crates/ferrohealth-server", version = "0.8.0" }
+ferrohealth-server = { path = "crates/ferrohealth-server", version = "0.9.0" }
 # ferrohealth-server: the HTTP stack, the CLI skeleton and the request ids.
 # Verified against crates.io on 2026-10-26.
 tower-http = { version = "0.7.1", default-features = false, features = ["catch-panic", "timeout", "limit", "compression-gzip", "compression-br"] }

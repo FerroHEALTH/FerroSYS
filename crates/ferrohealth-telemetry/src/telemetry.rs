@@ -145,18 +145,6 @@ pub enum InitError {
         #[source]
         source: reload::Error,
     },
-    /// A subscriber was already installed in this process, as `install`
-    /// reported before 0.4.3; it reports [`InitError::Subscriber`] now.
-    #[deprecated(
-        since = "0.4.3",
-        note = "Telemetry::install reports InitError::Subscriber or InitError::Logger"
-    )]
-    #[error("a log subscriber is already installed")]
-    AlreadyInstalled {
-        /// What `tracing-subscriber` reported.
-        #[source]
-        source: tracing_subscriber::util::TryInitError,
-    },
     /// A subscriber is already installed in this process.
     #[error("a process subscriber is already installed")]
     Subscriber {
