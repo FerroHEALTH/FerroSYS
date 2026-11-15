@@ -59,6 +59,11 @@ tracing-opentelemetry = { version = "0.34.0", default-features = false }
 rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "aws_lc_rs"] }
 axum = { version = "0.8.9", default-features = false, features = ["matched-path"] }
 http = "1.5.0"
+# The `log` bridge ferrohealth-telemetry installs beside the subscriber, and the
+# callsite registry its records go through. Verified against crates.io on
+# 2026-11-15.
+log = { version = "0.4.34", default-features = false, features = ["std"] }
+tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }
 ferrohealth-telemetry = { path = "crates/ferrohealth-telemetry", version = "0.4.0" }
 ferrohealth-health = { path = "crates/ferrohealth-health", version = "0.1.1" }
 ferrohealth-server = { path = "crates/ferrohealth-server", version = "0.8.0" }

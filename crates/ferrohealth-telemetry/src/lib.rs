@@ -31,6 +31,7 @@
 //! `docs/specs/otel-semconv/`.
 
 pub mod console;
+pub mod log_bridge;
 pub mod panic;
 #[cfg(feature = "axum")]
 pub mod request_log;
