@@ -172,7 +172,7 @@ async fn a_timeout_is_written_with_the_product_refusal_body() {
 #[tokio::test]
 async fn the_limit_and_the_bound_are_written_with_the_product_refusal_body() {
     let section = ServerSection {
-        max_concurrent_requests: NonZeroUsize::new(1),
+        max_concurrent_requests: NonZeroUsize::MIN,
         retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
@@ -234,10 +234,85 @@ async fn the_limit_and_the_bound_are_written_with_the_product_refusal_body() {
     let _held = held.await.expect("the held request ends");
 }
 
+/// Returns a product whose one route holds its request until `release`
+/// opens, counting the requests it holds and the most it held at once.
+fn gated(
+    release: Arc<tokio::sync::Semaphore>,
+    held: Arc<std::sync::atomic::AtomicUsize>,
+    peak: Arc<std::sync::atomic::AtomicUsize>,
+) -> Router {
+    use std::sync::atomic::Ordering;
+    Router::new().route(
+        "/gated",
+        get(move || {
+            let (release, held, peak) = (release.clone(), held.clone(), peak.clone());
+            async move {
+                let now = held.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                let _permit = release.acquire().await.expect("the gate stays open");
+                held.fetch_sub(1, Ordering::SeqCst);
+                "served"
+            }
+        }),
+    )
+}
+
+#[tokio::test]
+async fn with_the_defaults_overload_is_refused_and_what_is_held_stays_bounded() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    const OFFERED: usize = 1_000;
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let held = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let product = gated(release.clone(), held.clone(), peak.clone());
+    let section = ServerSection::default();
+    let bound = section.max_concurrent_requests.get();
+    assert_eq!(256, bound, "the defaults bound the server");
+    let app = app(product, serving(), &section, StackPolicy::default());
+    let requests: Vec<_> = (0..OFFERED)
+        .map(|_| tokio::spawn(get_status(app.clone(), "/gated")))
+        .collect();
+    while held.load(Ordering::SeqCst) < bound
+        || requests
+            .iter()
+            .filter(|request| request.is_finished())
+            .count()
+            < OFFERED - bound
+    {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let (status, _, _) = get_status(app.clone(), "/health/readiness").await;
+    assert_eq!(StatusCode::OK, status, "readiness is never refused");
+    release.add_permits(OFFERED);
+    let mut served = 0;
+    let mut refused = 0;
+    for request in requests {
+        let (status, headers, _) = request.await.expect("the request ends");
+        match status {
+            StatusCode::OK => served += 1,
+            StatusCode::SERVICE_UNAVAILABLE => {
+                assert_eq!(
+                    Some("1"),
+                    headers.get("retry-after").and_then(|v| v.to_str().ok()),
+                    "a refusal tells the client when to retry"
+                );
+                refused += 1;
+            }
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert_eq!(
+        bound,
+        peak.load(Ordering::SeqCst),
+        "never more held than the bound"
+    );
+    assert_eq!((bound, OFFERED - bound), (served, refused));
+}
+
 #[tokio::test]
 async fn past_the_bound_a_request_is_refused_and_health_is_never_refused() {
     let section = ServerSection {
-        max_concurrent_requests: NonZeroUsize::new(1),
+        max_concurrent_requests: NonZeroUsize::MIN,
         retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };

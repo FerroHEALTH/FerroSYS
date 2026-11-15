@@ -10,6 +10,20 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-15
+
+### Changed
+
+- Breaking: the overload bound is always on. `ServerSection::max_concurrent_requests`
+  is a `NonZeroUsize`, 256 by default (`section::DEFAULT_MAX_CONCURRENT_REQUESTS`),
+  where it was an `Option` that left the server unbounded when unset. Past
+  the bound a request is answered `503` with `Retry-After` at once, and the
+  health routes are still never refused. Unbounded, offered load beyond
+  capacity grew FerroEHR to 9.9 GB resident until the kernel killed it
+  (FerroHEALTH/FerroEHR#5743). Upgrade: a struct literal sets the field as a
+  `NonZeroUsize` (`NonZeroUsize::MIN`, or drop `Some(..)`), and a
+  deployment that relied on no bound sets the ceiling it wants (#398).
+
 ## [0.9.0] - 2026-11-15
 
 ### Changed
@@ -691,7 +705,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.9.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.10.0...HEAD
+[0.10.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.9.0...ferrohealth-server-v0.10.0
 [0.9.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.4...ferrohealth-server-v0.9.0
 [0.8.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.3...ferrohealth-server-v0.8.4
 [0.8.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.2...ferrohealth-server-v0.8.3

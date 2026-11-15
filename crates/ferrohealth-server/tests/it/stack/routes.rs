@@ -141,7 +141,7 @@ async fn routes_beside_the_base_path_and_the_fallback_run_inside_the_stack() {
 async fn every_layer_covers_the_routes_beside_and_the_fallback() {
     let section = ServerSection {
         compression_min_size: ferrohealth_config::units::ByteSize::ZERO,
-        max_concurrent_requests: NonZeroUsize::new(1),
+        max_concurrent_requests: NonZeroUsize::MIN,
         retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
