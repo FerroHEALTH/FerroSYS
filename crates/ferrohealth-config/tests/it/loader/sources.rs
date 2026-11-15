@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::io::Write as _;
 
 use ferrohealth_config::error::ConfigError;
-use ferrohealth_config::provenance::Source;
+use ferrohealth_config::provenance::{Provenance, Source};
 use ferrohealth_secret::secret::Secret;
 
 use super::{Config, Format, SENTINEL, environment, loader, product_defaults};
@@ -465,4 +465,20 @@ fn an_old_name_is_an_unknown_key_never_read_as_the_new_one() {
         )
         .expect_err("an old name is refused");
     assert!(error.to_string().contains("bind"), "{error}");
+}
+
+#[test]
+fn a_load_no_source_wrote_to_leaves_the_default_provenance() {
+    let loaded = loader()
+        .load_sources::<Config>(None, None, &BTreeMap::new())
+        .expect("the defaults load");
+    assert_eq!(&Provenance::default(), loaded.provenance());
+    assert_eq!(
+        format!("{:?}", Provenance::default()),
+        format!("{:?}", loaded.provenance())
+    );
+    assert_eq!(
+        Source::Default,
+        Provenance::default().source("server.listen")
+    );
 }
