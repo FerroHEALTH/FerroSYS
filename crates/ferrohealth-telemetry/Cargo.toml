@@ -33,7 +33,7 @@ public-dependencies = [
   "serde",
   "tonic",
   "tower",
-  "tracing",
+  "tracing-core",
   "tracing-subscriber",
 ]
 
