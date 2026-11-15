@@ -10,6 +10,15 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
+### Changed
+
+- Breaking: the crate builds on ferrohealth-telemetry 0.5, whose `InitError`
+  no longer has `AlreadyInstalled` and whose `Telemetry::install` installs
+  its own `log` bridge beside the subscriber. A product moves to
+  ferrohealth-telemetry 0.5 in the same change (#391).
+
 ## [0.4.1] - 2026-11-10
 
 ### Added
