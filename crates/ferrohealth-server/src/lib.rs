@@ -12,7 +12,8 @@
 //! - [`mod@panic`]: a handler panic becomes a `500` with a body the product
 //!   supplies, and the panic message reaches neither the body nor the log.
 //! - the request timeout (`408`) and the body limit (`413`);
-//! - [`overload`]: past `max_concurrent_requests` a request is answered
+//! - [`overload`]: past `max_concurrent_requests` (256 by default, always
+//!   on) a request is answered
 //!   `503` with `Retry-After`, and the health routes are never refused;
 //! - [`client_address`]: the address a request came from, read behind the
 //!   trusted proxies;

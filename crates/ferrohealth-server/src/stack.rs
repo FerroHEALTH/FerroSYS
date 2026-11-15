@@ -194,28 +194,15 @@ impl Stack {
             beside,
             fallback,
         } = self;
-        let admission = section
-            .max_concurrent_requests
-            .map(|limit| Admission::new(limit, section.retry_after.get()));
-        let product = match &admission {
-            Some(admission) => product.route_layer(axum::middleware::from_fn_with_state(
-                admission.clone(),
-                overload::admit,
-            )),
-            None => product,
-        };
+        let admission = Admission::new(section.max_concurrent_requests, section.retry_after.get());
+        let product = bounded(product, &admission);
         let routes = health::routes(health).merge(product);
         let routes = if section.base_path.as_str().is_empty() {
             routes
         } else {
             Router::new().nest(section.base_path.as_str(), routes)
         };
-        let beside = match admission {
-            Some(admission) if beside.has_routes() => beside.route_layer(
-                axum::middleware::from_fn_with_state(admission, overload::admit),
-            ),
-            _ => beside,
-        };
+        let beside = bounded(beside, &admission);
         // NOTE: axum 0.8 `Router::merge` keeps the fallback of `other` when neither router
         // declares one, so `routes` merges last and keeps the product's layered fallback.
         let routes = beside.merge(routes);
@@ -224,6 +211,20 @@ impl Stack {
             None => routes,
         };
         wrap(routes, &section, policy)
+    }
+}
+
+/// Returns `router` with every route behind `admission`; a router with no
+/// route is returned as it is, since axum refuses a route layer on one
+/// (`Router::route_layer`, "Panics").
+fn bounded(router: Router, admission: &Admission) -> Router {
+    if router.has_routes() {
+        router.route_layer(axum::middleware::from_fn_with_state(
+            admission.clone(),
+            overload::admit,
+        ))
+    } else {
+        router
     }
 }
 

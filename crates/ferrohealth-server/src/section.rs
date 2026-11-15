@@ -18,6 +18,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::client_address::Forwarding;
 
+/// The default bound on the requests served at once.
+///
+/// FerroEHR's capacity test held its 2000 rps mix at under 80 requests in
+/// flight at the p99, and an unbounded server grew to 9.9 GB at about 4096
+/// queued requests before the kernel killed it; 256 leaves three times the
+/// headroom of that p99 and bounds the held working set (no specification
+/// governs this: our own design, FerroHEALTH/FerroEHR#5743).
+pub const DEFAULT_MAX_CONCURRENT_REQUESTS: NonZeroUsize = NonZeroUsize::MIN.saturating_add(255);
+
 /// The `[server]` section.
 ///
 /// Its `Default` is the crate's. A product states its own defaults for the
@@ -56,9 +65,11 @@ pub struct ServerSection {
     /// How long the requests in flight may take once the listener closed.
     pub shutdown_timeout: Duration,
     /// How many requests the server serves at once; past it a request is
-    /// answered `503`. Unset, there is no bound.
-    #[cfg_attr(feature = "schema", schemars(with = "Option<u64>"))]
-    pub max_concurrent_requests: Option<NonZeroUsize>,
+    /// answered `503` with `Retry-After` at once, never queued, so offered
+    /// load beyond capacity cannot grow the server's memory. Always bounded,
+    /// 256 by default ([`DEFAULT_MAX_CONCURRENT_REQUESTS`]); never zero.
+    #[cfg_attr(feature = "schema", schemars(with = "u64", range(min = 1)))]
+    pub max_concurrent_requests: NonZeroUsize,
     /// How long a refused request is told to wait (`Retry-After`), a whole
     /// number of seconds, since the header carries delay-seconds (RFC 9110
     /// §10.2.3).
@@ -149,7 +160,7 @@ struct RawServer {
     body_limit: ByteSize,
     drain_delay: Duration,
     shutdown_timeout: Duration,
-    max_concurrent_requests: Option<NonZeroUsize>,
+    max_concurrent_requests: NonZeroUsize,
     retry_after: Duration,
     tls: Option<TlsSection>,
     trusted_proxies: Vec<crate::client_address::TrustedProxy>,
@@ -340,7 +351,7 @@ impl Default for ServerSection {
             body_limit: ByteSize::from_mib(1),
             drain_delay: Duration::ZERO,
             shutdown_timeout: Duration::from_secs(10),
-            max_concurrent_requests: None,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             retry_after: Duration::from_secs(1),
             tls: None,
             trusted_proxies: Vec::new(),

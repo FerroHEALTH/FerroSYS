@@ -81,7 +81,7 @@ async fn every_answer_carries_the_set_and_no_hsts_without_tls() {
 #[tokio::test]
 async fn the_overload_refusal_carries_the_set() {
     let section = ServerSection {
-        max_concurrent_requests: NonZeroUsize::new(1),
+        max_concurrent_requests: NonZeroUsize::MIN,
         ..section()
     };
     let app = app(product(), serving(), &section, StackPolicy::default());

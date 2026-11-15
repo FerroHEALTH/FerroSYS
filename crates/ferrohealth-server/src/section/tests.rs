@@ -35,13 +35,18 @@ fn the_section_defaults_and_reads_its_keys() {
     .expect("the section loads");
     assert_eq!("0.0.0.0:9090", section.listen.to_string());
     assert_eq!("/ferrosys", section.base_path.as_str());
-    assert_eq!(
-        Some(64),
-        section
-            .max_concurrent_requests
-            .map(std::num::NonZeroUsize::get)
-    );
+    assert_eq!(64, section.max_concurrent_requests.get());
     assert_eq!(Duration::from_secs(10), section.shutdown_timeout);
+}
+
+#[test]
+fn the_overload_bound_is_on_by_default_at_256() {
+    let section = load("").expect("an empty file loads");
+    assert_eq!(256, section.max_concurrent_requests.get());
+    assert_eq!(
+        crate::section::DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ServerSection::default().max_concurrent_requests
+    );
 }
 
 #[test]

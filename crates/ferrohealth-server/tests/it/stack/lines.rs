@@ -182,7 +182,7 @@ async fn a_refusal_body_may_answer_its_own_status() {
 #[tokio::test]
 async fn a_refusal_that_answers_its_own_status_keeps_its_retry_after() {
     let section = ServerSection {
-        max_concurrent_requests: NonZeroUsize::new(1),
+        max_concurrent_requests: NonZeroUsize::MIN,
         retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
@@ -350,7 +350,7 @@ async fn an_opted_in_timeout_is_problem_json_to_a_client_that_asks_for_json() {
 #[tokio::test]
 async fn opted_in_body_limits_are_problems_however_the_body_arrives() {
     let section = ServerSection {
-        max_concurrent_requests: NonZeroUsize::new(1),
+        max_concurrent_requests: NonZeroUsize::MIN,
         retry_after: ferrohealth_config::units::Duration::from_secs(2),
         ..section()
     };
