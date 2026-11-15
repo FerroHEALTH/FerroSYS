@@ -42,13 +42,28 @@ impl fmt::Display for Source {
 /// A key counts as set when it, or a table above it, was set whole; a
 /// `--set` argument wins over the environment, and the environment over the
 /// file, as the load applies them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provenance {
     file: Option<PathBuf>,
     file_keys: BTreeSet<String>,
     environment: BTreeMap<String, String>,
     sets: BTreeSet<String>,
     written: Option<BTreeSet<String>>,
+}
+
+impl Default for Provenance {
+    /// Returns the provenance of a load no source wrote to, which reports
+    /// every key as [`Source::Default`] and equals the provenance such a load
+    /// leaves.
+    fn default() -> Self {
+        Self {
+            file: None,
+            file_keys: BTreeSet::new(),
+            environment: BTreeMap::new(),
+            sets: BTreeSet::new(),
+            written: Some(BTreeSet::new()),
+        }
+    }
 }
 
 impl Provenance {

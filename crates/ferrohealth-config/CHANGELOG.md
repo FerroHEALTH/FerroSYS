@@ -10,6 +10,15 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- `provenance::Provenance::default()` equals the provenance of a load that
+  read no file, no environment and no `--set`, by `PartialEq` and `Debug`.
+  Since 0.4.3 the default held no record of the written keys while such a
+  load held an empty one, so a product that compared its loaded
+  configuration with its `Default` saw the two differ although both report
+  every key as `Source::Default` (#395).
+
 ## [0.4.4] - 2026-11-10
 
 ### Changed
