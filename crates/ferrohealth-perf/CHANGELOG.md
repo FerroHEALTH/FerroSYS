@@ -10,6 +10,29 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-17
+
+### Added
+
+- Breaking: the load report gives the generator's lag at p50
+  (`lag_p50_ms`) and its largest value (`lag_max_ms`) beside its p99, so a
+  run shows how much of each latency the generator itself added and
+  whether it kept up. `LoadReport` gains both fields, and
+  `quantile::max_ms` reads a histogram's largest sample (#400).
+
+### Fixed
+
+- The open-loop schedule woke on tokio's timer, which rounds a deadline up
+  to its next millisecond tick, so every latency carried up to a
+  millisecond of the generator's own wake lag. The schedule now runs on a
+  thread of its own that sleeps on the operating system until a margin
+  before each intended instant and yields through the rest; the margin
+  follows how late the host's sleeps wake. Every latency is still timed
+  from the intended instant, so a late send is still charged in full. The
+  lag is now measured where the send starts, after the hand-off to the
+  runtime. Dropping a phase's future stops its schedule at the next
+  arrival (#400).
+
 ## [0.12.0] - 2026-11-15
 
 ### Changed
@@ -335,7 +358,8 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   `$GITHUB_STEP_SUMMARY`, and the host fingerprint with a warning when it
   differs from the baseline's (#249).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.12.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.13.0...HEAD
+[0.13.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.12.0...ferrohealth-perf-v0.13.0
 [0.12.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.11.0...ferrohealth-perf-v0.12.0
 [0.11.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.10.0...ferrohealth-perf-v0.11.0
 [0.10.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.9.0...ferrohealth-perf-v0.10.0

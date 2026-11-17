@@ -5,11 +5,14 @@
 //! server answers.
 //!
 //! Arrival `i` is intended at `i / rate` seconds after the start, and takes
-//! request `i` modulo the size of the set. Every latency runs from the
-//! intended instant, so a server that stalls raises the latency of every
-//! request it held back (the coordinated-omission correction). The
-//! generator's own lag, from the intended instant to the send, is recorded
-//! too, and a run whose generator could not keep its schedule is refused.
+//! request `i` modulo the size of the set. The schedule runs on a thread of
+//! its own that wakes at each intended instant to within tens of
+//! microseconds (`pace`). Every latency runs from the intended instant, so a
+//! late send and a server that stalls both raise the latency of every
+//! request they held back (the coordinated-omission correction). The
+//! generator's own lag, from the intended instant to the start of the send,
+//! is recorded too, and a run whose generator could not keep its schedule is
+//! refused.
 //! An in-flight budget bounds the outstanding requests; an arrival that
 //! waits longer than the saturation limit for a slot stops the run as
 //! saturated. Only arrivals intended inside the measured window, after the
@@ -17,16 +20,20 @@
 //! intended instant. The schedule and the coordinated-omission correction
 //! follow Veredictum's `perf_gen` (Apache-2.0, credited in `NOTICE`).
 
+mod pace;
+
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hdrhistogram::Histogram;
 use reqwest::Client;
 use thiserror::Error;
+use tokio::runtime::Handle;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use tokio::time::{Instant, sleep_until, timeout, timeout_at};
+use tokio::time::{timeout, timeout_at};
 use url::Url;
 
 use crate::credentials::Credentials;
@@ -54,7 +61,8 @@ pub struct LoadOutcome {
     /// The failures over the whole phase, warm-up included, by group and
     /// kind (`status 500`, `timeout`, `transport`, `unfinished`).
     pub failures: BTreeMap<String, BTreeMap<String, u64>>,
-    /// The generator's lag over the measured window.
+    /// The generator's lag over the measured window: how long after its
+    /// intended instant each send started.
     pub lag: Histogram<u64>,
     /// The arrivals the schedule held.
     pub planned: u64,
@@ -125,6 +133,7 @@ struct Shared {
     groups: BTreeMap<String, GroupRecord>,
     failures: BTreeMap<String, BTreeMap<String, u64>>,
     pending: BTreeMap<String, u64>,
+    lag: Histogram<u64>,
 }
 
 impl Shared {
@@ -227,26 +236,26 @@ impl Endpoints {
 
 /// One entry of the set an arrival takes.
 #[derive(Debug)]
-enum Item<'a> {
+enum Item {
     Http {
         position: usize,
-        request: &'a Request,
+        request: Box<Request>,
         url: Url,
     },
     Mllp {
-        group: &'a str,
+        group: String,
         sender: Arc<Sender>,
         message: Arc<Message>,
     },
 }
 
-impl<'a> Item<'a> {
+impl Item {
     /// The group and the exchange of one send of this item.
     fn exchange(
         &self,
         client: &Client,
         credentials: &Credentials,
-    ) -> Result<(&'a str, Exchange), LoadError> {
+    ) -> Result<(&str, Exchange), LoadError> {
         Ok(match self {
             Self::Http {
                 position,
@@ -257,7 +266,7 @@ impl<'a> Item<'a> {
                 let proof = sign(credentials, *position, request, url)?;
                 let call = HttpCall {
                     client: client.clone(),
-                    request: (*request).clone(),
+                    request: (**request).clone(),
                     url: url.clone(),
                     proof,
                 };
@@ -272,20 +281,20 @@ impl<'a> Item<'a> {
                     sender: Arc::clone(sender),
                     message: Arc::clone(message),
                 };
-                (*group, exchange)
+                (group.as_str(), exchange)
             }
         })
     }
 }
 
 /// The set of `plan` at `endpoints`: the requests, then the messages.
-fn items<'a>(plan: &'a Plan, endpoints: &Endpoints) -> Result<Vec<Item<'a>>, LoadError> {
+fn items(plan: &Plan, endpoints: &Endpoints) -> Result<Vec<Item>, LoadError> {
     let mut items = Vec::with_capacity(plan.requests.len().saturating_add(plan.messages.len()));
     for (position, request) in plan.requests.iter().enumerate() {
         let url = request_url(&endpoints.url, request)?;
         items.push(Item::Http {
             position,
-            request,
+            request: Box::new(request.clone()),
             url,
         });
     }
@@ -293,7 +302,7 @@ fn items<'a>(plan: &'a Plan, endpoints: &Endpoints) -> Result<Vec<Item<'a>>, Loa
         let sender = endpoints.mllp.as_ref().ok_or(LoadError::NoListener)?;
         let message = sender.message(index).ok_or(LoadError::NoListener)?;
         items.push(Item::Mllp {
-            group: &entry.group,
+            group: entry.group.clone(),
             sender: Arc::clone(sender),
             message: Arc::clone(message),
         });
@@ -304,21 +313,25 @@ fn items<'a>(plan: &'a Plan, endpoints: &Endpoints) -> Result<Vec<Item<'a>>, Loa
 /// Drives the load phase of `plan` against `endpoints`, starting at
 /// `start`.
 ///
+/// The schedule runs on a blocking thread of the current runtime and sends
+/// each arrival as a task on that runtime; dropping the returned future
+/// stops the schedule at its next arrival.
+///
 /// # Errors
 ///
 /// [`LoadError::Url`] for a request that forms no URL,
 /// [`LoadError::NoListener`] for messages with no MLLP listener,
-/// [`LoadError::Schedule`] for a schedule too long to place, and
-/// [`LoadError::Task`] when a request task panics.
+/// [`LoadError::Schedule`] for a schedule too long to place,
+/// [`LoadError::Proof`] for a `DPoP` proof that cannot be signed, and
+/// [`LoadError::Task`] when a request task or the schedule's thread panics.
 pub async fn drive(
     plan: &Plan,
     endpoints: &Endpoints,
     client: &Client,
     credentials: &Credentials,
-    start: Instant,
+    start: tokio::time::Instant,
 ) -> Result<LoadOutcome, LoadError> {
-    let load = &plan.load;
-    let items = items(plan, endpoints)?;
+    let load = plan.load.clone();
     let record = || GroupRecord {
         first: histogram::empty(),
         second: histogram::empty(),
@@ -329,70 +342,33 @@ pub async fn drive(
         groups,
         failures: BTreeMap::new(),
         pending: BTreeMap::new(),
+        lag: histogram::empty(),
     }));
-    let mut lag = histogram::empty();
-    let span = load.warmup().saturating_add(load.duration());
-    let planned = arrivals(span, load.rate);
-    let budget = usize::try_from(load.max_in_flight).unwrap_or(usize::MAX);
-    let semaphore = Arc::new(Semaphore::new(budget.min(Semaphore::MAX_PERMITS)));
-    let request_timeout = Duration::from_millis(load.timeout_ms);
-    let saturation = Duration::from_millis(load.saturation_ms);
-    let mut tasks = JoinSet::new();
-    let mut sent: u64 = 0;
-    let mut saturated = false;
-    let mut order = items.iter().cycle();
-    for index in 0..planned {
-        let offset = Duration::try_from_secs_f64(exact_f64(index) / load.rate)
-            .map_err(|_too_long| LoadError::Schedule(planned))?;
-        let intended = start
-            .checked_add(offset)
-            .ok_or(LoadError::Schedule(planned))?;
-        let Some(item) = order.next() else {
-            break;
-        };
-        let (group, exchange) = item.exchange(client, credentials)?;
-        sleep_until(intended).await;
-        let permit = if let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() {
-            permit
-        } else if let Ok(Ok(permit)) =
-            timeout(saturation, Arc::clone(&semaphore).acquire_owned()).await
-        {
-            permit
-        } else {
-            saturated = true;
-            break;
-        };
-        let window = window_of(offset, load);
-        if window != Window::Warmup {
-            histogram::record(&mut lag, Instant::now().saturating_duration_since(intended));
-        }
-        let call = Call {
-            group: group.to_owned(),
-            exchange,
-            intended,
-            window,
-            request_timeout,
-        };
-        shared
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pending(group, true);
-        let shared = Arc::clone(&shared);
-        tasks.spawn(async move {
-            call.send(&shared).await;
-            drop(permit);
-        });
-        sent = sent.saturating_add(1);
-        while let Some(result) = tasks.try_join_next() {
-            result.map_err(LoadError::Task)?;
-        }
-    }
+    let stop = Stop::default();
+    let schedule = Schedule {
+        items: items(plan, endpoints)?,
+        client: client.clone(),
+        credentials: credentials.clone(),
+        start: start.into_std(),
+        shared: Arc::clone(&shared),
+        stop: Arc::clone(&stop.0),
+        runtime: Handle::current(),
+        load: load.clone(),
+    };
+    let Paced {
+        mut tasks,
+        planned,
+        sent,
+        saturated,
+    } = tokio::task::spawn_blocking(move || schedule.run())
+        .await
+        .map_err(LoadError::Task)??;
     // Every request ends by its own timeout; the drain waits one second past
     // it, so only a request its timeout could not stop counts as unfinished.
-    let drain = request_timeout.saturating_add(Duration::from_secs(1));
-    let deadline = Instant::now()
+    let drain = Duration::from_millis(load.timeout_ms).saturating_add(Duration::from_secs(1));
+    let deadline = tokio::time::Instant::now()
         .checked_add(drain)
-        .unwrap_or_else(Instant::now);
+        .unwrap_or_else(tokio::time::Instant::now);
     while let Ok(Some(result)) = timeout_at(deadline, tasks.join_next()).await {
         result.map_err(LoadError::Task)?;
     }
@@ -406,11 +382,120 @@ pub async fn drive(
     Ok(LoadOutcome {
         groups: std::mem::take(&mut shared.groups),
         failures: std::mem::take(&mut shared.failures),
-        lag,
+        lag: std::mem::replace(&mut shared.lag, histogram::empty()),
         planned,
         sent,
         saturated,
     })
+}
+
+/// The flag that stops the schedule, raised when the phase's future is
+/// dropped.
+#[derive(Debug, Default)]
+struct Stop(Arc<AtomicBool>);
+
+impl Drop for Stop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// What the schedule's thread owns.
+#[derive(Debug)]
+struct Schedule {
+    load: LoadSettings,
+    items: Vec<Item>,
+    client: Client,
+    credentials: Credentials,
+    start: Instant,
+    shared: Arc<Mutex<Shared>>,
+    stop: Arc<AtomicBool>,
+    runtime: Handle,
+}
+
+/// What the schedule's thread hands back: the request tasks still running
+/// and the counts.
+#[derive(Debug)]
+struct Paced {
+    tasks: JoinSet<()>,
+    planned: u64,
+    sent: u64,
+    saturated: bool,
+}
+
+impl Schedule {
+    /// Sends every arrival at its intended instant, on the calling thread,
+    /// which it blocks.
+    fn run(self) -> Result<Paced, LoadError> {
+        let load = &self.load;
+        let span = load.warmup().saturating_add(load.duration());
+        let planned = arrivals(span, load.rate);
+        let budget = usize::try_from(load.max_in_flight).unwrap_or(usize::MAX);
+        let semaphore = Arc::new(Semaphore::new(budget.min(Semaphore::MAX_PERMITS)));
+        let request_timeout = Duration::from_millis(load.timeout_ms);
+        let saturation = Duration::from_millis(load.saturation_ms);
+        let mut pacer = pace::Pacer::default();
+        let mut tasks = JoinSet::new();
+        let mut sent: u64 = 0;
+        let mut saturated = false;
+        let mut order = self.items.iter().cycle();
+        for index in 0..planned {
+            if self.stop.load(Ordering::Acquire) {
+                break;
+            }
+            let offset = Duration::try_from_secs_f64(exact_f64(index) / load.rate)
+                .map_err(|_too_long| LoadError::Schedule(planned))?;
+            let intended = self
+                .start
+                .checked_add(offset)
+                .ok_or(LoadError::Schedule(planned))?;
+            let Some(item) = order.next() else {
+                break;
+            };
+            let (group, exchange) = item.exchange(&self.client, &self.credentials)?;
+            pacer.wait_until(intended);
+            let permit = if let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() {
+                permit
+            } else if let Ok(Ok(permit)) = self
+                .runtime
+                .block_on(timeout(saturation, Arc::clone(&semaphore).acquire_owned()))
+            {
+                permit
+            } else {
+                saturated = true;
+                break;
+            };
+            let call = Call {
+                group: group.to_owned(),
+                exchange,
+                intended,
+                window: window_of(offset, load),
+                request_timeout,
+            };
+            self.shared
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .pending(group, true);
+            let shared = Arc::clone(&self.shared);
+            tasks.spawn_on(
+                async move {
+                    call.send(&shared).await;
+                    drop(permit);
+                },
+                &self.runtime,
+            );
+            sent = sent.saturating_add(1);
+            while let Some(result) = tasks.try_join_next() {
+                result.map_err(LoadError::Task)?;
+            }
+        }
+        Ok(Paced {
+            tasks,
+            planned,
+            sent,
+            saturated,
+        })
+    }
 }
 
 /// The arrivals of a schedule of `span` at `rate` per second.
@@ -460,6 +545,7 @@ struct Call {
 
 impl Call {
     async fn send(self, shared: &Mutex<Shared>) {
+        let began = Instant::now();
         let outcome = match &self.exchange {
             Exchange::Http(call) => call.send(self.request_timeout).await,
             Exchange::Mllp { sender, message } => sender.send(message, self.request_timeout).await,
@@ -467,6 +553,10 @@ impl Call {
         let done = Instant::now();
         let mut shared = shared.lock().unwrap_or_else(PoisonError::into_inner);
         shared.pending(&self.group, false);
+        if self.window != Window::Warmup {
+            let lag = began.saturating_duration_since(self.intended);
+            histogram::record(&mut shared.lag, lag);
+        }
         match outcome {
             Ok(()) => {
                 let latency = done.saturating_duration_since(self.intended);

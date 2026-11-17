@@ -153,6 +153,13 @@ pub fn value_at_rank(histogram: &Histogram<u64>, rank: u64) -> u64 {
     histogram.highest_equivalent(histogram.max())
 }
 
+/// The highest sample of `histogram`, whose values are microseconds, in
+/// milliseconds; none when it is empty.
+#[must_use]
+pub fn max_ms(histogram: &Histogram<u64>) -> Option<f64> {
+    (!histogram.is_empty()).then(|| millis(histogram, histogram.len()))
+}
+
 fn millis(histogram: &Histogram<u64>, rank: u64) -> f64 {
     exact_f64(value_at_rank(histogram, rank)) / 1_000.0
 }
@@ -245,6 +252,17 @@ mod tests {
     fn a_median_interval_is_symmetric() {
         // n = 10,000, q = 0.5: 1.96 · √2500 = 98, so ranks 4902 to 5098.
         assert_eq!((4_902, 5_098), interval_ranks(10_000, 50));
+    }
+
+    #[test]
+    fn the_maximum_is_the_highest_sample_and_none_when_empty() {
+        assert_eq!(None, max_ms(&histogram::empty()));
+        let mut lag = histogram::empty();
+        for us in [40, 70, 2_500] {
+            histogram::record(&mut lag, std::time::Duration::from_micros(us));
+        }
+        let max = max_ms(&lag).unwrap();
+        assert!((2.5..2.51).contains(&max), "{max} ms, the bucket's top");
     }
 
     #[test]

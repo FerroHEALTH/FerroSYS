@@ -67,7 +67,11 @@ It takes `ferrohealth-secret` for its URLs and no other FerroSYS crate, and
 no product links it. Its open-loop schedule, the rank intervals of its
 quantiles, its steadiness check, its host fingerprint and its A/A noise floor
 follow Veredictum's `perf` (Apache-2.0), re-implemented here and credited in
-`NOTICE`.
+`NOTICE`. The schedule runs on a thread of its own that sleeps on the
+operating system and yields through the last margin before each intended
+instant, because tokio's timer wakes on whole milliseconds and every latency
+is timed from that instant; the report gives the generator's lag at p50,
+p99 and its maximum beside the latencies (#400).
 
 ### Dependency direction
 
