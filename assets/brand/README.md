@@ -4,8 +4,8 @@
 # FerroSYS brand
 
 FerroSYS follows the FerroHEALTH family system. It keeps its own mark and the
-olive palette below, and, as a repository of shared crates like FerroAUTH and
-FerroAUDIT, its lockup is drawn in the parent's steel. The file set, the
+olive palette below, and, as a repository of shared crates like FerroAUDIT,
+its lockup is drawn in the parent's steel. The file set, the
 naming and the variants are shared with the family. Everything here is under the Business Source License 1.1 with the rest of
 the repository.
 
@@ -34,7 +34,7 @@ values from `tokens.css` here verbatim.
 
 ## The lockup
 
-The family's brand rule gives the shared libraries (FerroAUTH, FerroAUDIT,
+The family's brand rule gives the shared libraries (FerroAUDIT,
 FerroUI, FerroSYS) no hue of their own in a lockup and shows them in the
 parent's steel. The lockup draws the dial and its hub in steel (`#3F6070`,
 steel-light `#8FB6C4` on a dark ground) with the needle and the stand in

@@ -1,6 +1,6 @@
 ---
 name: ferrosys
-description: "FerroSYS is a repository of shared crates like FerroAUTH and FerroAUDIT: no configuration distribution, no deployment, no central service; six ferrohealth-* crates with per-crate tags in lockstep; owner 2026-10-26"
+description: "FerroSYS is a repository of shared crates like FerroAUDIT: no configuration distribution, no deployment, no central service; six ferrohealth-* crates with per-crate tags in lockstep; owner 2026-10-26"
 metadata:
   type: project
 ---
@@ -22,7 +22,7 @@ policies and the migration order are recorded in `docs/architecture.md`.
 **Why:** the owner's rulings on 2026-10-26: the five products each carry a
 diverged copy of the same plumbing, which breaks the family rule that every
 shared concern lives in one crate; FerroSYS is the same kind of repository as
-FerroAUTH and FerroAUDIT, and its lockup is drawn in the parent's steel.
+FerroAUDIT, and its lockup is drawn in the parent's steel.
 
 **How to apply:** never describe FerroSYS as a service that servers report to
 or are configured from, and never promise one. Each crate has its own version line and `<crate>-vX.Y.Z` tag, and

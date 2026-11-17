@@ -193,9 +193,11 @@ translates it to FHIR and the OMOP research model, FerroFED connects records
 across organisations and borders, FerroPIX matches patient identities, and
 FerroTERM serves the code systems.
 
-Work that every server needs lives in shared libraries, so it is written
-once: FerroAUTH for sign-in and access control, FerroAUDIT for the audit
-trail, FerroUI for the web consoles, and FerroSYS for the system plumbing.
+FerroSMART, the SMART authorization server being built, issues the access
+tokens, and every server checks its callers with FerroSMART's
+`ferrohealth-smart`. Work that every server needs lives in shared libraries,
+so it is written once: FerroAUDIT for the audit trail, FerroUI for the web
+consoles, and FerroSYS for the system plumbing.
 
 ## Support
 

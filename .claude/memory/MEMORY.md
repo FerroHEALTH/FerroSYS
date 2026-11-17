@@ -9,7 +9,7 @@
   hand-written that a shared crate or another product provides; owner
   2026-10-25
 - [What FerroSYS is](ferrosys.md): a repository of shared crates like
-  FerroAUTH and FerroAUDIT, with no service of its own; six `ferrohealth-*`
+  FerroAUDIT, with no service of its own; six `ferrohealth-*`
   crates, per-crate tags, lockstep; owner 2026-10-26
 - [Memory lives in the repo](memory-lives-in-repo.md): every learning is a
   tracked file here, never a per-user note

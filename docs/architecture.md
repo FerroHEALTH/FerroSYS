@@ -10,8 +10,8 @@ the change it explains.
 
 ## 1. What FerroSYS is
 
-FerroSYS is a repository of shared Rust crates, the same kind as FerroAUTH
-and FerroAUDIT. The crates carry the system plumbing every FerroHEALTH
+FerroSYS is a repository of shared Rust crates, the same kind as
+FerroAUDIT. The crates carry the system plumbing every FerroHEALTH
 server (FerroEHR, FerroBRIDGE, FerroFED, FerroPIX, FerroTERM) and every
 operator console otherwise writes for itself. They run inside each product
 and take no call of their own.
@@ -25,7 +25,7 @@ copied into four, one configuration loader copied into three and every
 console, a byte-identical `usage_report/state.rs` in three servers, a
 byte-identical console `command.rs` and `healthcheck.rs` in four consoles,
 the FerroPULSE envelope schema vendored five times, and the URL userinfo
-mask written at least five times across the products, FerroAUTH and
+mask written at least five times across the products, FerroSMART and
 FerroAUDIT. The family rule is that every shared concern lives in one
 crate; FerroSYS is that crate set for system plumbing.
 
@@ -33,7 +33,7 @@ crate; FerroSYS is that crate set for system plumbing.
 
 | Concern | Home |
 |---|---|
-| Authentication, the policy decision, and the console OIDC sign-in and session store | FerroAUTH (`ferrohealth-smart`, `ferrohealth-authz`) |
+| Authentication, the policy decision, and the console OIDC sign-in and session store | FerroSMART (`ferrohealth-smart`, `ferrohealth-authz`) |
 | The audit trail and the EHDS access record | FerroAUDIT (`ihe-atna`, `ehds-logging`) |
 | Console UI components | FerroUI (`ferrohealth-ui`) |
 | FerroEHR's management surface (`/management/*`, the `pprof` flamegraph, the env and logger routes) | FerroEHR, for now |
@@ -43,12 +43,12 @@ crate; FerroSYS is that crate set for system plumbing.
 
 Six library crates, split by what a binary takes on its own, the way
 `ferrohealth-smart` and `ferrohealth-authz` split. Every name is
-`ferrohealth-*`, like FerroAUTH and FerroUI; the name `ferrosys` on
+`ferrohealth-*`, like FerroSMART's crates and FerroUI; the name `ferrosys` on
 crates.io belongs to an unrelated project.
 
 | Crate | Holds | Why it stands alone | Taken by |
 |---|---|---|---|
-| `ferrohealth-secret` | `Secret`, `SecretUrl`, `RedactedUrl`, `Redacted<T>`, the `<key>` / `<key>_file` rule | the base every other crate needs, FerroAUTH and FerroAUDIT included, so it stays small: no TOML, no HTTP, no OpenTelemetry | every server and console, FerroAUTH, FerroAUDIT, the other five crates |
+| `ferrohealth-secret` | `Secret`, `SecretUrl`, `RedactedUrl`, `Redacted<T>`, the `<key>` / `<key>_file` rule | the base every other crate needs, FerroSMART and FerroAUDIT included, so it stays small: no TOML, no HTTP, no OpenTelemetry | every server and console, FerroSMART, FerroAUDIT, the other five crates |
 | `ferrohealth-config` | the TOML file, the `PREFIX__A__B` environment overrides, the strict checks, provenance, the `config check` rendering | consoles and job binaries take it without a server | every server and console |
 | `ferrohealth-telemetry` | the console subscriber, the request log, OTLP traces and metrics, the Prometheus reader; `otlp`, `prometheus` and `axum` features | every binary wants the console; a console leaves the exporters off | every server and console |
 | `ferrohealth-health` | the readiness document (serde only, builds for `wasm32`); the indicator trait, registry and lifecycle behind the `registry` feature | the document crosses into a console's browser half and each operator-api crate | servers (registry), consoles and operator-api crates (document) |
@@ -81,7 +81,7 @@ ferrohealth-secret  <-  ferrohealth-config  <-  ferrohealth-server
 ```
 
 An arrow points at the dependency. `ferrohealth-server` depends on
-`-config`, `-telemetry` and `-health`. No FerroSYS crate depends on FerroAUTH
+`-config`, `-telemetry` and `-health`. No FerroSYS crate depends on FerroSMART
 or FerroAUDIT; they depend only on `ferrohealth-secret`, so there is no cycle.
 
 ## 3. Public API sketch
@@ -212,7 +212,7 @@ edition 2024, the family lint set.
 ## 7. Versioning and release
 
 Each crate has its own version line, changelog and tag, `<crate>-vX.Y.Z`,
-the scheme FerroAUTH uses since `ferrohealth-smart-v0.7.0`. Products pin
+the scheme FerroSMART uses since `ferrohealth-smart-v0.7.0`. Products pin
 each crate exactly (`=X.Y.Z`). Every FerroSYS release rolls out to every
 product at once, one pull request per product (lockstep).
 
@@ -224,7 +224,7 @@ owner. No crate is built before its name is reserved.
 Smallest risk first, one pull request per product per step.
 
 1. FerroSYS releases `ferrohealth-secret`; FerroAUDIT moves `RedactedUrl` to
-   it and FerroAUTH's `OauthSection` mask and `_file` rule use it.
+   it and FerroSMART's `OauthSection` mask and `_file` rule use it.
 2. The four product consoles (FerroBRIDGE, FerroPIX, FerroTERM, FerroFED),
    whose `command.rs` and `healthcheck.rs` are identical today.
 3. FerroPIX, the smallest server and already a copy of FerroBRIDGE and
@@ -266,7 +266,7 @@ product uses either, and the readiness document is our own design.
 | 2026-10-26 | The stricter option for each policy in §4 | owner |
 | 2026-10-26 | FerroBRIDGE's loader with FerroEHR's strict checks; one OpenTelemetry provider in every product | owner |
 | 2026-10-26 | `Redacted<T>` mandatory for clinical payloads | owner |
-| 2026-10-26 | The console OIDC sign-in and session store go to FerroAUTH | owner |
+| 2026-10-26 | The console OIDC sign-in and session store go to FerroSMART | owner |
 | 2026-10-26 | FerroEHR's management surface stays in FerroEHR for now | owner |
 | 2026-10-26 | The lockup is drawn in the parent's steel, as for every shared library | owner |
 | 2026-11-06 | `ferrohealth-perf`, the performance gate, is built here, borrowing from Veredictum; its crate label is `perf-gate` | #249 |
