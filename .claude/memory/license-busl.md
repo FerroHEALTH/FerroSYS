@@ -14,7 +14,7 @@ handles the business side (info@cadasto.com); the maintainer handles the
 technical side.
 
 The Additional Use Grant follows the shared-library grant the owner approved
-for FerroAUTH, with only the description changed: no hosted, managed or
+for FerroSMART, with only the description changed: no hosted, managed or
 embedded service through which others operate a health-data server built
 with the Licensed Work, and no distribution for a fee.
 

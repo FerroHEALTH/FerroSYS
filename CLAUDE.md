@@ -8,8 +8,8 @@ FerroBRIDGE, FerroEHR, FerroFED, FerroPIX and FerroTERM, as Rust library
 crates: the logging console and the request log, OpenTelemetry export, the
 health family with its indicator registry and the container healthcheck,
 the HTTP server stack with the bounded drain, and configuration loading
-with secret handling. It is the same kind of repository as FerroAUTH and
-FerroAUDIT: shared crates that run inside the products and take no call
+with secret handling. It is the same kind of repository as FerroAUDIT:
+shared crates that run inside the products and take no call
 (`.claude/memory/family-architecture.md`). FerroSYS distributes no
 configuration, deploys nothing and runs no service, by the
 owner's ruling of 2026-10-26 (`.claude/memory/ferrosys.md`).
@@ -42,10 +42,10 @@ milestone set and its crates.io name reserved, which needs the owner.
   `_file` secrets, the shutdown drain, the usage report to FerroPULSE.
 - **Not here:** a product's domain (FHIR, OMOP, openEHR, federation,
   identity, terminology), authentication, the policy decision and the
-  console sign-in and session (FerroAUTH), the audit trail and the EHDS access record (FerroAUDIT), and
+  console sign-in and session (FerroSMART), the audit trail and the EHDS access record (FerroAUDIT), and
   UI components (FerroUI). When FerroSYS needs one of those, it depends on
   the owning crate; no FerroSYS crate is ever a copy of one.
-- **No dependency cycle:** a crate here that FerroAUTH or FerroAUDIT
+- **No dependency cycle:** a crate here that FerroSMART or FerroAUDIT
   depends on never depends back on them.
 
 ## IMPORTANT hard rules

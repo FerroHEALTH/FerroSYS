@@ -19,7 +19,7 @@ and the compatibility of each release are hard rules.
   so a product's lockfile takes a patch of one crate without waiting for a
   release of the crates built on it.
 - The same rule holds for a requirement on another family shared crate
-  (FerroAUTH, FerroAUDIT): a caret on the newest release this crate needs.
+  (FerroSMART, FerroAUDIT): a caret on the newest release this crate needs.
 - **The products pin each shared crate exactly** (`ferrohealth-server =
   "=0.3.2"`) and move one pull request at a time; their lockfile is what
   makes a build reproducible. Each crate README's install line and the
