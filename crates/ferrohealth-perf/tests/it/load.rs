@@ -168,3 +168,61 @@ async fn a_request_past_its_timeout_is_a_failure() {
     assert_eq!(5, outcome.failures["read"]["timeout"]);
     assert_eq!(0, outcome.groups["read"].answered);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_send_is_counted_from_its_intended_instant() {
+    // The schedule starts 300 ms in the past, so the first arrival is sent
+    // 300 ms after its intended instant: that wait is its latency and its
+    // lag, though the server answers at once.
+    let server = server(Duration::ZERO).await;
+    let plan = plan("rate = 10.0\nwarmup_secs = 0\nduration_secs = 1", OK);
+    let base = Url::parse(&server.uri()).unwrap();
+    let start = Instant::now()
+        .checked_sub(Duration::from_millis(300))
+        .unwrap();
+    let outcome = drive(
+        &plan,
+        &Endpoints::new(&plan, base.clone(), None).unwrap(),
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        start,
+    )
+    .await
+    .unwrap();
+    let read = &outcome.groups["read"];
+    assert_eq!(10, read.answered);
+    let lag = outcome.lag.max();
+    assert!(lag >= 300_000, "the first send lagged 300 ms: {lag} us");
+    let slowest = read.first.max().max(read.second.max());
+    assert!(
+        slowest >= lag,
+        "its latency counts from the intended instant: {slowest} us"
+    );
+    let median = outcome.lag.value_at_quantile(0.5);
+    assert!(
+        median < 100_000,
+        "the arrivals intended after the start carry none of its lateness: {median} us"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_the_phase_stops_its_schedule() {
+    let server = server(Duration::ZERO).await;
+    let plan = plan("rate = 50.0\nwarmup_secs = 0\nduration_secs = 10", OK);
+    let base = Url::parse(&server.uri()).unwrap();
+    let endpoints = Endpoints::new(&plan, base.clone(), None).unwrap();
+    let client = reqwest::Client::new();
+    let credentials = Credentials::default();
+    let phase = drive(&plan, &endpoints, &client, &credentials, Instant::now());
+    let stopped = tokio::time::timeout(Duration::from_millis(300), phase).await;
+    assert!(stopped.is_err(), "the phase was still running");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let after_drop = server.received_requests().await.unwrap().len();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let later = server.received_requests().await.unwrap().len();
+    assert!(after_drop < 50, "{after_drop} sent by then");
+    assert_eq!(
+        after_drop, later,
+        "nothing is sent once the phase is dropped"
+    );
+}

@@ -89,7 +89,7 @@ ferrohealth-usage-report = { version = "=0.5.0", features = ["telemetry"] }
 The performance gate is a binary:
 
 ```sh
-cargo install ferrohealth-perf --version =0.12.0 --locked
+cargo install ferrohealth-perf --version =0.13.0 --locked
 ```
 
 The release plan of each crate refuses a tag while this page or the crate's

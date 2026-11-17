@@ -33,7 +33,7 @@ use crate::metric;
 use crate::mllp::MllpError;
 use crate::plan::Plan;
 use crate::process::{Probe, ProcessError, Sample, Target};
-use crate::quantile::{QuantileName, quantile};
+use crate::quantile::{QuantileName, max_ms, quantile};
 use crate::report::{
     GroupReport, IdleReport, LoadReport, PlanIdentity, Report, ReportError, SCHEMA, TargetInfo,
 };
@@ -341,7 +341,9 @@ pub(crate) async fn load_phase(
         planned: outcome.planned,
         sent: outcome.sent,
         saturated: outcome.saturated,
+        lag_p50_ms: quantile(&outcome.lag, QuantileName::P50).value_ms(),
         lag_p99_ms: quantile(&outcome.lag, QuantileName::P99).value_ms(),
+        lag_max_ms: max_ms(&outcome.lag),
         max_lag_ms: load.lag_bound_ms(),
         stall_ratio: Some(load.stall_ratio),
         peak_memory_bytes: peak,

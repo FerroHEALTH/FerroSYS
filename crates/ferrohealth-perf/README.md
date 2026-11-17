@@ -60,7 +60,7 @@ socket is never asked. A host without `/proc` reports both as unavailable.
 ## Use
 
 ```sh
-cargo install ferrohealth-perf --version =0.12.0 --locked
+cargo install ferrohealth-perf --version =0.13.0 --locked
 ```
 
 Pin the version exactly, as every FerroHEALTH product does.
@@ -284,9 +284,16 @@ ferrohealth-perf ab --plan perf/plan.toml \
 
 ### The generator's lag
 
-The generator sleeps until each arrival's intended instant and sends it;
-its lag is how late the send starts, and the report holds its p99 over the
-measured window. Every latency is timed from the intended instant, so a
+The generator waits until each arrival's intended instant and sends it;
+its lag is how late the send starts, and the report holds its p50
+(`lag_p50_ms`), its p99 (`lag_p99_ms`) and its largest value
+(`lag_max_ms`) over the measured window, so a run shows how much of each
+latency the generator itself added. The schedule runs on a thread of its
+own: it sleeps on the operating system until a margin before the instant,
+then yields until the instant passes, and the margin follows how late the
+host's sleeps wake. Up to 0.12.0 the generator woke on tokio's timer,
+which rounds a deadline up to its next millisecond tick, so every latency
+carried up to a millisecond of wake lag (#400). Every latency is timed from the intended instant, so a
 lag is charged to the server as latency and hides nothing from it (the
 coordinated-omission correction). What the lag can change is the arrival
 process: the bound keeps it the plan's. It is the plan's `max_lag_ms` or,
@@ -473,7 +480,7 @@ perf:
     FERROHEALTH_PERF_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
   steps:
     - uses: actions/checkout@<sha>
-    - run: cargo install ferrohealth-perf --version =0.12.0 --locked
+    - run: cargo install ferrohealth-perf --version =0.13.0 --locked
     - run: cargo build --release --locked
     - name: Start the server
       run: |

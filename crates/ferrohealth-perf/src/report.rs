@@ -129,10 +129,19 @@ pub struct LoadReport {
     pub sent: u64,
     /// Whether an arrival waited past the saturation limit.
     pub saturated: bool,
+    /// The median of the generator's lag over the measured window, how
+    /// long after its intended instant a send started, in milliseconds,
+    /// when resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_p50_ms: Option<f64>,
     /// The p99 of the generator's lag over the measured window, in
     /// milliseconds, when resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lag_p99_ms: Option<f64>,
+    /// The largest lag of the generator over the measured window, in
+    /// milliseconds, when it sent anything there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_max_ms: Option<f64>,
     /// The limit on that lag, in milliseconds.
     pub max_lag_ms: u64,
     /// The ratio of p99 to p50 above which every group at once marks a
@@ -448,7 +457,9 @@ mod tests {
             planned: 400,
             sent: 400,
             saturated: false,
+            lag_p50_ms: Some(0.05),
             lag_p99_ms: Some(0.5),
+            lag_max_ms: Some(0.8),
             max_lag_ms: 10,
             stall_ratio: Some(10.0),
             peak_memory_bytes: None,
