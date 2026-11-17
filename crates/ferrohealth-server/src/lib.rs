@@ -13,8 +13,9 @@
 //!   supplies, and the panic message reaches neither the body nor the log.
 //! - the request timeout (`408`) and the body limit (`413`);
 //! - [`overload`]: past `max_concurrent_requests` (256 by default, always
-//!   on) a request is answered
-//!   `503` with `Retry-After`, and the health routes are never refused;
+//!   on) a request waits up to `admission_wait` (100 ms) in a queue of
+//!   `max_waiting_requests` (256), then is answered `503` with
+//!   `Retry-After`; the health routes are never refused or queued;
 //! - [`client_address`]: the address a request came from, read behind the
 //!   trusted proxies;
 //! - gzip and Brotli response compression, on by default;

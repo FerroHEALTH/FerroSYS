@@ -9,6 +9,7 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::handler::Handler;
 use ferrohealth_telemetry::request_log::RequestLog;
+use opentelemetry::metrics::Meter;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
@@ -24,7 +25,8 @@ use crate::refusal::{self, RefusalBody};
 use crate::section::ServerSection;
 
 /// What a product decides inside the stack: the body of a panicked request,
-/// the body of a refusal and the request log with its recorders.
+/// the body of a refusal, the request log with its recorders and the meter
+/// of the stack's own metrics.
 #[derive(Clone)]
 pub struct StackPolicy {
     /// The body of a panicked request.
@@ -33,12 +35,17 @@ pub struct StackPolicy {
     pub refusal_body: RefusalBody,
     /// The request log.
     pub request_log: RequestLog,
+    /// The meter the admission records its waits and refusals in
+    /// ([`crate::overload::Admission::with_metrics`]), such as
+    /// `Telemetry::meter`'s; unset, they are not recorded.
+    pub meter: Option<Meter>,
 }
 
 impl std::fmt::Debug for StackPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StackPolicy")
             .field("request_log", &self.request_log)
+            .field("meter", &self.meter)
             .finish_non_exhaustive()
     }
 }
@@ -49,6 +56,7 @@ impl Default for StackPolicy {
             panic_body: panic::default_body(),
             refusal_body: Arc::clone(&refusal::DEFAULT_BODY),
             request_log: RequestLog::default(),
+            meter: None,
         }
     }
 }
@@ -60,7 +68,7 @@ impl Default for StackPolicy {
 /// rendering, the panic rendering, the panic catch, the request timeout
 /// (`408`), the body limit (`413`, and the same ceiling for every
 /// extractor), the response compression when it is on, then the routes,
-/// the product's behind the overload bound when one is configured.
+/// the product's behind the overload bound and its queue.
 /// Every request leaves one request line, a refusal and a panic included.
 ///
 /// It is [`Stack::new`] with nothing beside the base path, and a request no
@@ -194,7 +202,12 @@ impl Stack {
             beside,
             fallback,
         } = self;
-        let admission = Admission::new(section.max_concurrent_requests, section.retry_after.get());
+        let admission = Admission::new(section.max_concurrent_requests, section.retry_after.get())
+            .with_queue(section.max_waiting_requests, section.admission_wait.get());
+        let admission = match &policy.meter {
+            Some(meter) => admission.with_metrics(meter),
+            None => admission,
+        };
         let product = bounded(product, &admission);
         let routes = health::routes(health).merge(product);
         let routes = if section.base_path.as_str().is_empty() {
