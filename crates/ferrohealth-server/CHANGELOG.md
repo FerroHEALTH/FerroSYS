@@ -10,6 +10,34 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-17
+
+### Changed
+
+- Breaking: a request past `max_concurrent_requests` waits for a slot
+  before it is refused. It waits at most `[server] admission_wait` (100 ms
+  by default) in a first-come first-served queue of at most
+  `[server] max_waiting_requests` places (256 by default; `0`, or a zero
+  wait, keeps no queue), and a full queue or an expired wait is answered
+  `503` with `Retry-After` as before. The requests in flight and waiting
+  never exceed the two bounds, the health routes are never refused or
+  queued, and the wait counts in the request's latency. At 2000 rps a
+  server-side stall of 110 to 150 ms piled up about 300 requests in
+  FerroEHR, and the bound refused the excess though the server answered a
+  few hundred milliseconds later. `ServerSection` gains the two fields and
+  `StackPolicy` gains `meter`; a struct literal that names every field adds
+  them, or takes `..Default::default()` (#403).
+
+### Added
+
+- With `StackPolicy::meter` set, the admission records the requests that
+  waited (`ferrohealth.server.admission.waits`), the time each waited by
+  outcome (`ferrohealth.server.admission.wait.duration`, `admitted` or
+  `expired`) and the refusals by reason
+  (`ferrohealth.server.admission.refusals`, `queue_full` or
+  `wait_expired`). `overload::Admission` gains `with_queue` and
+  `with_metrics` (#403).
+
 ## [0.10.0] - 2026-11-15
 
 ### Changed
@@ -705,7 +733,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.10.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.11.0...HEAD
+[0.11.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.10.0...ferrohealth-server-v0.11.0
 [0.10.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.9.0...ferrohealth-server-v0.10.0
 [0.9.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.4...ferrohealth-server-v0.9.0
 [0.8.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.3...ferrohealth-server-v0.8.4

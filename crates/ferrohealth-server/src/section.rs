@@ -64,12 +64,28 @@ pub struct ServerSection {
     pub drain_delay: Duration,
     /// How long the requests in flight may take once the listener closed.
     pub shutdown_timeout: Duration,
-    /// How many requests the server serves at once; past it a request is
-    /// answered `503` with `Retry-After` at once, never queued, so offered
-    /// load beyond capacity cannot grow the server's memory. Always bounded,
-    /// 256 by default ([`DEFAULT_MAX_CONCURRENT_REQUESTS`]); never zero.
+    /// How many requests the server serves at once; past it a request
+    /// waits for a slot in the queue `max_waiting_requests` bounds, and is
+    /// answered `503` with `Retry-After` when the queue is full or the wait
+    /// expires, so offered load beyond capacity cannot grow the server's
+    /// memory. Always bounded, 256 by default
+    /// ([`DEFAULT_MAX_CONCURRENT_REQUESTS`]); never zero.
     #[cfg_attr(feature = "schema", schemars(with = "u64", range(min = 1)))]
     pub max_concurrent_requests: NonZeroUsize,
+    /// How many requests past `max_concurrent_requests` may wait for a slot
+    /// at once, first come first served; zero keeps no queue and refuses a
+    /// request past the bound at once. 256 by default, the default of
+    /// `max_concurrent_requests`, so the requests held never exceed twice
+    /// the bound (no specification governs this: our own design).
+    #[cfg_attr(feature = "schema", schemars(with = "u64"))]
+    pub max_waiting_requests: usize,
+    /// How long a request past `max_concurrent_requests` waits for a slot
+    /// before it is answered `503`; zero keeps no queue. 100 ms by default:
+    /// FerroEHR's server-side stalls of 110 to 150 ms at 2000 rps (a WAL
+    /// flush) are mostly drained within it, and a client waits little
+    /// longer for a refusal (no specification governs this: our own
+    /// design). The wait counts in the request's latency.
+    pub admission_wait: Duration,
     /// How long a refused request is told to wait (`Retry-After`), a whole
     /// number of seconds, since the header carries delay-seconds (RFC 9110
     /// §10.2.3).
@@ -161,6 +177,8 @@ struct RawServer {
     drain_delay: Duration,
     shutdown_timeout: Duration,
     max_concurrent_requests: NonZeroUsize,
+    max_waiting_requests: usize,
+    admission_wait: Duration,
     retry_after: Duration,
     tls: Option<TlsSection>,
     trusted_proxies: Vec<crate::client_address::TrustedProxy>,
@@ -183,6 +201,8 @@ impl Default for RawServer {
             drain_delay: section.drain_delay,
             shutdown_timeout: section.shutdown_timeout,
             max_concurrent_requests: section.max_concurrent_requests,
+            max_waiting_requests: section.max_waiting_requests,
+            admission_wait: section.admission_wait,
             retry_after: section.retry_after,
             tls: section.tls,
             trusted_proxies: section.trusted_proxies,
@@ -242,6 +262,8 @@ impl TryFrom<RawServer> for ServerSection {
             drain_delay: raw.drain_delay,
             shutdown_timeout: raw.shutdown_timeout,
             max_concurrent_requests: raw.max_concurrent_requests,
+            max_waiting_requests: raw.max_waiting_requests,
+            admission_wait: raw.admission_wait,
             retry_after: raw.retry_after,
             tls: raw.tls,
             trusted_proxies: raw.trusted_proxies,
@@ -352,6 +374,8 @@ impl Default for ServerSection {
             drain_delay: Duration::ZERO,
             shutdown_timeout: Duration::from_secs(10),
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            max_waiting_requests: DEFAULT_MAX_CONCURRENT_REQUESTS.get(),
+            admission_wait: Duration::from_millis(100),
             retry_after: Duration::from_secs(1),
             tls: None,
             trusted_proxies: Vec::new(),

@@ -50,6 +50,24 @@ fn the_overload_bound_is_on_by_default_at_256() {
 }
 
 #[test]
+fn the_admission_queue_defaults_to_the_bound_and_100_ms_and_reads_its_keys() {
+    let section = load("").expect("an empty file loads");
+    assert_eq!(
+        (256, Duration::from_millis(100)),
+        (section.max_waiting_requests, section.admission_wait)
+    );
+    let section = load("[server]\nmax_waiting_requests = 0\nadmission_wait = \"250ms\"\n")
+        .expect("the section loads");
+    assert_eq!(
+        (0, Duration::from_millis(250)),
+        (section.max_waiting_requests, section.admission_wait),
+        "zero places is no queue"
+    );
+    let error = load("[server]\nadmission_wait_ms = 100\n").expect_err("an unknown key");
+    assert!(error.to_string().contains("admission_wait_ms"), "{error}");
+}
+
+#[test]
 fn a_partial_table_keeps_the_product_defaults_and_the_operator_wins() {
     let product = ServerSection {
         listen: "0.0.0.0:8080".parse().expect("an address"),

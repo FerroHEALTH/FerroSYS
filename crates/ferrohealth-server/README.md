@@ -19,8 +19,10 @@ runs the same stack, the same health routes and the same shutdown.
     the body the product supplies, such as a FHIR `OperationOutcome`, which
     may answer a status of its own with `refusal::keep_status`;
   - the overload bound, always on: past `max_concurrent_requests` (256 by
-    default) a request is answered
-    `503` with `Retry-After`, and the health routes are never refused;
+    default) a request waits for a slot up to `admission_wait` (100 ms) in
+    a first-come queue of `max_waiting_requests` (256), and is answered
+    `503` with `Retry-After` when the queue is full or the wait expires;
+    the health routes are never refused or queued;
   - the request log of `ferrohealth-telemetry`, one line for every request,
     a refusal and a panic included.
   - the security headers of an API response, outermost, so the stack's
@@ -97,7 +99,7 @@ runs the same stack, the same health routes and the same shutdown.
 
 ```toml
 [dependencies]
-ferrohealth-server = "=0.10.0"
+ferrohealth-server = "=0.11.0"
 ```
 
 Start the telemetry with `telemetry::install` (feature `otlp`), which also

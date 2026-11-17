@@ -82,14 +82,14 @@ ferrohealth-secret = "=0.2.1"
 ferrohealth-config = "=0.4.5"
 ferrohealth-telemetry = { version = "=0.5.0", features = ["otlp", "prometheus", "axum"] }
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
-ferrohealth-server = { version = "=0.10.0", features = ["otlp"] }
+ferrohealth-server = { version = "=0.11.0", features = ["otlp"] }
 ferrohealth-usage-report = { version = "=0.5.0", features = ["telemetry"] }
 ```
 
 The performance gate is a binary:
 
 ```sh
-cargo install ferrohealth-perf --version =0.13.0 --locked
+cargo install ferrohealth-perf --version =0.14.0 --locked
 ```
 
 The release plan of each crate refuses a tag while this page or the crate's
