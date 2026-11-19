@@ -90,7 +90,7 @@ rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"
 # Verified against crates.io on 2026-10-26.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
-jsonschema = { version = "0.60.1", default-features = false }
+jsonschema = { version = "0.61.2", default-features = false }
 wiremock = "0.6.5"
 # ferrohealth-server feature `revocation`: the X.509 certificate and CRL
 # model with its DER codec, the RFC 6960 OCSP request and response types on
