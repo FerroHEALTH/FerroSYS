@@ -10,6 +10,14 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-21
+
+### Changed
+
+- The gate builds on ferrohealth-server 0.12, which can decode a gzip or
+  Brotli request body; the CLI, its flags and its report are unchanged
+  (#408).
+
 ## [0.14.0] - 2026-11-17
 
 ### Changed
@@ -366,7 +374,8 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   `$GITHUB_STEP_SUMMARY`, and the host fingerprint with a warning when it
   differs from the baseline's (#249).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.14.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.15.0...HEAD
+[0.15.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.14.0...ferrohealth-perf-v0.15.0
 [0.14.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.13.0...ferrohealth-perf-v0.14.0
 [0.13.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.12.0...ferrohealth-perf-v0.13.0
 [0.12.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.11.0...ferrohealth-perf-v0.12.0

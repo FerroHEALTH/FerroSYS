@@ -105,6 +105,15 @@ pub struct ServerSection {
     pub compression: bool,
     /// The smallest response body that is compressed.
     pub compression_min_size: ByteSize,
+    /// Whether a request body in `Content-Encoding: gzip` or `br` is
+    /// decoded before a handler reads it. On, any other coding is refused
+    /// `415` with `Accept-Encoding` (RFC 9110 §15.5.16, RFC 7694 §3), and
+    /// `body_limit` holds the decoded bytes too: a body that decodes past
+    /// it is refused `413` and the rest is never decoded. Off by default:
+    /// decoding spends server CPU a client chose to save on its upload,
+    /// and a product turns it on (no specification governs this: our own
+    /// design).
+    pub request_decompression: bool,
 }
 
 /// The `[server.caller_rate]` table: the steady rate and the burst one caller
@@ -186,6 +195,7 @@ struct RawServer {
     caller_rate: Option<CallerRate>,
     compression: bool,
     compression_min_size: ByteSize,
+    request_decompression: bool,
 }
 
 impl Default for RawServer {
@@ -210,6 +220,7 @@ impl Default for RawServer {
             caller_rate: section.caller_rate,
             compression: section.compression,
             compression_min_size: section.compression_min_size,
+            request_decompression: section.request_decompression,
         }
     }
 }
@@ -271,6 +282,7 @@ impl TryFrom<RawServer> for ServerSection {
             caller_rate: raw.caller_rate,
             compression: raw.compression,
             compression_min_size: raw.compression_min_size,
+            request_decompression: raw.request_decompression,
         })
     }
 }
@@ -383,6 +395,7 @@ impl Default for ServerSection {
             caller_rate: None,
             compression: true,
             compression_min_size: ByteSize::from_kib(1),
+            request_decompression: false,
         }
     }
 }

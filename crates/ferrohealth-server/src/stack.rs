@@ -17,6 +17,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::api_headers;
 use crate::client_address::Forwarding;
+use crate::decoding::DecodeLayer;
 use crate::edge::{self, EdgeLayer, IdentifyLayer};
 use crate::health::{self, Health};
 use crate::overload::{self, Admission};
@@ -31,7 +32,8 @@ use crate::section::ServerSection;
 pub struct StackPolicy {
     /// The body of a panicked request.
     pub panic_body: PanicBody,
-    /// The body of a refusal the stack writes: `408`, `413`, `429`, `503`.
+    /// The body of a refusal the stack writes: `408`, `413`, `415`, `429`,
+    /// `503`, and the `400` of an encoded body that does not decode.
     pub refusal_body: RefusalBody,
     /// The request log.
     pub request_log: RequestLog,
@@ -67,8 +69,10 @@ impl Default for StackPolicy {
 /// the request id, the request log, the client address, the refusal
 /// rendering, the panic rendering, the panic catch, the request timeout
 /// (`408`), the body limit (`413`, and the same ceiling for every
-/// extractor), the response compression when it is on, then the routes,
-/// the product's behind the overload bound and its queue.
+/// extractor), the request decoding when it is on (`415` for a coding it
+/// does not decode, and the body limit on the decoded bytes), the response
+/// compression when it is on, then the routes, the product's behind the
+/// overload bound and its queue.
 /// Every request leaves one request line, a refusal and a panic included.
 ///
 /// It is [`Stack::new`] with nothing beside the base path, and a request no
@@ -251,6 +255,7 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         refusal_body: policy.refusal_body,
         timeout: section.request_timeout.get(),
         body_limit: section.body_limit_bytes(),
+        decoding: section.request_decompression,
     });
     let transport = api_headers::Transport {
         tls: section.tls.is_some(),
@@ -265,6 +270,13 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         .layer(edge)
         .layer(RequestBodyLimitLayer::new(section.body_limit_bytes()))
         .layer(DefaultBodyLimit::max(section.body_limit_bytes()));
+    // NOTE: axum `Router::layer` wraps the routes in order, so the decoder sits innermost,
+    // inside the wire body limit, and the edge has admitted the coding it reads.
+    let routes = if section.request_decompression {
+        routes.layer(DecodeLayer)
+    } else {
+        routes
+    };
     if section.compression {
         routes.layer(
             outer.layer(

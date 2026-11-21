@@ -5,6 +5,7 @@
 //! helpers every test of it shares.
 
 mod admission;
+mod decoding;
 mod headers;
 mod lines;
 mod refusals;

@@ -118,6 +118,13 @@ fn a_bad_listen_address_base_path_or_zero_bound_is_refused_at_load() {
 }
 
 #[test]
+fn request_decompression_is_off_by_default_and_reads_its_key() {
+    assert!(!ServerSection::default().request_decompression);
+    let section = load("[server]\nrequest_decompression = true\n").expect("the key loads");
+    assert!(section.request_decompression);
+}
+
+#[test]
 fn the_proxy_rate_and_compression_keys_load() {
     let section = load(
         "[server]\ntrusted_proxies = [\"10.0.0.0/8\", \"::1\"]\nforwarded_header = \"x-forwarded-for\"\ncompression = false\n\n[server.caller_rate]\nrequests_per_second = 5\nburst = 10\n",

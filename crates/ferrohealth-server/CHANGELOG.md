@@ -10,6 +10,25 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-21
+
+### Added
+
+- Breaking: `[server] request_decompression`, off by default, decodes a
+  request body sent with `Content-Encoding: gzip` (or `x-gzip`) or `br`
+  before a handler reads it. On, any other coding, or more than one, is
+  refused `415 Unsupported Media Type` with `Accept-Encoding: gzip, br`
+  (RFC 9110 §15.5.16, RFC 7694 §3); `body_limit` holds the decoded bytes
+  as well as the wire bytes, so a body that decodes past it is refused
+  `413` and the rest is never decoded; and a stream that does not decode
+  is answered `400` by the body extractor. The `415`, and the `413` and
+  `400` a body extractor raises for a decoded body, are written with the
+  product's `RefusalBody` (`refusal::UNSUPPORTED_CODING`,
+  `refusal::UNDECODABLE`). Off, a request is served as before. FerroEHR
+  measured an IPS composition commit at 128,474 B and 8,483 B in gzip.
+  `ServerSection` gains the field; a struct literal that names every field
+  adds it, or takes `..Default::default()` (#408).
+
 ## [0.11.0] - 2026-11-17
 
 ### Changed
@@ -733,7 +752,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.11.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.0...HEAD
+[0.12.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.11.0...ferrohealth-server-v0.12.0
 [0.11.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.10.0...ferrohealth-server-v0.11.0
 [0.10.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.9.0...ferrohealth-server-v0.10.0
 [0.9.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.8.4...ferrohealth-server-v0.9.0
