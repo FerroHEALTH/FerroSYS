@@ -36,7 +36,7 @@ jobs:
     # The PostgreSQL of the ferrohealth-perf cases, as in ci.yml's nextest job.
     services:
       postgres:
-        image: postgres:18.6@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583
+        image: postgres:19.0@sha256:bb6e70add742cd868fb62cb3b2f67d1dd2bdd2b65a521e778420748753687c60
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:

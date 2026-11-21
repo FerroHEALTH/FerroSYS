@@ -472,7 +472,7 @@ perf:
   runs-on: ubuntu-24.04
   services:
     postgres:
-      image: postgres:18.6@sha256:<digest>
+      image: postgres:19.0@sha256:<digest>
       env:
         POSTGRES_HOST_AUTH_METHOD: trust
       ports: ["5432:5432"]
