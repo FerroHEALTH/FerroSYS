@@ -15,7 +15,12 @@ runs the same stack, the same health routes and the same shutdown.
   - the panic catch: a `500` with the body the product supplies, and no
     panic message in the body or the log;
   - the request timeout (`408`) and the body limit (`413`);
-  - the refusals the stack writes itself (`408`, `413`, `429`, `503`) in
+  - with `request_decompression` on (off by default), a request body in
+    `Content-Encoding: gzip` or `br` decoded before the handler reads it,
+    any other coding refused `415` with `Accept-Encoding`, and the body
+    limit held on the decoded bytes, so a body that decodes past it is
+    refused `413` without decoding the rest;
+  - the refusals the stack writes itself (`408`, `413`, `415`, `429`, `503`) in
     the body the product supplies, such as a FHIR `OperationOutcome`, which
     may answer a status of its own with `refusal::keep_status`;
   - the overload bound, always on: past `max_concurrent_requests` (256 by
@@ -63,7 +68,7 @@ runs the same stack, the same health routes and the same shutdown.
 - `section::ServerSection` is the `[server]` section, with the listener's
   TLS (mutual TLS, reload on `SIGHUP`, TLS 1.3 unless `min_version`
   lowers it to 1.2), the trusted proxies, the caller
-  rate and the compression.
+  rate, the response compression and the request decoding.
 - `serve::run_with_tls` and `serve::Listener::with_reloadable_tls` serve
   a `tls::ReloadableTls` the product keeps and reloads from its own reload
   path; `tls::TlsKeys` (`tls_keys!("metrics.tls")`) names the table a
@@ -99,7 +104,7 @@ runs the same stack, the same health routes and the same shutdown.
 
 ```toml
 [dependencies]
-ferrohealth-server = "=0.11.0"
+ferrohealth-server = "=0.12.0"
 ```
 
 Start the telemetry with `telemetry::install` (feature `otlp`), which also

@@ -18,7 +18,9 @@
 //!   `Retry-After`; the health routes are never refused or queued;
 //! - [`client_address`]: the address a request came from, read behind the
 //!   trusted proxies;
-//! - gzip and Brotli response compression, on by default;
+//! - gzip and Brotli response compression, on by default, and the decoding
+//!   of a gzip or Brotli request body under the same body limit, off by
+//!   default (`request_decompression`);
 //! - [`api_headers`]: the security headers of an API response, outermost,
 //!   so the stack's own refusals carry them too;
 //! - the request log of `ferrohealth-telemetry`;
@@ -60,6 +62,7 @@ pub mod cli;
 pub mod client_address;
 #[cfg(feature = "console")]
 pub mod console;
+mod decoding;
 mod edge;
 pub mod health;
 pub mod healthcheck;

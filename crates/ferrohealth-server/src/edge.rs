@@ -3,8 +3,9 @@
 
 //! The outer services of the stack: [`Identify`] mints the request id, and
 //! [`Edge`], inside the request log, reads the client address, catches a
-//! panic, bounds the request time and the declared body, and renders every
-//! refusal and panic, as one service with one unboxed future.
+//! panic, bounds the request time and the declared body, admits the
+//! request's content coding when decoding is on, and renders every refusal
+//! and panic, as one service with one unboxed future.
 //!
 //! Each of these was its own layer, and a stack of `axum::middleware`
 //! layers boxes a future and clones the services inside it for every
@@ -28,10 +29,12 @@ use axum::extract::ConnectInfo;
 use axum::response::Response;
 use ferrohealth_telemetry::request_log::RequestId;
 use http::{HeaderValue, Request, StatusCode, Uri};
+use http_body_util::LengthLimitError;
 use hyper::body::{Frame, SizeHint};
 use tokio::time::{Instant, Sleep};
 
 use crate::client_address::{ClientAddress, Forwarding};
+use crate::decoding::{self, Watch};
 use crate::panic::{self, PanicBody};
 use crate::refusal::{self, RefusalBody};
 use crate::request_id::{self, RequestIds};
@@ -48,6 +51,8 @@ pub(crate) struct Settings {
     pub(crate) timeout: Duration,
     /// The body limit, in bytes.
     pub(crate) body_limit: usize,
+    /// Whether a gzip or Brotli request body is decoded.
+    pub(crate) decoding: bool,
 }
 
 /// The layer that mints the request id, outside the request log.
@@ -130,8 +135,11 @@ struct Answer {
     uri: Uri,
     id: RequestId,
     client: Option<HeaderValue>,
-    /// Set once a body with no declared length passed the limit.
+    /// Set once a body with no declared length, or a decoded body, passed
+    /// the limit.
     over_limit: Option<Arc<AtomicBool>>,
+    /// Set once an encoded body failed to decode.
+    failed: Option<Arc<AtomicBool>>,
 }
 
 impl Answer {
@@ -211,6 +219,22 @@ where
             .and_then(|value| value.to_str().ok()?.parse::<usize>().ok());
         let limit = self.settings.body_limit;
         let watched_limit = u64::try_from(limit).unwrap_or(u64::MAX);
+        let coding = if self.settings.decoding {
+            decoding::admit(request.headers_mut())
+        } else {
+            Ok(false)
+        };
+        let decoded = if coding.as_ref().is_ok_and(|encoded| *encoded) {
+            let watch = Watch {
+                limit,
+                over: Arc::new(AtomicBool::new(false)),
+                failed: Arc::new(AtomicBool::new(false)),
+            };
+            request.extensions_mut().insert(watch.clone());
+            Some(watch)
+        } else {
+            None
+        };
         let over_limit = match declared {
             Some(_) => None,
             None if request
@@ -222,19 +246,31 @@ where
                 None
             }
             None => {
-                let over = Arc::new(AtomicBool::new(false));
+                let over = decoded.as_ref().map_or_else(
+                    || Arc::new(AtomicBool::new(false)),
+                    |watch| Arc::clone(&watch.over),
+                );
                 let flag = Arc::clone(&over);
                 request = request.map(|body| Body::new(Watched::new(body, watched_limit, flag)));
                 Some(over)
             }
         };
+        let over_limit =
+            over_limit.or_else(|| decoded.as_ref().map(|watch| Arc::clone(&watch.over)));
         let answer = Answer {
             settings: Arc::clone(&self.settings),
             uri: request.uri().clone(),
             id,
             client,
             over_limit,
+            failed: decoded.map(|watch| watch.failed),
         };
+        if coding.is_err() {
+            return EdgeFuture {
+                state: State::Unsupported,
+                answer,
+            };
+        }
         if declared.is_some_and(|length| length > limit) {
             return EdgeFuture {
                 state: State::TooLarge,
@@ -279,6 +315,7 @@ pin_project_lite::pin_project! {
             payload: Option<Box<dyn Any + Send + 'static>>,
         },
         TooLarge,
+        Unsupported,
     }
 }
 
@@ -332,22 +369,40 @@ where
             StateProjection::TooLarge => Poll::Ready(Ok(
                 answer.refusal(StatusCode::PAYLOAD_TOO_LARGE, refusal::TOO_LARGE)
             )),
+            StateProjection::Unsupported => {
+                // NOTE: RFC 7694 §3, a 415 for a content coding names the codings the server
+                // accepts in Accept-Encoding.
+                let mut refused = answer.refusal(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    refusal::UNSUPPORTED_CODING,
+                );
+                refused
+                    .headers_mut()
+                    .insert(http::header::ACCEPT_ENCODING, decoding::ACCEPTED);
+                Poll::Ready(Ok(refused))
+            }
         }
     }
 }
 
 /// A response from inside the stack: a refusal [`refusal::refused`] marked,
-/// and a `413` raised once a streamed body passed the limit, are written in
-/// the product's shape, and any other is the handler's own.
+/// a `413` raised once a streamed or decoded body passed the limit, and a
+/// `400` raised once an encoded body failed to decode, are written in the
+/// product's shape, and any other is the handler's own.
 fn answered(answer: &Answer, response: Response) -> Response {
     let reason = refusal::reason(&response).or_else(|| {
-        let streamed_over = response.status() == StatusCode::PAYLOAD_TOO_LARGE
-            && !Arc::ptr_eq(&answer.settings.refusal_body, &refusal::DEFAULT_BODY)
-            && answer
-                .over_limit
-                .as_ref()
-                .is_some_and(|over| over.load(Ordering::Relaxed));
-        streamed_over.then_some(refusal::TOO_LARGE)
+        if Arc::ptr_eq(&answer.settings.refusal_body, &refusal::DEFAULT_BODY) {
+            return None;
+        }
+        let marked = |flag: &Option<Arc<AtomicBool>>| {
+            flag.as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        };
+        match response.status() {
+            StatusCode::PAYLOAD_TOO_LARGE if marked(&answer.over_limit) => Some(refusal::TOO_LARGE),
+            StatusCode::BAD_REQUEST if marked(&answer.failed) => Some(refusal::UNDECODABLE),
+            _ => None,
+        }
     });
     match reason {
         Some(reason) => refusal::rewrite(
@@ -361,52 +416,100 @@ fn answered(answer: &Answer, response: Response) -> Response {
     }
 }
 
-/// A request body with no declared length, which marks when more than the
-/// limit has been read from it; the body limit inside the edge refuses it.
-struct Watched {
-    inner: Body,
-    seen: u64,
-    limit: u64,
-    over: Arc<AtomicBool>,
+pin_project_lite::pin_project! {
+    /// A request body that marks when more than the limit has been read
+    /// from it: a body with no declared length, which the body limit inside
+    /// the edge refuses, or a decoded body inside its own limit, which also
+    /// marks a stream that failed to decode and ends at its first error.
+    pub(crate) struct Watched<B> {
+        #[pin]
+        inner: B,
+        seen: u64,
+        limit: u64,
+        over: Arc<AtomicBool>,
+        failed: Option<Arc<AtomicBool>>,
+        ended: bool,
+    }
 }
 
-impl Watched {
+impl<B> Watched<B> {
     /// Watches `inner` against `limit` bytes, marking `over`.
-    fn new(inner: Body, limit: u64, over: Arc<AtomicBool>) -> Self {
+    fn new(inner: B, limit: u64, over: Arc<AtomicBool>) -> Self {
         Self {
             inner,
             seen: 0,
             limit,
             over,
+            failed: None,
+            ended: false,
+        }
+    }
+
+    /// Watches the decoded body `inner` for the edge's `watch`.
+    pub(crate) fn decoded(inner: B, watch: Watch) -> Self {
+        Self {
+            failed: Some(watch.failed),
+            ..Self::new(
+                inner,
+                u64::try_from(watch.limit).unwrap_or(u64::MAX),
+                watch.over,
+            )
         }
     }
 }
 
-impl HttpBody for Watched {
+impl<B> HttpBody for Watched<B>
+where
+    B: HttpBody<Data = Bytes>,
+    B::Error: Into<BoxError>,
+{
     type Data = Bytes;
-    type Error = axum::Error;
+    type Error = BoxError;
 
     fn poll_frame(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.get_mut();
-        let polled = std::task::ready!(Pin::new(&mut this.inner).poll_frame(cx));
-        if let Some(Ok(frame)) = &polled
-            && let Some(data) = frame.data_ref()
-        {
-            this.seen = this
-                .seen
-                .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
-            if this.seen > this.limit {
-                this.over.store(true, Ordering::Relaxed);
+        let this = self.project();
+        if *this.ended {
+            return Poll::Ready(None);
+        }
+        let polled = match std::task::ready!(this.inner.poll_frame(cx)) {
+            Some(Ok(frame)) => Some(Ok(frame)),
+            Some(Err(error)) => Some(Err(error.into())),
+            None => None,
+        };
+        match &polled {
+            Some(Ok(frame)) => {
+                if let Some(data) = frame.data_ref() {
+                    *this.seen = this
+                        .seen
+                        .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+                    if *this.seen > *this.limit {
+                        this.over.store(true, Ordering::Relaxed);
+                    }
+                }
             }
+            Some(Err(error)) => {
+                if let Some(failed) = this.failed {
+                    *this.ended = true;
+                    // NOTE: no specification governs this: our own design; the decoder hands
+                    // back the wire limit's error as it is, so both limits read as one `413`.
+                    let mark = if error.is::<LengthLimitError>() {
+                        &*this.over
+                    } else {
+                        &**failed
+                    };
+                    mark.store(true, Ordering::Relaxed);
+                }
+            }
+            None => {}
         }
         Poll::Ready(polled)
     }
 
     fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
+        self.ended || self.inner.is_end_stream()
     }
 
     fn size_hint(&self) -> SizeHint {

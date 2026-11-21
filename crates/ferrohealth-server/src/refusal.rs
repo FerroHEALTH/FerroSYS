@@ -5,14 +5,16 @@
 //!
 //! The stack refuses a request that runs past the request timeout (`408`),
 //! one whose declared body is larger than the limit (`413`), one past the
-//! overload bound (`503`) and one past its caller's rate (`429`). A product
+//! overload bound (`503`), one past its caller's rate (`429`) and, with
+//! request decoding on, one in a content coding it does not decode (`415`). A product
 //! answers every error in one shape, such as a FHIR `OperationOutcome` (FHIR
 //! R4, `http.html`), so [`render`] writes each of these refusals
 //! with the product's [`RefusalBody`], keeping the `Retry-After` header and
 //! the status, unless the body chose its own with [`keep_status`]. A `413`
-//! a body extractor raises because the body passed the limit is written with
-//! a product's body too; any other response a handler wrote is never
-//! rewritten. No specification governs the rest: our own design.
+//! a body extractor raises because the body passed the limit, or its decoded
+//! bytes did, and a `400` it raises because an encoded body did not decode,
+//! are written with a product's body too; any other response a handler
+//! wrote is never rewritten. No specification governs the rest: our own design.
 
 use std::sync::{Arc, LazyLock};
 
@@ -76,6 +78,13 @@ pub const TIMEOUT: &str = "the request took longer than the server allows";
 
 /// The reason of a body larger than the limit.
 pub const TOO_LARGE: &str = "the request body is larger than the server reads";
+
+/// The reason of a body in a content coding the server does not decode.
+pub const UNSUPPORTED_CODING: &str =
+    "the request body is in a content coding the server does not decode";
+
+/// The reason of an encoded body that does not decode.
+pub const UNDECODABLE: &str = "the request body does not decode in its content coding";
 
 /// The marker of a refusal the stack wrote, with its reason.
 #[derive(Debug, Clone, Copy)]
