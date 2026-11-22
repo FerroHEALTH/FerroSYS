@@ -91,6 +91,10 @@ pub struct PlanIdentity {
     pub requests: u64,
     /// The request groups, sorted.
     pub groups: Vec<String>,
+    /// The seed the per-arrival variables were drawn from, when the plan
+    /// has any ([`crate::template`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 /// The idle phase.

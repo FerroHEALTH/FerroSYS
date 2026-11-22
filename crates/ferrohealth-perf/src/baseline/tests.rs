@@ -11,6 +11,7 @@ fn plan() -> PlanIdentity {
         duration_secs: 60,
         requests: 2,
         groups: vec!["read".to_owned()],
+        seed: None,
     }
 }
 

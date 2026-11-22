@@ -181,6 +181,21 @@ impl Message {
         })
     }
 
+    /// The message of the text before its MSH-10 and the text after it.
+    pub(crate) fn from_parts(before: Vec<u8>, after: Vec<u8>) -> Self {
+        Self { before, after }
+    }
+
+    /// The text before the MSH-10.
+    pub(crate) fn before(&self) -> &[u8] {
+        &self.before
+    }
+
+    /// The text after the MSH-10.
+    pub(crate) fn after(&self) -> &[u8] {
+        &self.after
+    }
+
     /// The MLLP frame of the message with `control_id` as its MSH-10.
     #[must_use]
     pub fn framed(&self, control_id: &str) -> Vec<u8> {
@@ -369,6 +384,12 @@ impl Sender {
     #[must_use]
     pub fn message(&self, index: usize) -> Option<&Arc<Message>> {
         self.messages.get(index)
+    }
+
+    /// The messages of the plan, in order.
+    #[must_use]
+    pub fn messages(&self) -> &[Arc<Message>] {
+        &self.messages
     }
 
     /// The listener's address, `host:port`.

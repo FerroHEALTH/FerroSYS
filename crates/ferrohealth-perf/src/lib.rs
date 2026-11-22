@@ -20,7 +20,8 @@
 //!
 //! The modules, in the order a run uses them:
 //!
-//! - [`plan`]: `perf/plan.toml`, the limits, the load and the request set.
+//! - [`plan`]: `perf/plan.toml`, the limits, the load and the request set,
+//!   with [`template`] drawing each arrival's own values.
 //! - [`process`] and [`database`]: the server's CPU and memory from `/proc`
 //!   or its cgroup, and the database's transactions from
 //!   `pg_stat_database`.
@@ -52,4 +53,5 @@ pub mod quantile;
 pub mod report;
 pub mod run;
 pub mod summary;
+pub mod template;
 pub mod values;
