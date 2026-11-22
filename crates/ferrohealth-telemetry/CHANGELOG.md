@@ -10,6 +10,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-22
+
 ### Changed
 
 - The `json` console no longer renders a span's fields, which no `json`
@@ -269,7 +271,8 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
   path, a header value, an unlisted query value or the client's request id;
   a `Recorder` sees every finished request (#15).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.5.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.5.1...HEAD
+[0.5.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.5.0...ferrohealth-telemetry-v0.5.1
 [0.5.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.2...ferrohealth-telemetry-v0.5.0
 [0.4.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.1...ferrohealth-telemetry-v0.4.2
 [0.4.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-telemetry-v0.4.0...ferrohealth-telemetry-v0.4.1
