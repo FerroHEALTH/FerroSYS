@@ -73,6 +73,7 @@ pub(crate) fn report() -> Report {
             duration_secs: 10,
             requests: 1,
             groups: vec!["read".to_owned()],
+            seed: None,
         },
         idle: IdleReport {
             duration_secs: 60.0,

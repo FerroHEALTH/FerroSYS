@@ -41,6 +41,8 @@ use crate::histogram;
 use crate::mllp::{Message, MllpError, Sender};
 use crate::plan::{LoadSettings, Plan, Request};
 use crate::quantile::exact_f64;
+use crate::template::render::Renderer;
+use crate::template::{TemplateError, Templates};
 
 /// What one group recorded over the measured window.
 #[derive(Debug, Clone)]
@@ -97,6 +99,20 @@ pub enum LoadError {
     /// listener for them.
     #[error("the plan sends HL7 v2 messages and no MLLP listener was set up for them")]
     NoListener,
+    /// An arrival's variables could not be drawn.
+    #[error("an arrival's variables cannot be drawn")]
+    Template(#[source] TemplateError),
+}
+
+/// Endpoints that could not be set up.
+#[derive(Debug, Error)]
+pub enum EndpointsError {
+    /// The MLLP listener of the plan's messages cannot be used.
+    #[error(transparent)]
+    Mllp(#[from] MllpError),
+    /// A variable of the plan cannot be used.
+    #[error("a variable of the plan cannot be used")]
+    Template(#[from] TemplateError),
 }
 
 /// A fresh `DPoP` proof for request `position` of the plan sent to `url`,
@@ -191,12 +207,16 @@ pub fn request_url(base: &Url, request: &Request) -> Result<Url, LoadError> {
     })
 }
 
-/// Where a load phase sends: the server's base URL, and its MLLP listener
-/// when the plan sends HL7 v2 messages.
+/// Where a load phase sends, and what it sends with.
+///
+/// The server's base URL, its MLLP listener when the plan sends HL7 v2
+/// messages, and the plan's variables with where each is in its sequence,
+/// so the phases sent to one server continue them.
 #[derive(Debug, Clone)]
 pub struct Endpoints {
     url: Url,
     mllp: Option<Arc<Sender>>,
+    templates: Option<Arc<Templates>>,
 }
 
 impl Endpoints {
@@ -205,10 +225,10 @@ impl Endpoints {
     ///
     /// # Errors
     ///
-    /// Every [`MllpError`] of [`Sender::new`].
-    pub fn new(plan: &Plan, url: Url, mllp_address: Option<&str>) -> Result<Self, MllpError> {
-        let mllp = Sender::new(plan, mllp_address)?.map(Arc::new);
-        Ok(Self { url, mllp })
+    /// [`EndpointsError::Mllp`] for every error of [`Sender::new`], and
+    /// [`EndpointsError::Template`] for a variable that cannot be used.
+    pub fn new(plan: &Plan, url: Url, mllp_address: Option<&str>) -> Result<Self, EndpointsError> {
+        Self::with(plan, url, Sender::new(plan, mllp_address)?)
     }
 
     /// The endpoints of [`Endpoints::new`], with every message file filled
@@ -216,15 +236,33 @@ impl Endpoints {
     ///
     /// # Errors
     ///
-    /// Every [`MllpError`] of [`Sender::filled`].
+    /// [`EndpointsError::Mllp`] for every error of [`Sender::filled`], and
+    /// [`EndpointsError::Template`] for a variable that cannot be used.
     pub fn filled(
         plan: &Plan,
         url: Url,
         mllp_address: Option<&str>,
         values: &crate::values::Values,
-    ) -> Result<Self, MllpError> {
-        let mllp = Sender::filled(plan, mllp_address, values)?.map(Arc::new);
-        Ok(Self { url, mllp })
+    ) -> Result<Self, EndpointsError> {
+        Self::with(plan, url, Sender::filled(plan, mllp_address, values)?)
+    }
+
+    fn with(plan: &Plan, url: Url, mllp: Option<Sender>) -> Result<Self, EndpointsError> {
+        // NOTE: no specification governs this: our own design; a plan without variables is sent as written, never searched for placeholders.
+        let templates = if plan.vars.is_empty() {
+            None
+        } else {
+            let messages: Vec<&Message> = mllp
+                .as_ref()
+                .map(|sender| sender.messages().iter().map(Arc::as_ref).collect())
+                .unwrap_or_default();
+            Some(Arc::new(Templates::compile(plan, &messages)?))
+        };
+        Ok(Self {
+            url,
+            mllp: mllp.map(Arc::new),
+            templates,
+        })
     }
 
     /// The MLLP listener's address, when the plan sends messages.
@@ -243,6 +281,7 @@ enum Item {
         url: Url,
     },
     Mllp {
+        index: usize,
         group: String,
         sender: Arc<Sender>,
         message: Arc<Message>,
@@ -250,11 +289,14 @@ enum Item {
 }
 
 impl Item {
-    /// The group and the exchange of one send of this item.
+    /// The group and the exchange of one send of this item, its variables
+    /// drawn by `renderer` and its URL below `base`.
     fn exchange(
         &self,
         client: &Client,
         credentials: &Credentials,
+        base: &Url,
+        renderer: Option<&mut Renderer<'_>>,
     ) -> Result<(&str, Exchange), LoadError> {
         Ok(match self {
             Self::Http {
@@ -262,28 +304,54 @@ impl Item {
                 request,
                 url,
             } => {
+                let filled = match renderer {
+                    Some(renderer) => renderer
+                        .request(*position, request)
+                        .map_err(LoadError::Template)?,
+                    None => None,
+                };
+                let (request, url) = match filled {
+                    Some(filled) => {
+                        let url = request_url(base, &filled)?;
+                        (filled, url)
+                    }
+                    None => ((**request).clone(), url.clone()),
+                };
                 // NOTE: RFC 9449 §4.2: a proof is fresh per request; it is signed before the intended instant, outside the timed window.
-                let proof = sign(credentials, *position, request, url)?;
+                let proof = sign(credentials, *position, &request, &url)?;
                 let call = HttpCall {
                     client: client.clone(),
-                    request: (**request).clone(),
-                    url: url.clone(),
+                    request,
+                    url,
                     proof,
                 };
-                (request.group.as_str(), Exchange::Http(Box::new(call)))
+                (self.group(), Exchange::Http(Box::new(call)))
             }
             Self::Mllp {
+                index,
                 group,
                 sender,
                 message,
             } => {
+                let filled = match renderer {
+                    Some(renderer) => renderer.message(*index).map_err(LoadError::Template)?,
+                    None => None,
+                };
                 let exchange = Exchange::Mllp {
                     sender: Arc::clone(sender),
-                    message: Arc::clone(message),
+                    message: filled.map_or_else(|| Arc::clone(message), Arc::new),
                 };
                 (group.as_str(), exchange)
             }
         })
+    }
+
+    /// The group its latency is recorded under.
+    fn group(&self) -> &str {
+        match self {
+            Self::Http { request, .. } => &request.group,
+            Self::Mllp { group, .. } => group,
+        }
     }
 }
 
@@ -302,6 +370,7 @@ fn items(plan: &Plan, endpoints: &Endpoints) -> Result<Vec<Item>, LoadError> {
         let sender = endpoints.mllp.as_ref().ok_or(LoadError::NoListener)?;
         let message = sender.message(index).ok_or(LoadError::NoListener)?;
         items.push(Item::Mllp {
+            index,
             group: entry.group.clone(),
             sender: Arc::clone(sender),
             message: Arc::clone(message),
@@ -347,6 +416,8 @@ pub async fn drive(
     let stop = Stop::default();
     let schedule = Schedule {
         items: items(plan, endpoints)?,
+        base: endpoints.url.clone(),
+        templates: endpoints.templates.clone(),
         client: client.clone(),
         credentials: credentials.clone(),
         start: start.into_std(),
@@ -405,6 +476,8 @@ impl Drop for Stop {
 struct Schedule {
     load: LoadSettings,
     items: Vec<Item>,
+    base: Url,
+    templates: Option<Arc<Templates>>,
     client: Client,
     credentials: Credentials,
     start: Instant,
@@ -439,6 +512,7 @@ impl Schedule {
         let mut sent: u64 = 0;
         let mut saturated = false;
         let mut order = self.items.iter().cycle();
+        let mut renderer = self.templates.as_deref().map(Templates::renderer);
         for index in 0..planned {
             if self.stop.load(Ordering::Acquire) {
                 break;
@@ -452,7 +526,13 @@ impl Schedule {
             let Some(item) = order.next() else {
                 break;
             };
-            let (group, exchange) = item.exchange(&self.client, &self.credentials)?;
+            // NOTE: no specification governs this: our own design; the variables are drawn before the wait, so drawing them moves no send.
+            let (group, exchange) = item.exchange(
+                &self.client,
+                &self.credentials,
+                &self.base,
+                renderer.as_mut(),
+            )?;
             pacer.wait_until(intended);
             let permit = if let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() {
                 permit

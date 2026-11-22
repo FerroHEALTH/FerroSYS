@@ -10,6 +10,26 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-22
+
+### Added
+
+- Breaking: per-arrival variables. A plan declares `[vars.<name>]` tables
+  of a `counter`, a seeded `random` integer, a `uuid`, a `list` pick or a
+  row of a JSON Lines or CSV `file`, and names them as `{{name}}` or
+  `{{name.field}}` in a request's path, header values and body and in an
+  HL7 v2 message file, so each arrival sends values of its own and a feed
+  at rate revises many records instead of queueing on one. The sequences
+  are fixed by the new `[load] seed` (0 by default) and continue across
+  the phases sent to one server; the report records the seed as
+  `plan.seed`. The values are drawn before each arrival's intended instant,
+  so the schedule is unchanged. A plan without `[vars]` is sent as before.
+  `Plan` gains `vars`, `LoadSettings` gains `seed`, `PlanIdentity` gains
+  `seed`, `Endpoints::new` and `Endpoints::filled` return the new
+  `EndpointsError`, which takes the place of `RunError::Mllp` as
+  `RunError::Endpoints`, and `PlanError` and `LoadError` gain a `Template`
+  variant (#412).
+
 ## [0.15.0] - 2026-11-21
 
 ### Changed
@@ -374,7 +394,8 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
   `$GITHUB_STEP_SUMMARY`, and the host fingerprint with a warning when it
   differs from the baseline's (#249).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.15.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.16.0...HEAD
+[0.16.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.15.0...ferrohealth-perf-v0.16.0
 [0.15.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.14.0...ferrohealth-perf-v0.15.0
 [0.14.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.13.0...ferrohealth-perf-v0.14.0
 [0.13.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-perf-v0.12.0...ferrohealth-perf-v0.13.0

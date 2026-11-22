@@ -226,3 +226,127 @@ async fn dropping_the_phase_stops_its_schedule() {
         "nothing is sent once the phase is dropped"
     );
 }
+
+/// The paths `server` received, sorted.
+async fn received_paths(server: &MockServer) -> Vec<String> {
+    let mut paths: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect();
+    paths.sort();
+    paths
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_arrival_sends_its_own_draw_and_a_seed_sends_them_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("patients.jsonl");
+    let rows: Vec<String> = (0..1_000)
+        .map(|i| format!("{{\"id\":\"C-{i:07}\"}}"))
+        .collect();
+    let rows = rows.join("\n");
+    std::fs::write(&file, rows).unwrap();
+    let requests = format!(
+        "[[requests]]\ngroup = \"feed\"\nmethod = \"PUT\"\npath = \"/patient/{{{{p.id}}}}\"\nstatus = 200\n\
+         body = '{{\"id\":\"{{{{p.id}}}}\"}}'\n\
+         [vars.p]\nkind = \"file\"\npath = {:?}\norder = \"random\"\n",
+        file.display().to_string()
+    );
+    let plan = plan(
+        "rate = 100.0\nwarmup_secs = 0\nduration_secs = 1\nseed = 3",
+        &requests,
+    );
+    let mut runs = Vec::new();
+    for _ in 0..2 {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let base = Url::parse(&server.uri()).unwrap();
+        let outcome = drive(
+            &plan,
+            &Endpoints::new(&plan, base, None).unwrap(),
+            &reqwest::Client::new(),
+            &Credentials::default(),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            100, outcome.groups["feed"].answered,
+            "{:?}",
+            outcome.failures
+        );
+        for request in server.received_requests().await.unwrap() {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(
+                request.url.path(),
+                format!("/patient/{}", body["id"].as_str().unwrap()),
+                "the path and the body carry one draw"
+            );
+        }
+        runs.push(received_paths(&server).await);
+    }
+    let distinct: std::collections::BTreeSet<&String> = runs[0].iter().collect();
+    assert!(
+        distinct.len() > 80,
+        "{} distinct patients of 100",
+        distinct.len()
+    );
+    assert_eq!(runs[0], runs[1], "one seed, one set of requests");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_templated_plan_keeps_its_schedule_at_rate() {
+    // Every arrival renders a path, a header and a body from four variables,
+    // 500 a second; the lag bound is not asserted here, since a busy test
+    // host moves it for any plan (the draw's own cost is held in
+    // template::tests).
+    let server = server(Duration::ZERO).await;
+    Mock::given(method("POST"))
+        .and(path("/feed"))
+        .respond_with(ResponseTemplate::new(201))
+        .mount(&server)
+        .await;
+    let requests = "[[requests]]\ngroup = \"feed\"\nmethod = \"POST\"\npath = \"/feed?n={{n}}\"\nstatus = 201\n\
+                    headers = { x-id = \"{{u}}\" }\n\
+                    body = '{\"n\":\"{{n}}\",\"r\":\"{{r}}\",\"w\":\"{{w}}\",\"u\":\"{{u}}\"}'\n\
+                    [vars.n]\nkind = \"counter\"\nwidth = 9\n[vars.u]\nkind = \"uuid\"\n\
+                    [vars.r]\nkind = \"random\"\nmin = 0\nmax = 999999\n\
+                    [vars.w]\nkind = \"list\"\nvalues = [\"a\", \"b\", \"c\"]\norder = \"random\"\n";
+    let plan = plan("rate = 500.0\nwarmup_secs = 0\nduration_secs = 2", requests);
+    let base = Url::parse(&server.uri()).unwrap();
+    let outcome = drive(
+        &plan,
+        &Endpoints::new(&plan, base, None).unwrap(),
+        &reqwest::Client::new(),
+        &Credentials::default(),
+        Instant::now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(1_000, outcome.planned);
+    assert_eq!(1_000, outcome.sent);
+    assert_eq!(
+        1_000, outcome.groups["feed"].answered,
+        "{:?}",
+        outcome.failures
+    );
+    let mut queries: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|request| request.url.query().map(str::to_owned))
+        .collect();
+    queries.sort();
+    let expected: Vec<String> = (0..1_000).map(|n| format!("n={n:09}")).collect();
+    assert_eq!(
+        expected, queries,
+        "one counter value an arrival, none twice"
+    );
+}

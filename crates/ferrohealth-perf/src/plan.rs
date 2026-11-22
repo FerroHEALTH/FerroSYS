@@ -55,6 +55,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::baseline::Tolerances;
+use crate::template::{TemplateError, Templates, Var};
 
 /// The plan file, parsed and checked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -80,6 +81,10 @@ pub struct Plan {
     /// The HL7 v2 messages, sent over MLLP after the requests in each round.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Hl7Message>,
+    /// The per-arrival variables the requests and messages name, by name
+    /// ([`crate::template`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vars: BTreeMap<String, Var>,
 }
 
 /// The MLLP listener the plan's messages go to.
@@ -180,6 +185,9 @@ pub struct LoadSettings {
     /// `"1.3"` unless lowered to `"1.2"`, as for every FerroHEALTH outbound
     /// TLS table.
     pub min_version: TlsVersion,
+    /// The seed of the per-arrival variables' sequences
+    /// ([`crate::template`]); one seed sends the same values again.
+    pub seed: u64,
 }
 
 impl Default for LoadSettings {
@@ -199,6 +207,7 @@ impl Default for LoadSettings {
             client_identity_file: None,
             trust_roots_file: None,
             min_version: TlsVersion::default(),
+            seed: 0,
         }
     }
 }
@@ -306,6 +315,9 @@ pub enum PlanError {
     /// An HL7 v2 message file the plan names cannot be used.
     #[error("the plan is refused: an HL7 v2 message cannot be used")]
     Message(#[from] crate::mllp::MllpError),
+    /// A variable of the plan cannot be used.
+    #[error("the plan is refused: a variable cannot be used")]
+    Template(#[from] TemplateError),
 }
 
 impl Plan {
@@ -317,7 +329,10 @@ impl Plan {
     /// when it is not a plan, [`PlanError::Invalid`] for a value
     /// [`Plan::parse`] refuses, [`PlanError::Credential`] for a credential
     /// file that cannot be read or parsed, and [`PlanError::Message`] for an
-    /// HL7 v2 message file that cannot be read or holds no MSH-10.
+    /// HL7 v2 message file that cannot be read or holds no MSH-10, and
+    /// [`PlanError::Template`] for a data file that cannot be used, a
+    /// placeholder of a message file that names no variable, or a variable
+    /// nothing names.
     pub fn read(path: &Path) -> Result<Self, PlanError> {
         let shown = path.display().to_string();
         let text = std::fs::read_to_string(path).map_err(|source| PlanError::Read {
@@ -332,9 +347,12 @@ impl Plan {
             other => other,
         })?;
         crate::credentials::Credentials::load(&plan)?;
-        for message in &plan.messages {
-            crate::mllp::Message::read(&message.file)?;
-        }
+        let messages = plan
+            .messages
+            .iter()
+            .map(|message| crate::mllp::Message::read(&message.file))
+            .collect::<Result<Vec<_>, _>>()?;
+        Templates::compile(&plan, &messages.iter().collect::<Vec<_>>())?;
         Ok(plan)
     }
 
@@ -345,7 +363,8 @@ impl Plan {
     /// [`PlanError::Parse`] for text that is not a plan, and
     /// [`PlanError::Invalid`] for an empty request set, a bad request, a
     /// rate that is not finite and positive, a zero measured window or
-    /// in-flight budget, or a limit that is negative or not finite.
+    /// in-flight budget, a limit that is negative or not finite, a bad
+    /// variable, or a placeholder of a request that names no variable.
     pub fn parse(text: &str) -> Result<Self, PlanError> {
         let plan: Self = toml::from_str(text).map_err(|source| PlanError::Parse {
             path: String::from("<text>"),
@@ -400,9 +419,14 @@ impl Plan {
             return invalid("idle.duration_secs must be at least 1".to_owned());
         }
         self.tolerance.check().map_err(PlanError::Invalid)?;
+        for (name, var) in &self.vars {
+            crate::template::check_name(name)
+                .and_then(|()| var.check())
+                .map_err(|reason| PlanError::Invalid(format!("vars.{name}: {reason}")))?;
+        }
         for (index, request) in self.requests.iter().enumerate() {
             request
-                .check()
+                .check(&self.vars)
                 .map_err(|reason| PlanError::Invalid(format!("request {index}: {reason}")))?;
         }
         for (index, message) in self.messages.iter().enumerate() {
@@ -443,18 +467,24 @@ fn check_group(group: &str) -> Result<(), String> {
 }
 
 impl Request {
-    fn check(&self) -> Result<(), String> {
+    fn check(&self, vars: &BTreeMap<String, Var>) -> Result<(), String> {
         check_group(&self.group)?;
         self.method()?;
         if !self.path.starts_with('/') {
             return Err(format!("path {:?} must start with '/'", self.path));
         }
         self.expected()?;
+        let placeholders = |text: &str| crate::template::check_placeholders(text, vars);
+        placeholders(&self.path)?;
         for (name, value) in &self.headers {
             HeaderName::try_from(name.as_str())
                 .map_err(|error| format!("header name {name:?}: {error}"))?;
             HeaderValue::try_from(value.as_str())
                 .map_err(|error| format!("the value of header {name:?}: {error}"))?;
+            placeholders(value)?;
+        }
+        if let Some(body) = &self.body {
+            placeholders(body)?;
         }
         Ok(())
     }

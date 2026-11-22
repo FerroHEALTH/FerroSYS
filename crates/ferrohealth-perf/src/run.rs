@@ -28,9 +28,8 @@ use crate::compare::{Outcome, Verdict, judge_file};
 use crate::credentials::{CredentialError, Credentials};
 use crate::database::{DatabaseError, Transactions, WITNESS_INTERVAL};
 use crate::fingerprint::Fingerprint;
-use crate::load::{self, Endpoints, LoadError};
+use crate::load::{self, Endpoints, EndpointsError, LoadError};
 use crate::metric;
-use crate::mllp::MllpError;
 use crate::plan::Plan;
 use crate::process::{Probe, ProcessError, Sample, Target};
 use crate::quantile::{QuantileName, max_ms, quantile};
@@ -106,9 +105,10 @@ pub enum RunError {
     /// The load phase failed.
     #[error(transparent)]
     Load(#[from] LoadError),
-    /// The MLLP listener of the plan's messages cannot be used.
+    /// The endpoints of the plan cannot be set up: its MLLP listener or
+    /// its variables.
     #[error(transparent)]
-    Mllp(#[from] MllpError),
+    Endpoints(#[from] EndpointsError),
     /// The report could not be built or written.
     #[error(transparent)]
     Report(#[from] ReportError),
@@ -437,6 +437,7 @@ pub fn identity(plan: &Plan) -> PlanIdentity {
         requests: u64::try_from(plan.requests.len().saturating_add(plan.messages.len()))
             .unwrap_or(u64::MAX),
         groups: plan.groups(),
+        seed: (!plan.vars.is_empty()).then_some(plan.load.seed),
     }
 }
 

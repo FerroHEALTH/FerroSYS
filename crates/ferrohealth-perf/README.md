@@ -60,7 +60,7 @@ socket is never asked. A host without `/proc` reports both as unavailable.
 ## Use
 
 ```sh
-cargo install ferrohealth-perf --version =0.15.0 --locked
+cargo install ferrohealth-perf --version =0.16.0 --locked
 ```
 
 Pin the version exactly, as every FerroHEALTH product does.
@@ -123,6 +123,7 @@ stall_ratio = 10.0                 # p99 over this times p50 on every route mark
 # client_identity_file = "perf/client.pem"  # a certificate chain and its key, for mTLS
 # trust_roots_file = "perf/ca.pem"          # roots that verify an https target
 min_version = "1.3"                # the oldest TLS version spoken; "1.2" lowers it
+seed = 0                           # the seed of the per-arrival variables
 
 [tolerance]                        # how far the head may stray from the base, in ab
 latency = 0.25
@@ -148,6 +149,83 @@ headers = { content-type = "application/fhir+json" }
 
 Every key has the default shown; an unknown key is refused. A plan holds
 at least one request or message.
+
+### Per-arrival variables
+
+A request sent the same way on every arrival revises one record each time,
+so every write queues on that record's lock and the run measures the lock,
+not the server. A variable gives each arrival values of its own. Declare it
+under `[vars.<name>]` and name it as `{{name}}`, or `{{name.field}}` for a
+row of a data file, in a request's path, header values or body, or in an
+HL7 v2 message file:
+
+```toml
+[load]
+seed = 7                           # one seed sends the same values again
+
+[vars.patient]
+kind = "file"                      # a row of a data file
+path = "perf/patients.jsonl"       # .jsonl or .csv, read with the plan
+order = "random"                   # or "cycle", the default: row after row
+
+[vars.n]
+kind = "counter"                   # start, start + step, ...
+start = 1                          # 0 by default
+step = 1                           # 1 by default
+width = 7                          # zero-padded to seven digits; none by default
+
+[vars.mrn]
+kind = "random"                    # an integer drawn evenly from min to max
+min = 1
+max = 999999
+
+[vars.message_id]
+kind = "uuid"                      # a version 4 UUID
+
+[vars.system]
+kind = "list"                      # one of the values
+values = ["urn:oid:2.999.1.1", "urn:oid:2.999.1.2"]
+order = "cycle"
+
+[[requests]]
+group = "feed"
+method = "PUT"
+path = "/fhir/Patient?identifier=urn%3Aoid%3A2.999.1.1%7C{{patient.id}}"
+status = 200
+body = '{"resourceType":"Patient","identifier":[{"system":"urn:oid:2.999.1.1","value":"{{patient.id}}"}],"name":[{"family":"{{patient.family}}"}]}'
+headers = { authorization = "Bearer @TOKEN@", x-request-id = "{{message_id}}" }
+```
+
+A JSON Lines file holds one object a line, each value a string, a number or
+a boolean, and every line the same fields. A CSV file follows RFC 4180: a
+header row naming the fields, then one record a line, a field in double
+quotes holding commas or doubled quotes. No value may hold a control
+character.
+
+Each arrival draws one value of every variable its request names, so two
+places of one request that name a variable carry the same value: the
+identifier in the path above is the one in the body. A variable's sequence
+is fixed by `[load] seed` (0 by default) and its own name, so the same plan
+and seed send the same requests in the same order, and the report records
+the seed under `plan.seed`. The sequences continue across the phases sent
+to one server: a confirmation or calibration phase sends the values after
+those of the phase before it, and in an A/B run each arm draws its own
+sequence from the same seed, so the two servers receive the same requests.
+A counter and the `cycle` order ignore the seed; the `random` and `uuid`
+kinds and the `random` order draw from it.
+
+The values are drawn on the schedule's thread before each arrival's
+intended instant, where a `DPoP` proof is signed, so drawing them moves no
+send and the generator's lag holds the bound below. A value is inserted as
+written, so a data file holds each value in the form its place needs (an
+identifier percent-encoded for a query, say). A name is a lower-case letter
+followed by lower-case letters, digits and `_`, and a field is letters,
+digits, `_` and `-`. Every `{{` opens a placeholder, and a placeholder that
+names no variable, names a field of a variable without one, or a field the
+data file lacks refuses the plan before any phase, as does a variable no
+request or message names. A plan without `[vars]` is sent as written.
+Per-arm values (`@NAME@`, [Values per arm](#values-per-arm)) are filled
+first, then the variables.
 
 ### HL7 v2 over MLLP
 
@@ -480,7 +558,7 @@ perf:
     FERROHEALTH_PERF_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
   steps:
     - uses: actions/checkout@<sha>
-    - run: cargo install ferrohealth-perf --version =0.15.0 --locked
+    - run: cargo install ferrohealth-perf --version =0.16.0 --locked
     - run: cargo build --release --locked
     - name: Start the server
       run: |
