@@ -10,6 +10,13 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- The `json` console no longer renders a span's fields, which no `json`
+  line writes: the `fmt` layer formatted them when a span opened and again
+  on every `record`. A request through the request log costs 1.3 µs and 23
+  allocations less (#416).
+
 ## [0.5.0] - 2026-11-15
 
 ### Added
