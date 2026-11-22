@@ -5,11 +5,15 @@
 //! a record on one line.
 
 use std::borrow::Cow;
+use std::fmt;
 use std::io::{self, Write};
 
+use tracing::span::Record;
 use tracing::{Metadata, Subscriber};
 use tracing_subscriber::Layer;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::field::RecordFields;
+use tracing_subscriber::fmt::format::Writer;
+use tracing_subscriber::fmt::{FormatFields, FormattedFields, MakeWriter};
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::section::Rendering;
@@ -21,7 +25,8 @@ pub type BoxedLayer<S> = Box<dyn Layer<S> + Send + Sync + 'static>;
 ///
 /// `json` writes one object per line with the event's fields flattened and
 /// no span list, so a span's fields reach the line only when the event
-/// carries them. `pretty` writes colour when `ansi` holds, and every record
+/// carries them, and the layer keeps no rendering of a span's fields.
+/// `pretty` writes colour when `ansi` holds, and every record
 /// through [`LineSafe`], so a value holding a line break cannot forge a
 /// second record.
 pub fn layer<S, W>(rendering: Rendering, ansi: bool, writer: W) -> BoxedLayer<S>
@@ -36,6 +41,7 @@ where
                 .flatten_event(true)
                 .with_current_span(false)
                 .with_span_list(false)
+                .fmt_fields(SpanFieldsUnread)
                 .with_writer(writer),
         ),
         Rendering::Pretty => Box::new(
@@ -44,6 +50,29 @@ where
                 .with_ansi(ansi)
                 .with_writer(LineSafe::new(writer)),
         ),
+    }
+}
+
+/// The span field formatter of the `json` rendering, which renders nothing.
+///
+/// The `fmt` layer formats a span's fields when the span opens and again on
+/// every `record`, and with neither the current span nor the span list
+/// written no `json` line reads them; the event's fields are written by the
+/// event formatter. No specification governs this: our own design.
+#[derive(Debug, Clone, Copy, Default)]
+struct SpanFieldsUnread;
+
+impl<'w> FormatFields<'w> for SpanFieldsUnread {
+    fn format_fields<R: RecordFields>(&self, _writer: Writer<'w>, _fields: R) -> fmt::Result {
+        Ok(())
+    }
+
+    fn add_fields(
+        &self,
+        _current: &mut FormattedFields<Self>,
+        _fields: &Record<'_>,
+    ) -> fmt::Result {
+        Ok(())
     }
 }
 
@@ -190,6 +219,32 @@ mod tests {
         assert_eq!(200, line["status"]);
         assert_eq!("request", line["message"]);
         assert_eq!(1, text.lines().count(), "{text}");
+    }
+
+    #[test]
+    fn json_leaves_a_span_s_fields_off_the_line_and_keeps_the_event_s() {
+        let capture = Capture::default();
+        let subscriber =
+            tracing_subscriber::registry().with(layer(Rendering::Json, false, capture.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "request",
+                http.route = "/fhir/Patient",
+                http.response.status_code = tracing::field::Empty,
+            );
+            span.record("http.response.status_code", 200_u16);
+            span.in_scope(|| tracing::info!(route = "/fhir/Patient", status = 200_u16, "request"));
+        });
+        let text = capture.text();
+        let line: serde_json::Value =
+            serde_json::from_str(text.trim_end()).expect("one JSON object");
+        let members = line.as_object().expect("an object");
+        assert_eq!("/fhir/Patient", line["route"]);
+        assert_eq!(200, line["status"]);
+        assert!(!members.contains_key("http.route"), "{text}");
+        assert!(!members.contains_key("http.response.status_code"), "{text}");
+        assert!(!members.contains_key("span"), "{text}");
+        assert!(!members.contains_key("spans"), "{text}");
     }
 
     #[test]
