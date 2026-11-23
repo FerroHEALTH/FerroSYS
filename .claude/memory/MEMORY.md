@@ -18,6 +18,19 @@
 
 ## Family rules (carried in every FerroHEALTH repository, 2026-11-09)
 
+- [FerroHEALTH not in production](ferrohealth-not-in-production.md): no product runs in production, so a wrong design is refactored or rewritten outright with no compatibility layer; owner 2026-11-19
+- [New design, no legacy](new-design-no-legacy.md): a breaking release builds the new design in full and keeps nothing of the old; never relay a worker's kept-for-compatibility choice as a question; owner 2026-11-14
+- [Findings drive redesign](findings-drive-redesign.md): a scenario or test the design cannot handle is a design finding, never worked around in a fixture or probe; owner 2026-11-14
+- [Verify old issues first](verify-before-implementing-old-issues.md): check an older issue against main and the current spec before building it; close what is done or obsolete with evidence; owner 2026-11-16
+- [Orchestrator files cross-repo gaps](orchestrator-files-cross-repo-gaps.md): the orchestrator files every gap a worker finds in another family repo, without asking the owner; owner 2026-11-10
+- [Backlog fix comments](backlog-fix-comments.md): when a fix for a Cadasto/FerroHEALTH-backlog issue merges, comment there and set it to In review; owner 2026-11-17
+- [Efficiency first](efficiency-first-rust.md): stable, fast, low on storage, CPU and RAM; no needless clones, allocations or forwarding layers; owner 2026-11-16
+- [Spec over test suites](spec-over-test-suites.md): external conformance suites are regression signals, never the oracle; owner 2026-11-16
+- [Owner voice for outward text](owner-voice-outward-text.md): text the owner sends as themselves is plain and short, few headings or bullets; owner 2026-11-14
+- [Owner work style](owner-work-style.md): research first and evidence-based, foundational decisions confirmed before code, defer nothing
+- [EHDS above openEHR](ehds-above-openehr.md): where Regulation (EU) 2025/327 conflicts with a standard's text, the Regulation wins; owner 2026-11-09
+- [Terminology via the server](terminology-via-server.md): every production value map goes through a FHIR terminology server; embedded maps are for tests only; owner 2026-11-09
+- [Release closes its milestone](release-closes-milestone.md): release.yml refuses a tag whose milestone is missing or open and closes it after every leg; check after a manual release
 - [No compatibility shims](no-compat-shims.md): refactors break APIs freely and leave no deprecated item, alias, re-export or stub; a removal refusal lives ONE release, then is deleted fully; no legacy support ever; owner 2026-11-01, 2026-11-09
 - [No half solutions](no-half-solutions.md): build what the issue asks the proper way and validate the need against its consumer first; a breaking change moves the minor version, never shape a design to dodge semver; owner 2026-11-08
 - [Workers on Opus only](workers-on-opus-only.md): every subagent is model opus; never Fable, Sonnet or Haiku as a worker; owner 2026-10-30
