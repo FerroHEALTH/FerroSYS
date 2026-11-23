@@ -66,14 +66,17 @@ impl Default for StackPolicy {
 /// Wraps `product` and the health routes in the stack, under the base path.
 ///
 /// From the outside in: the API security headers ([`crate::api_headers`]),
-/// the request id, the request log, the client address, the refusal
+/// the overload bound and its queue on the product's routes and the routes
+/// beside, the request id, the request log, the client address, the refusal
 /// rendering, the panic rendering, the panic catch, the request timeout
 /// (`408`), the body limit (`413`, and the same ceiling for every
 /// extractor), the request decoding when it is on (`415` for a coding it
 /// does not decode, and the body limit on the decoded bytes), the response
-/// compression when it is on, then the routes, the product's behind the
-/// overload bound and its queue.
-/// Every request leaves one request line, a refusal and a panic included.
+/// compression when it is on, then the routes.
+/// Every request the bound admits leaves one request line, a refusal and a
+/// panic included. A request the bound refuses is counted and leaves no
+/// line of its own ([`crate::overload`]), so a refusal costs less than
+/// serving.
 ///
 /// It is [`Stack::new`] with nothing beside the base path, and a request no
 /// route matched takes the product's fallback with the product's layers
@@ -206,20 +209,29 @@ impl Stack {
             beside,
             fallback,
         } = self;
+        let base = section.base_path.as_str();
         let admission = Admission::new(section.max_concurrent_requests, section.retry_after.get())
-            .with_queue(section.max_waiting_requests, section.admission_wait.get());
+            .with_queue(section.max_waiting_requests, section.admission_wait.get())
+            .exempting(
+                [
+                    health::LIVENESS,
+                    health::READINESS,
+                    health::SUMMARY,
+                    health::INFO,
+                ]
+                .map(|route| format!("{base}{route}")),
+            )
+            .writing(Arc::clone(&policy.refusal_body));
         let admission = match &policy.meter {
             Some(meter) => admission.with_metrics(meter),
             None => admission,
         };
-        let product = bounded(product, &admission);
         let routes = health::routes(health).merge(product);
-        let routes = if section.base_path.as_str().is_empty() {
+        let routes = if base.is_empty() {
             routes
         } else {
-            Router::new().nest(section.base_path.as_str(), routes)
+            Router::new().nest(base, routes)
         };
-        let beside = bounded(beside, &admission);
         // NOTE: axum 0.8 `Router::merge` keeps the fallback of `other` when neither router
         // declares one, so `routes` merges last and keeps the product's layered fallback.
         let routes = beside.merge(routes);
@@ -227,26 +239,18 @@ impl Stack {
             Some(fallback) => routes.merge(fallback),
             None => routes,
         };
-        wrap(routes, &section, policy)
+        wrap(routes, &section, policy, admission)
     }
 }
 
-/// Returns `router` with every route behind `admission`; a router with no
-/// route is returned as it is, since axum refuses a route layer on one
-/// (`Router::route_layer`, "Panics").
-fn bounded(router: Router, admission: &Admission) -> Router {
-    if router.has_routes() {
-        router.route_layer(axum::middleware::from_fn_with_state(
-            admission.clone(),
-            overload::admit,
-        ))
-    } else {
-        router
-    }
-}
-
-/// Wraps `routes` in every layer of the stack.
-fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router {
+/// Wraps `routes` in every layer of the stack, with `admission` on every
+/// route outside the request id and inside the API security headers.
+fn wrap(
+    routes: Router,
+    section: &ServerSection,
+    policy: StackPolicy,
+    admission: Admission,
+) -> Router {
     // NOTE: axum `Router::layer` wraps every route and the fallback, so the matched
     // route is still known and a request no route matched is logged too.
     let edge = EdgeLayer::new(edge::Settings {
@@ -261,10 +265,6 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         tls: section.tls.is_some(),
     };
     let outer = ServiceBuilder::new()
-        .layer(axum::middleware::from_fn_with_state(
-            transport,
-            api_headers::set,
-        ))
         .layer(IdentifyLayer)
         .layer(policy.request_log)
         .layer(edge)
@@ -277,7 +277,7 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
     } else {
         routes
     };
-    if section.compression {
+    let routes = if section.compression {
         routes.layer(
             outer.layer(
                 CompressionLayer::new().gzip(true).br(true).compress_when(
@@ -290,5 +290,16 @@ fn wrap(routes: Router, section: &ServerSection, policy: StackPolicy) -> Router 
         )
     } else {
         routes.layer(outer)
-    }
+    };
+    // NOTE: axum 0.8 `Router::route_layer` wraps the routes alone after routing, so the
+    // bound sees the matched route, passes the health family and leaves every fallback out.
+    routes
+        .route_layer(axum::middleware::from_fn_with_state(
+            admission,
+            overload::admit,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            transport,
+            api_headers::set,
+        ))
 }

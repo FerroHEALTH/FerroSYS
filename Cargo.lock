@@ -888,6 +888,7 @@ dependencies = [
  "pin-project-lite",
  "rcgen",
  "reqwest",
+ "rustix",
  "rustls",
  "rustls-platform-verifier",
  "schemars",

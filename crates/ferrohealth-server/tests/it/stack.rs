@@ -8,6 +8,7 @@ mod admission;
 mod decoding;
 mod headers;
 mod lines;
+mod refusal_cost;
 mod refusals;
 mod routes;
 

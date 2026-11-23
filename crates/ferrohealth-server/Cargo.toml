@@ -97,6 +97,7 @@ x509-ocsp = { workspace = true, optional = true }
 criterion.workspace = true
 hyper = { workspace = true, features = ["http2"] }
 rcgen.workspace = true
+rustix.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

@@ -277,6 +277,10 @@ jobs:
       - run: cargo nextest run --workspace --locked --no-tests=warn
       - run: cargo nextest run --workspace --all-features --locked --no-tests=warn
       - run: cargo test --doc --workspace --all-features --locked
+      # The CPU ceiling of a refusal past the overload bound holds for an
+      # optimized build; the unoptimized run above holds the refusal to
+      # twice a bare 503 only (#419).
+      - run: cargo nextest run --release --locked -p ferrohealth-server --test it -E 'test(refusal_cost)'
 
   # Every crate's public API against its newest version on crates.io, on the
   # default feature heuristic and with no default features: a break the

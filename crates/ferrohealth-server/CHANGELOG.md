@@ -10,6 +10,23 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- A request past the overload bound is refused for about what a bare
+  `503` costs on the same transport. The stack tries the admission slot
+  before the request id, the request log and the body limit, so a refusal
+  reads no body and leaves no request line, and the `WARN` written for
+  every refusal is now at most one line a second with the refusals since
+  the line before (`queue_full`, `wait_expired`). The counter
+  `ferrohealth.server.admission.refusals` still counts each refusal by
+  reason, and the answer is still `503` with `Retry-After`, written with
+  the product's `RefusalBody` and echoing the request id. The refused
+  requests no longer reach the request log's `http.server.request.duration`
+  histogram, and a queued request's wait is no longer inside its request
+  line's latency or the request timeout. FerroEHR measured 0.18 ms of
+  server CPU per refusal, and answered 1,900 requests a second at 5,000
+  offered against about 2,700 at saturation (#419).
+
 ## [0.12.0] - 2026-11-21
 
 ### Added
