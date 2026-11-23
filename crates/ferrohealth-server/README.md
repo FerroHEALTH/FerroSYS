@@ -27,9 +27,13 @@ runs the same stack, the same health routes and the same shutdown.
     default) a request waits for a slot up to `admission_wait` (100 ms) in
     a first-come queue of `max_waiting_requests` (256), and is answered
     `503` with `Retry-After` when the queue is full or the wait expires;
-    the health routes are never refused or queued;
-  - the request log of `ferrohealth-telemetry`, one line for every request,
-    a refusal and a panic included.
+    the health routes are never refused or queued. The slot is tried
+    before the request id, the request log and the body limit, so a
+    refusal reads no body and leaves no request line: each is counted in
+    `ferrohealth.server.admission.refusals` by reason, and the console has
+    at most one line a second with the count since the line before;
+  - the request log of `ferrohealth-telemetry`, one line for every request
+    the bound admits, a refusal and a panic included.
   - the security headers of an API response, outermost, so the stack's
     own refusals carry them too: `no-store`, `nosniff`, a referrer policy,
     `Cross-Origin-Resource-Policy`, `DENY` framing and a CSP that admits

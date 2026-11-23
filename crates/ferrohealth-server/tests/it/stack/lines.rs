@@ -18,7 +18,7 @@ use ferrohealth_server::stack::{StackPolicy, app};
 use super::tracing_subscriber_shim::Capture;
 use super::{get_status, product, refusing, section, send, serving, waiting};
 
-fn capturing() -> (Capture, tracing::subscriber::DefaultGuard) {
+pub(super) fn capturing() -> (Capture, tracing::subscriber::DefaultGuard) {
     let capture = Capture::default();
     let subscriber = tracing_subscriber::fmt()
         .json()

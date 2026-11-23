@@ -13,20 +13,31 @@
 //! hundred milliseconds that would otherwise refuse requests the server
 //! answers a moment later. The stack mounts the bound on the product's
 //! routes alone, so the health family is never refused or queued and a busy
-//! server is not restarted by its own probe. No specification governs the
-//! queue or its sizes: our own design.
+//! server is not restarted by its own probe.
+//!
+//! The stack tries the slot before the request id, the request log and the
+//! body limit, so a refusal costs less than serving: it leaves no request
+//! line and reads no body. Every refusal is counted in [`REFUSALS`] by its
+//! reason, and the console has at most one line a second with the count of
+//! the refusals since the line before. No specification governs the queue,
+//! its sizes or the refusal line: our own design.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use axum::extract::{Request, State};
+use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use http::{HeaderValue, StatusCode, header};
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Histogram, Meter};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::Instant;
+
+use crate::refusal::RefusalBody;
+use crate::request_id::{self, RequestIds};
 
 /// The counter of the requests that waited for a slot.
 pub const WAITS: &str = "ferrohealth.server.admission.waits";
@@ -45,6 +56,12 @@ pub const OUTCOME: &str = "ferrohealth.server.admission.outcome";
 /// The attribute of [`REFUSALS`] that says why a request was refused.
 pub const REASON: &str = "ferrohealth.server.admission.reason";
 
+/// The reason in plain words a refused request is told.
+const BUSY: &str = "the server is busy; retry later";
+
+/// The shortest time between two refusal lines.
+const LINE_INTERVAL: Duration = Duration::from_secs(1);
+
 /// The bucket boundaries of [`WAIT_DURATION`], in seconds, around the
 /// default wait of 100 ms.
 const WAIT_BUCKETS: [f64; 12] = [
@@ -53,12 +70,28 @@ const WAIT_BUCKETS: [f64; 12] = [
 
 /// The admission: the slots, the queue in front of them, and the wait a
 /// refused request is told.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Admission {
     slots: Arc<Semaphore>,
     queue: Option<Queue>,
     retry_after: Duration,
     metrics: Option<Metrics>,
+    exempt: Arc<[Box<str>]>,
+    body: Option<RefusalBody>,
+    lines: Arc<RefusalLines>,
+}
+
+impl std::fmt::Debug for Admission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Admission")
+            .field("slots", &self.slots)
+            .field("queue", &self.queue)
+            .field("retry_after", &self.retry_after)
+            .field("metrics", &self.metrics)
+            .field("exempt", &self.exempt)
+            .field("lines", &self.lines)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The places of the queue and how long a request may hold one.
@@ -74,6 +107,67 @@ struct Metrics {
     waits: Counter<u64>,
     waited: Histogram<f64>,
     refusals: Counter<u64>,
+}
+
+/// The refusals since the last refusal line, and when that line was
+/// written.
+#[derive(Debug)]
+struct RefusalLines {
+    /// The instant the times below count from.
+    origin: Instant,
+    /// One more than the nanoseconds from `origin` to the last line, or zero
+    /// before the first.
+    last: AtomicU64,
+    /// The refusals since the last line, for a full queue and for an expired
+    /// wait.
+    queue_full: AtomicU64,
+    wait_expired: AtomicU64,
+}
+
+impl RefusalLines {
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+            last: AtomicU64::new(0),
+            queue_full: AtomicU64::new(0),
+            wait_expired: AtomicU64::new(0),
+        }
+    }
+
+    /// Counts `refusal`, and writes the line with the counts when the last
+    /// line is at least [`LINE_INTERVAL`] old.
+    fn note(&self, refusal: Refusal) {
+        let pending = match refusal {
+            Refusal::QueueFull => &self.queue_full,
+            Refusal::WaitExpired => &self.wait_expired,
+        };
+        pending.fetch_add(1, Ordering::Relaxed);
+        let now = u64::try_from(self.origin.elapsed().as_nanos())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let last = self.last.load(Ordering::Relaxed);
+        let interval = u64::try_from(LINE_INTERVAL.as_nanos()).unwrap_or(u64::MAX);
+        if last != 0 && now.saturating_sub(last) < interval {
+            return;
+        }
+        // NOTE: no specification governs this: our own design; of the refusals that
+        // find the line due at once, the one that moves `last` writes it.
+        if self
+            .last
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let queue_full = self.queue_full.swap(0, Ordering::Relaxed);
+        let wait_expired = self.wait_expired.swap(0, Ordering::Relaxed);
+        tracing::warn!(
+            queue_full,
+            wait_expired,
+            "requests were refused since the last such line: the server serves as many \
+             requests as it takes at once"
+        );
+    }
 }
 
 /// Why a request past the bound was refused.
@@ -106,7 +200,33 @@ impl Admission {
             queue: None,
             retry_after,
             metrics: None,
+            exempt: Arc::new([]),
+            body: None,
+            lines: Arc::new(RefusalLines::new()),
         }
+    }
+
+    /// Passes every request whose matched route is one of `routes` without
+    /// a slot, such as the health family's.
+    pub(crate) fn exempting(mut self, routes: impl IntoIterator<Item = String>) -> Self {
+        self.exempt = routes.into_iter().map(String::into_boxed_str).collect();
+        self
+    }
+
+    /// Writes each refusal with `body` and the request id header, for a
+    /// bound that runs before the stack's request id and refusal rendering.
+    pub(crate) fn writing(mut self, body: RefusalBody) -> Self {
+        self.body = Some(body);
+        self
+    }
+
+    /// Whether `request` passes without a slot.
+    fn exempts(&self, request: &Request) -> bool {
+        !self.exempt.is_empty()
+            && request
+                .extensions()
+                .get::<MatchedPath>()
+                .is_some_and(|matched| self.exempt.iter().any(|route| **route == *matched.as_str()))
     }
 
     /// Lets at most `places` requests past the bound wait for a slot, each
@@ -162,7 +282,7 @@ impl Admission {
         if let Some(metrics) = &self.metrics {
             metrics.waits.add(1, &[]);
         }
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         let waited =
             tokio::time::timeout(queue.wait, Arc::clone(&self.slots).acquire_owned()).await;
         // NOTE: no specification governs this: our own design; the slots are never closed,
@@ -181,21 +301,34 @@ impl Admission {
         slot
     }
 
-    /// The `503` that refuses a request for `refusal`.
-    fn refuse(&self, refusal: Refusal) -> Response {
+    /// The `503` that refuses `request` for `refusal`.
+    fn refuse(&self, refusal: Refusal, request: &Request) -> Response {
         if let Some(metrics) = &self.metrics {
             metrics
                 .refusals
                 .add(1, &[KeyValue::new(REASON, refusal.reason())]);
         }
-        tracing::warn!(
-            reason = refusal.reason(),
-            "a request was refused: the server serves as many requests as it takes at once"
-        );
-        let mut response = crate::refusal::refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the server is busy; retry later",
-        );
+        self.lines.note(refusal);
+        let mut response = match &self.body {
+            Some(body) => {
+                let client = request_id::client_value(request.headers());
+                let server = request_id::mint_id(client.is_some());
+                let echoed = client.as_ref().and_then(|client| client.to_str().ok());
+                let mut response = crate::refusal::write(
+                    body,
+                    request.uri(),
+                    RequestIds::new(server.id(), echoed),
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    BUSY,
+                );
+                let echoed = client.or_else(|| HeaderValue::from_str(server.id()).ok());
+                if let Some(echoed) = echoed {
+                    response.headers_mut().insert(request_id::HEADER, echoed);
+                }
+                response
+            }
+            None => crate::refusal::refused(StatusCode::SERVICE_UNAVAILABLE, BUSY),
+        };
         response.headers_mut().insert(
             header::RETRY_AFTER,
             HeaderValue::from(retry_seconds(self.retry_after)),
@@ -205,11 +338,15 @@ impl Admission {
 }
 
 /// The middleware: serves the request in a slot, after a wait in the queue
-/// when none is free, or refuses it.
+/// when none is free, or refuses it. A request to an exempt route, the
+/// stack's health family, is served without a slot.
 pub async fn admit(State(admission): State<Admission>, request: Request, next: Next) -> Response {
+    if admission.exempts(&request) {
+        return next.run(request).await;
+    }
     match admission.slot().await {
         Ok(_slot) => next.run(request).await,
-        Err(refusal) => admission.refuse(refusal),
+        Err(refusal) => admission.refuse(refusal, &request),
     }
 }
 
