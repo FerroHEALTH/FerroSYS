@@ -70,7 +70,10 @@ milestone set and its crates.io name reserved, which needs the owner.
 - **Prose follows the family writing style:** no em dashes, no "not X but
   Y", no decorative triads, no filler words. Comments follow RFC 505 and RFC
   1574 with hard budgets: `// TODO(#NNNN):` names its issue, `// NOTE:` is a
-  citation and one sentence.
+  citation and one sentence. A comment is written only when the code cannot
+  say it, describes only the code as it is (never the old way, past figures
+  or how it got here), and is rewritten whole when the code changes (owner
+  hard rule 2026-11-23).
 - **Branches use conventional types** (`feat/`, `fix/`, `chore/`, `docs/`,
   `refactor/`, `perf/`, `test/`, `ci/`, `build/`, `release/`); every commit is
   signed; `main` takes changes only through pull requests.
