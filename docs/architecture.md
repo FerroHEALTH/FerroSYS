@@ -75,13 +75,17 @@ p99 and its maximum beside the latencies (#400).
 
 ### Dependency direction
 
-```
-ferrohealth-secret  <-  ferrohealth-config  <-  ferrohealth-server
-        ^                     ^                       |
-        |                     |                       v
- ferrohealth-smart     ferrohealth-telemetry   ferrohealth-health
- ihe-atna                     ^
- ehds-logging          ferrohealth-usage-report
+```mermaid
+flowchart RL
+    config["ferrohealth-config"] --> secret["ferrohealth-secret"]
+    server["ferrohealth-server"] --> config
+    server --> telemetry["ferrohealth-telemetry"]
+    server --> health["ferrohealth-health"]
+    telemetry --> config
+    usage["ferrohealth-usage-report"] --> telemetry
+    smart["ferrohealth-smart"] --> secret
+    atna["ihe-atna"] --> secret
+    ehds["ehds-logging"] --> secret
 ```
 
 An arrow points at the dependency. `ferrohealth-server` depends on
