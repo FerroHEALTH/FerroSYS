@@ -10,6 +10,8 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-24
+
 ### Added
 
 - `dir::SecretDir`, named secrets in one directory, one file per secret,
@@ -62,7 +64,8 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
   ending removed, an empty file refused, and every error naming the key and
   never the secret (#13).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.1...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.2...HEAD
+[0.2.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.1...ferrohealth-secret-v0.2.2
 [0.2.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.2.0...ferrohealth-secret-v0.2.1
 [0.2.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-secret-v0.1.0...ferrohealth-secret-v0.2.0
 [0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-secret-v0.1.0
