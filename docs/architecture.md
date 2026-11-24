@@ -48,7 +48,7 @@ crates.io belongs to an unrelated project.
 
 | Crate | Holds | Why it stands alone | Taken by |
 |---|---|---|---|
-| `ferrohealth-secret` | `Secret`, `SecretUrl`, `RedactedUrl`, `Redacted<T>`, the `<key>` / `<key>_file` rule | the base every other crate needs, FerroSMART and FerroAUDIT included, so it stays small: no TOML, no HTTP, no OpenTelemetry | every server and console, FerroSMART, FerroAUDIT, the other five crates |
+| `ferrohealth-secret` | `Secret`, `SecretUrl`, `RedactedUrl`, `Redacted<T>`, the `<key>` / `<key>_file` rule, `SecretDir` (named secrets in a directory, read again on change) | the base every other crate needs, FerroSMART and FerroAUDIT included, so it stays small: no TOML, no HTTP, no OpenTelemetry | every server and console, FerroSMART, FerroAUDIT, the other five crates |
 | `ferrohealth-config` | the TOML file, the `PREFIX__A__B` environment overrides, the strict checks, provenance, the `config check` rendering | consoles and job binaries take it without a server | every server and console |
 | `ferrohealth-telemetry` | the console subscriber, the request log, OTLP traces and metrics, the Prometheus reader; `otlp`, `prometheus` and `axum` features | every binary wants the console; a console leaves the exporters off | every server and console |
 | `ferrohealth-health` | the readiness document (serde only, builds for `wasm32`); the indicator trait, registry and lifecycle behind the `registry` feature | the document crosses into a console's browser half and each operator-api crate | servers (registry), consoles and operator-api crates (document) |
@@ -100,6 +100,7 @@ pub struct SecretUrl(SecretString);       // renders with userinfo and credentia
 pub struct RedactedUrl<'a>(pub &'a str);  // the rendering of any URL, moved from ihe-atna
 pub struct Redacted<T>(pub T);            // Debug names the type and prints REDACTED
 pub fn read_secret(key: &str, value: Option<Secret>, file: Option<&Path>) -> Result<Option<Secret>, SecretError>;
+pub struct SecretDir;      // open(dir), get(name), get_pair(name), names(), refresh(), watch(interval, on_error)
 
 // ferrohealth-config (deps: toml, serde, ferrohealth-secret)
 pub struct Loader;   // Loader::new("FERROSYS")?.alias("RUST_LOG", "telemetry.filter").reserve("FERROSYS_STATE_DIR")

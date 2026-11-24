@@ -139,14 +139,18 @@ pub fn read_secret_file(key: &str, path: &Path) -> Result<SecretString, SecretEr
             path: path.to_path_buf(),
             source,
         })?;
-    let value = text.trim_end_matches(['\n', '\r']);
-    if value.is_empty() {
-        return Err(SecretError::Empty {
-            key: key.to_owned(),
-            path: path.to_path_buf(),
-        });
-    }
+    let value = secret_text(&text).ok_or_else(|| SecretError::Empty {
+        key: key.to_owned(),
+        path: path.to_path_buf(),
+    })?;
     Ok(SecretString::from(value))
+}
+
+/// The secret a secret file holds: its text without the trailing line
+/// endings, or `None` when nothing is left.
+pub(crate) fn secret_text(text: &str) -> Option<&str> {
+    let value = text.trim_end_matches(['\n', '\r']);
+    (!value.is_empty()).then_some(value)
 }
 
 #[cfg(test)]
