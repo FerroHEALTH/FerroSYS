@@ -22,9 +22,12 @@
 //! the refusals since the line before. No specification governs the queue,
 //! its sizes or the refusal line: our own design.
 
+use std::future::Future;
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use axum::extract::{MatchedPath, Request, State};
@@ -170,6 +173,12 @@ impl RefusalLines {
     }
 }
 
+/// What [`Admission::try_slot`] took: a free slot, or a place in the queue.
+enum Ticket {
+    Slot(OwnedSemaphorePermit),
+    Place(OwnedSemaphorePermit),
+}
+
 /// Why a request past the bound was refused.
 #[derive(Debug, Clone, Copy)]
 enum Refusal {
@@ -268,15 +277,31 @@ impl Admission {
 
     /// Takes a slot, waiting in the queue when none is free.
     async fn slot(&self) -> Result<OwnedSemaphorePermit, Refusal> {
+        match self.try_slot()? {
+            Ticket::Slot(slot) => Ok(slot),
+            Ticket::Place(place) => self.wait(place).await,
+        }
+    }
+
+    /// Takes a free slot, or else a place in the queue.
+    fn try_slot(&self) -> Result<Ticket, Refusal> {
         // NOTE: tokio 1 `Semaphore` docs, "fair": a released permit goes to the first
         // waiter, so this try cannot take a slot ahead of a request already queued.
         if let Ok(slot) = Arc::clone(&self.slots).try_acquire_owned() {
-            return Ok(slot);
+            return Ok(Ticket::Slot(slot));
         }
         let Some(queue) = &self.queue else {
             return Err(Refusal::QueueFull);
         };
-        let Ok(_place) = Arc::clone(&queue.places).try_acquire_owned() else {
+        let Ok(place) = Arc::clone(&queue.places).try_acquire_owned() else {
+            return Err(Refusal::QueueFull);
+        };
+        Ok(Ticket::Place(place))
+    }
+
+    /// Waits in the queue, holding `place`, for a slot.
+    async fn wait(&self, _place: OwnedSemaphorePermit) -> Result<OwnedSemaphorePermit, Refusal> {
+        let Some(queue) = &self.queue else {
             return Err(Refusal::QueueFull);
         };
         if let Some(metrics) = &self.metrics {
@@ -347,6 +372,131 @@ pub async fn admit(State(admission): State<Admission>, request: Request, next: N
     match admission.slot().await {
         Ok(_slot) => next.run(request).await,
         Err(refusal) => admission.refuse(refusal, &request),
+    }
+}
+
+/// The layer of [`admit`] that the stack mounts: a request that finds a
+/// free slot, or an exempt route, is passed to the service it wraps with
+/// no clone and no box of that service.
+#[derive(Debug, Clone)]
+pub(crate) struct AdmissionLayer(Admission);
+
+impl AdmissionLayer {
+    /// The layer over `admission`.
+    pub(crate) fn new(admission: Admission) -> Self {
+        Self(admission)
+    }
+}
+
+impl<S> tower::Layer<S> for AdmissionLayer {
+    type Service = Admit<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        Admit {
+            admission: self.0.clone(),
+            inner,
+        }
+    }
+}
+
+/// The service of [`AdmissionLayer`].
+#[derive(Debug, Clone)]
+pub(crate) struct Admit<S> {
+    admission: Admission,
+    inner: S,
+}
+
+impl<S> tower::Service<Request> for Admit<S>
+where
+    S: tower::Service<Request, Response = Response> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = AdmitFuture<S::Future, S::Error>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        if self.admission.exempts(&request) {
+            return AdmitFuture::Serving {
+                call: self.inner.call(request),
+                slot: None,
+            };
+        }
+        match self.admission.try_slot() {
+            Ok(Ticket::Slot(slot)) => AdmitFuture::Serving {
+                call: self.inner.call(request),
+                slot: Some(slot),
+            },
+            Ok(Ticket::Place(place)) => {
+                // NOTE: tower 0.5 `Service` docs, "Be careful when cloning inner services":
+                // the service made ready is the one called once the wait ends.
+                let clone = self.inner.clone();
+                let mut inner = std::mem::replace(&mut self.inner, clone);
+                let admission = self.admission.clone();
+                AdmitFuture::Queued {
+                    wait: Box::pin(async move {
+                        match admission.wait(place).await {
+                            Ok(_slot) => inner.call(request).await,
+                            Err(refusal) => Ok(admission.refuse(refusal, &request)),
+                        }
+                    }),
+                }
+            }
+            Err(refusal) => AdmitFuture::Refused {
+                response: Some(self.admission.refuse(refusal, &request)),
+            },
+        }
+    }
+}
+
+/// The wait in the queue and the call after it.
+type Queued<E> = Pin<Box<dyn Future<Output = Result<Response, E>> + Send>>;
+
+pin_project_lite::pin_project! {
+    /// The future of [`Admit`]: the call in a slot, the wait in the queue,
+    /// or a refusal.
+    #[project = AdmitProjection]
+    pub(crate) enum AdmitFuture<F, E> {
+        Serving {
+            #[pin]
+            call: F,
+            slot: Option<OwnedSemaphorePermit>,
+        },
+        Queued {
+            wait: Queued<E>,
+        },
+        Refused {
+            response: Option<Response>,
+        },
+    }
+}
+
+impl<F, E> Future for AdmitFuture<F, E>
+where
+    F: Future<Output = Result<Response, E>>,
+{
+    type Output = Result<Response, E>;
+
+    #[expect(
+        clippy::expect_used,
+        reason = "a refusal is taken once, on the poll that completes the future"
+    )]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.project() {
+            AdmitProjection::Serving { call, slot } => {
+                let answer = ready!(call.poll(cx));
+                drop(slot.take());
+                Poll::Ready(answer)
+            }
+            AdmitProjection::Queued { wait } => wait.as_mut().poll(cx),
+            AdmitProjection::Refused { response } => Poll::Ready(Ok(response
+                .take()
+                .expect("a completed future should not be polled again"))),
+        }
     }
 }
 

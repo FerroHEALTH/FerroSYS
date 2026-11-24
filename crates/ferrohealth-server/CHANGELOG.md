@@ -10,6 +10,15 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Fixed
+
+- A request admitted by the overload bound no longer pays for a clone and
+  a box of the whole stack. The bound and the API security headers run as
+  hand-written `tower` services at the positions 0.12.1 gave them, with
+  the same refusals and the same order, so one admitted request through
+  the stack allocates 56 times against 67 in 0.12.1 and 57 in 0.12.0
+  (#428).
+
 ## [0.12.1] - 2026-11-23
 
 ### Changed

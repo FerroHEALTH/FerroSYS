@@ -37,8 +37,11 @@
 //! `includeSubDomains` is left out, because a product does not decide for
 //! the hosts beside it (§6.1.2).
 
-use axum::extract::{Request, State};
-use axum::middleware::Next;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, ready};
+
+use axum::extract::Request;
 use axum::response::Response;
 use http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY,
@@ -103,13 +106,72 @@ pub(crate) struct Transport {
     pub(crate) tls: bool,
 }
 
-/// The middleware the stack mounts outermost.
-pub(crate) async fn set(
-    State(transport): State<Transport>,
-    request: Request,
-    next: Next,
-) -> Response {
-    let mut response = next.run(request).await;
+/// The layer the stack mounts outermost.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ApiHeadersLayer(pub(crate) Transport);
+
+impl<S> tower::Layer<S> for ApiHeadersLayer {
+    type Service = ApiHeaders<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        ApiHeaders {
+            transport: self.0,
+            inner,
+        }
+    }
+}
+
+/// The service of [`ApiHeadersLayer`].
+#[derive(Debug, Clone)]
+pub(crate) struct ApiHeaders<S> {
+    transport: Transport,
+    inner: S,
+}
+
+impl<S> tower::Service<Request> for ApiHeaders<S>
+where
+    S: tower::Service<Request, Response = Response>,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = ApiHeadersFuture<S::Future>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        ApiHeadersFuture {
+            transport: self.transport,
+            inner: self.inner.call(request),
+        }
+    }
+}
+
+pin_project_lite::pin_project! {
+    /// The future of [`ApiHeaders`].
+    pub(crate) struct ApiHeadersFuture<F> {
+        transport: Transport,
+        #[pin]
+        inner: F,
+    }
+}
+
+impl<F, E> Future for ApiHeadersFuture<F>
+where
+    F: Future<Output = Result<Response, E>>,
+{
+    type Output = Result<Response, E>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let response = ready!(this.inner.poll(cx))?;
+        Poll::Ready(Ok(set(*this.transport, response)))
+    }
+}
+
+/// Sets the headers `response` lacks, unless it is exempt.
+fn set(transport: Transport, mut response: Response) -> Response {
     if response.extensions().get::<Exempt>().is_some() {
         return response;
     }
