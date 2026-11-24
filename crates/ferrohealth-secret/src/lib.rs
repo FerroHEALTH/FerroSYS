@@ -16,10 +16,14 @@
 //!   patient identifier a `Debug` that shows none of it.
 //! - [`mod@file`] reads a secret from its key or from the file its `<key>_file`
 //!   sibling names, exactly one of the two.
+//! - [`dir`] resolves a secret by a name learned at runtime from a directory
+//!   of secret files, such as a mounted Kubernetes Secret, and reads the
+//!   directory again when it changes.
 //!
 //! Every secret is held in a [`secrecy::SecretString`], which zeroes its
 //! memory on drop. No specification governs any of this: our own design.
 
+pub mod dir;
 pub mod file;
 pub mod redacted;
 pub mod secret;

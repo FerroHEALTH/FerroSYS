@@ -21,6 +21,10 @@ of the type, so a secret or a patient value cannot reach a log line, a
 - `file::read_secret` and `file::require_secret` read a secret from its key
   or from the file its `<key>_file` sibling names, exactly one of the two,
   with the trailing line ending removed and an empty file refused.
+- `dir::SecretDir` resolves a secret by a name learned at runtime, such as
+  a database row that names its HMAC key or client certificate, from a
+  directory with one file per secret, and reads the directory again when it
+  changes (see below).
 - Feature `schema` implements `schemars::JsonSchema` for `Secret` and
   `SecretUrl`, for a product that generates its configuration reference.
   Each schema is a string whose description names the `<key>_file` form and
@@ -43,6 +47,46 @@ fn password(inline: Option<Secret>, file: Option<&std::path::Path>) -> Result<Se
 ```
 
 Pin the version exactly, as every FerroHEALTH product does.
+
+## A directory of named secrets
+
+```rust,ignore
+use std::time::Duration;
+
+use ferrohealth_secret::dir::SecretDir;
+
+fn sources() -> Result<(), ferrohealth_secret::dir::SecretDirError> {
+    let dir = SecretDir::open("/run/secrets/sources")?;
+    // Keep the watch for as long as the directory is read; dropping it stops the thread.
+    let _watch = dir.watch(Duration::from_secs(10), |error| eprintln!("{error}"))?;
+    let hmac = dir.get("partner-a-hmac")?;
+    let client = dir.get_pair("partner-a-client")?;
+    connect(hmac, client.certificate(), client.key());
+    Ok(())
+}
+```
+
+Each secret is one file named by the secret's name. A name is one path
+segment with no leading dot, so a name from a database row cannot reach
+outside the directory. `get_pair` reads `<name>.crt` and `<name>.key` from
+the same update. Every read answers from one snapshot of the directory;
+`refresh` takes a new one, and `watch` does so at a fixed interval, keeping
+the last snapshot when a read fails. `dir::SecretDirConfig` holds the `dir`
+and `poll_seconds` keys for a product's configuration file.
+
+- **Kubernetes:** mount one Secret as a volume, without `subPath`. The
+  kubelet updates the files when the Secret changes, after its sync period
+  and cache delay; a `subPath` mount and an environment variable never
+  update ([Secrets: using Secrets as files from a
+  Pod](https://kubernetes.io/docs/concepts/configuration/secret/#using-secrets-as-files-from-a-pod)).
+  The kubelet writes each update into a new hidden directory and renames
+  the `..data` symlink to it, and the crate reads every key from the
+  directory `..data` names, so a rotated certificate and key never mix.
+  The External Secrets Operator or the Secrets Store CSI driver can fill
+  the Secret.
+- **Compose:** bind-mount a directory. Replace a secret by writing a new
+  file beside it and renaming it over the old one; a rename is atomic, and
+  a write in place can be read half done.
 
 ## Licence
 

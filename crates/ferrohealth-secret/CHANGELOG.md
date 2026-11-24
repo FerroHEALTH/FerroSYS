@@ -10,6 +10,22 @@ released by the tag `ferrohealth-secret-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- `dir::SecretDir`, named secrets in one directory, one file per secret,
+  read again when the directory changes, for a secret a product learns the
+  name of while it runs (#425). `open` reads the directory into a
+  `dir::Snapshot`, `refresh` reads it again, and `watch` refreshes on a
+  thread at a fixed interval and hands a failed read to a callback, keeping
+  the last snapshot. A Kubernetes Secret mounted without `subPath` is read
+  from the directory its `..data` symlink names, so a read sees one update
+  whole. `get` resolves a name to a `SecretString`, `get_pair` reads a
+  client certificate from `<name>.crt` and `<name>.key`, and `names` lists
+  what exists. A name is one path segment with no leading dot, and every
+  `dir::SecretDirError` names the secret or the directory and never a value.
+  `dir::SecretDirConfig` is the `dir` and `poll_seconds` configuration, with
+  `deny_unknown_fields`.
+
 ## [0.2.1] - 2026-11-10
 
 ### Added
