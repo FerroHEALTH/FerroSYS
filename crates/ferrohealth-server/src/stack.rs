@@ -15,12 +15,12 @@ use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
 use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::api_headers;
+use crate::api_headers::{self, ApiHeadersLayer};
 use crate::client_address::Forwarding;
 use crate::decoding::DecodeLayer;
 use crate::edge::{self, EdgeLayer, IdentifyLayer};
 use crate::health::{self, Health};
-use crate::overload::{self, Admission};
+use crate::overload::{Admission, AdmissionLayer};
 use crate::panic::{self, PanicBody};
 use crate::refusal::{self, RefusalBody};
 use crate::section::ServerSection;
@@ -294,12 +294,6 @@ fn wrap(
     // NOTE: axum 0.8 `Router::route_layer` wraps the routes alone after routing, so the
     // bound sees the matched route, passes the health family and leaves every fallback out.
     routes
-        .route_layer(axum::middleware::from_fn_with_state(
-            admission,
-            overload::admit,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            transport,
-            api_headers::set,
-        ))
+        .route_layer(AdmissionLayer::new(admission))
+        .layer(ApiHeadersLayer(transport))
 }

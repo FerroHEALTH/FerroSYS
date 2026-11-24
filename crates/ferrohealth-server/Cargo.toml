@@ -94,6 +94,7 @@ x509-cert = { workspace = true, optional = true }
 x509-ocsp = { workspace = true, optional = true }
 
 [dev-dependencies]
+allocation-counter.workspace = true
 criterion.workspace = true
 hyper = { workspace = true, features = ["http2"] }
 rcgen.workspace = true

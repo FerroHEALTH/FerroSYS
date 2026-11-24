@@ -127,6 +127,9 @@ quote = { version = "1.0.47", default-features = false }
 # The floor benchmark of ferrohealth-server, on the line FerroTERM resolves.
 # Verified against crates.io on 2026-10-27.
 criterion = { version = "0.8.2", default-features = false }
+# The allocations of one request through the ferrohealth-server stack (#428).
+# Verified against crates.io on 2026-11-24.
+allocation-counter = "0.8.1"
 # The runtime, and the one-shot service call of the request-log cases.
 tokio = { version = "1.53.3", default-features = false }
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
