@@ -12,7 +12,8 @@ under `crates/` releases on its own version line:
 
 The crates are `ferrohealth-secret`, `ferrohealth-config`,
 `ferrohealth-telemetry`, `ferrohealth-health`, `ferrohealth-server`,
-`ferrohealth-usage-report` and `ferrohealth-perf` (`docs/architecture.md`). A crate holds its name
+`ferrohealth-usage-report`, `ferrohealth-perf` and `ferrohealth-openpgp-pq`
+(`docs/architecture.md`). A crate holds its name
 at 0.0.0 until its first release.
 
 A release is the signed tag on the merge commit of the release pull request
@@ -183,11 +184,12 @@ carries other changes too, the Security section opens with its reason
 (§ Security entries). Publish the advisory, with the release version as its
 patched version, in the same hour as the release.
 
-`deny.toml` accepts no advisory today, and `scripts/checks/advisory-exceptions.sh`,
-in the `cargo-deny` CI job, fails an exception that has outlived its
-finding. The VEX document arrives with the first accepted advisory: that
-change adds `security/vex/rust-advisories.toml`, the generated
-`security/vex/rust-advisories.openvex.json`, `scripts/security/vex-generate.sh`,
-`scripts/checks/vex-advisories.sh` and `scripts/checks/vex-reachability.sh`,
-copied from FerroUI or FerroPIX, and a `vex` CI job. An empty document would
-fail `vex-advisories.sh`, which requires a statement.
+`deny.toml` accepts two advisories that rPGP links into
+`ferrohealth-openpgp-pq`, each with its OpenVEX statement in
+`security/vex/rust-advisories.toml` and the generated
+`security/vex/rust-advisories.openvex.json`
+(`scripts/security/vex-generate.sh`). In CI, `scripts/checks/vex-advisories.sh`
+fails a document that differs from what the two files generate,
+`scripts/checks/vex-reachability.sh` fails a statement whose dependency path
+is not the one cargo resolves, and `scripts/checks/advisory-exceptions.sh`
+fails an exception that has outlived its finding.

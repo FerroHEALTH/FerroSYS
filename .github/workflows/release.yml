@@ -27,6 +27,7 @@ on:
       - "ferrohealth-server-v*"
       - "ferrohealth-usage-report-v*"
       - "ferrohealth-perf-v*"
+      - "ferrohealth-openpgp-pq-v*"
   workflow_dispatch:
     inputs:
       tag:
@@ -69,7 +70,7 @@ jobs:
           else
             tag="${GITHUB_REF_NAME}"
           fi
-          if ! printf '%s\n' "$tag" | grep -qE '^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+          if ! printf '%s\n' "$tag" | grep -qE '^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf|openpgp-pq)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
             echo "::error::'$tag' is not a ferrohealth-<crate>-vX.Y.Z tag of a FerroSYS crate" >&2
             exit 1
           fi

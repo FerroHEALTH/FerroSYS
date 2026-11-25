@@ -119,6 +119,14 @@ jobs:
       - name: Licence headers
         if: ${{ !cancelled() }}
         run: bash scripts/checks/licence-headers.sh
+      # The published Rust advisory VEX is exactly what deny.toml and
+      # security/vex/rust-advisories.toml generate. No specification governs
+      # the gate: our own design.
+      - name: Every accepted advisory has a published VEX justification
+        if: ${{ !cancelled() }}
+        run: |
+          bash scripts/checks/vex-advisories.sh --self-test
+          bash scripts/checks/vex-advisories.sh
       # The file-size ratchet: a hand-written Rust file is at most 800 lines,
       # and a listed breach may shrink and never grow
       # (`.claude/rules/rust-style.md` §File size).
@@ -241,6 +249,13 @@ jobs:
       - name: No exception for an advisory that no longer fires
         if: ${{ !cancelled() }}
         run: bash scripts/checks/advisory-exceptions.sh
+      # A VEX statement whose argument names the wrong dependency path reads
+      # as true; this compares each path with the graph cargo resolves.
+      - name: Every VEX statement names the real dependency path
+        if: ${{ !cancelled() }}
+        run: |
+          bash scripts/checks/vex-reachability.sh --self-test
+          bash scripts/checks/vex-reachability.sh
 
   test:
     name: nextest

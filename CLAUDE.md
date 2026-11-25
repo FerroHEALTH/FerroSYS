@@ -26,7 +26,10 @@ are on crates.io, each released on its own version line by its own tag
 `ferrohealth-telemetry`, `ferrohealth-health`, `ferrohealth-server` and
 `ferrohealth-usage-report`. Beside them, `ferrohealth-perf` is the
 performance gate a product's CI job runs against its server (#249), a CLI
-on its own version line that no product links. Each crate's `Cargo.toml` and `CHANGELOG.md`
+on its own version line that no product links, and
+`ferrohealth-openpgp-pq` signs and verifies RFC 9980 ML-DSA-65+Ed25519
+OpenPGP signatures for FerroEHR and the licence tooling, with the
+`ferrohealth-sop` command line (#438). Each crate's `Cargo.toml` and `CHANGELOG.md`
 name its version and what it shipped. Planned work lives on the milestones,
 one per crate release, never as a prose promise in the README; describe
 only what exists. A new crate is added only after its issue is filed, its
@@ -34,7 +37,9 @@ milestone set and its crates.io name reserved, which needs the owner.
 
 ## What belongs here, and what does not
 
-- **Here:** process plumbing every server would otherwise write for itself:
+- **Here:** the post-quantum OpenPGP signer FerroEHR and the licence
+  tooling share (`ferrohealth-openpgp-pq`), and process plumbing every
+  server would otherwise write for itself:
   the console format and filter, the request log that names the matched
   route and never a body, OTLP traces and metrics, liveness and readiness,
   the request id, the panic catch, timeouts and body limits, the console

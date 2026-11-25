@@ -163,6 +163,7 @@ STUB
   said "$clean_case" "$calls" "label create documentation --color 0075ca"
   said "$clean_case" "$calls" "label create usage-report --color bfd4f2"
   said "$clean_case" "$calls" "label create perf-gate --color d4c5f9"
+  said "$clean_case" "$calls" "label create openpgp-pq --color 0e8a16"
   said "$clean_case" "$calls" "label create spec:OpenTelemetry --color fbca04"
   said "$clean_case" "$calls" "label create no-changelog --color bfdadc"
   said "$clean_case" "$calls" "--force"
@@ -260,6 +261,7 @@ label health       006b75 "The ferrohealth-health crate: the indicator registry,
 label server       c5def5 "The ferrohealth-server crate: the listener, TLS, the tower-http stack and the bounded drain."
 label usage-report bfd4f2 "The ferrohealth-usage-report crate: the installation report to FerroPULSE."
 label perf-gate    d4c5f9 "The ferrohealth-perf crate: the performance gate of the servers in CI."
+label openpgp-pq   0e8a16 "The ferrohealth-openpgp-pq crate: RFC 9980 OpenPGP signing and its SOP command line."
 
 echo "== specification labels (where one applies) =="
 label spec:OpenTelemetry fbca04 "The OpenTelemetry specification and the W3C Trace Context recommendation."

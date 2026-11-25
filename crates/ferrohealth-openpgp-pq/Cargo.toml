@@ -4,7 +4,7 @@
 name = "ferrohealth-openpgp-pq"
 description = "Post-quantum OpenPGP signatures for the FerroHEALTH products: RFC 9980 ML-DSA-65+Ed25519 v6 keys and signatures over rPGP and aws-lc-rs, with a Stateless OpenPGP command line"
 # Its own version line, released by the tag ferrohealth-openpgp-pq-v<version>.
-version = "0.1.0"
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

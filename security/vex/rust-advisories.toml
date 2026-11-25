@@ -56,25 +56,76 @@
 # taken from the clock: the generator must be deterministic, or the drift check
 # would fail on every run. Bump `version` and `timestamp` together whenever a
 # statement changes.
-id = "https://github.com/FerroHEALTH/FerroUI/blob/main/security/vex/rust-advisories.openvex.json"
+id = "https://github.com/FerroHEALTH/FerroSYS/blob/main/security/vex/rust-advisories.openvex.json"
 author = "Cadasto B.V."
 role = "vendor"
-timestamp = "2026-10-29T00:00:00Z"
-version = 2
+timestamp = "2026-11-25T00:00:00Z"
+version = 1
 
-# What the statements are about: the one crate this repository publishes,
-# `ferrohealth-ui` on crates.io. The gallery is a workspace member that is
-# never published; it appears in `workspace_roots` because the graph holds it.
+# What the statements are about: the crate that carries both advisories into
+# the graph, `ferrohealth-openpgp-pq` on crates.io, its library and its
+# `ferrohealth-sop` binary.
 products = [
-  "pkg:cargo/ferrohealth-ui",
+  "pkg:cargo/ferrohealth-openpgp-pq",
 ]
 
 # Accepted by the advisory gate. Every id here MUST appear in `deny.toml`'s
 # `[advisories].ignore`, and every id there MUST appear here. The generator
 # enforces both directions.
 
-# None today: the framework that carried `paste` (RUSTSEC-2024-0436) left
-# the workspace with FerroUI 0.6.0 (#510).
+[[accepted]]
+id = "RUSTSEC-2023-0071"
+crate = "rsa"
+aliases = ["CVE-2023-49092", "GHSA-c38w-74pg-36hr", "GHSA-4grx-2x9w-596c"]
+carriers = ["pgp"]
+workspace_roots = [
+  "ferrohealth-openpgp-pq",
+]
+status = "not_affected"
+justification = "vulnerable_code_not_in_execute_path"
+impact = """
+The Marvin timing sidechannel leaks an RSA private key through the timing of \
+RSA private-key operations. `rsa` 0.9 is a non-optional dependency of `pgp` \
+0.21 (rPGP), which `ferrohealth-openpgp-pq` uses to read and write OpenPGP \
+packets. The crate performs no RSA operation of any kind: it accepts only \
+ML-DSA-65+Ed25519 (RFC 9980 algorithm 30) keys and signatures, refusing any \
+other algorithm with `Error::Algorithm` before a key is used or a signature \
+is hashed (`CompositePublicKey::try_from`, `Certificate::verify`), and both \
+halves of every signature it makes or checks run in `aws-lc-rs` \
+(`crates/ferrohealth-openpgp-pq/src/composite.rs`). rPGP's signing and \
+verification only reach the crate's own `SigningKey` and `VerifyingKey` \
+implementations. The test \
+`refusals::keys_of_another_algorithm_are_refused_before_any_rpgp_cryptography` \
+and the source check `refusals::the_crate_names_no_rpgp_public_key_primitive` \
+hold this. DELETING EVENT: an rPGP release on `rsa` 0.10, which fixes the \
+advisory; upgrade the day it ships.\
+"""
+
+[[accepted]]
+id = "RUSTSEC-2026-0387"
+crate = "crypto-bigint"
+version = "0.5.5"
+carriers = ["cx448", "elliptic-curve"]
+workspace_roots = [
+  "ferrohealth-openpgp-pq",
+]
+status = "not_affected"
+justification = "vulnerable_code_not_in_execute_path"
+impact = """
+The advisory concerns crypto-bigint 0.5 operations meant to be constant-time \
+that can branch on their operands, which leaks only when an operand is \
+secret. The crate is reached through `cx448` (Ed448) and `elliptic-curve` \
+0.13 (the ECDSA curves `p256`, `p384`, `p521` and `k256`), all carried by \
+`pgp` 0.21 (rPGP) as non-optional dependencies. `ferrohealth-openpgp-pq` \
+runs none of that arithmetic: it accepts only ML-DSA-65+Ed25519 (RFC 9980 \
+algorithm 30) keys and signatures, refusing an ECDSA, Ed448 or any other \
+key or signature with `Error::Algorithm` before it is used, and computes \
+both halves of every signature in `aws-lc-rs`. The test \
+`refusals::keys_of_another_algorithm_are_refused_before_any_rpgp_cryptography` \
+and the source check `refusals::the_crate_names_no_rpgp_public_key_primitive` \
+hold this. DELETING EVENT: an rPGP release on `elliptic-curve` 0.14 and \
+`crypto-bigint` 0.6 (rpgp/rpgp#573); upgrade the day it ships.\
+"""
 
 # Lock-file-only advisories: findings cargo-deny never raises, because it
 # resolves cargo features, but which a scanner reading `Cargo.lock` alone

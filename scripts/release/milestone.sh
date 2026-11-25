@@ -45,7 +45,7 @@ repo() {
 
 valid_tag() {
   local tag="$1"
-  if [[ ! "$tag" =~ ^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  if [[ ! "$tag" =~ ^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf|openpgp-pq)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
     echo "::error::milestone: '$tag' is not a ferrohealth-<crate>-vX.Y.Z tag of a FerroSYS crate" >&2
     exit 2
   fi

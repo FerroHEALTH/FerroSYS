@@ -5,8 +5,10 @@
 
 Vulnerability Exploitability eXchange documents, in
 [OpenVEX](https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md) format,
-stating whether a finding affects what FerroUI publishes: the
-`ferrohealth-ui` crate on crates.io (`pkg:cargo/ferrohealth-ui`).
+stating whether a finding affects what FerroSYS publishes. The statements
+today concern `ferrohealth-openpgp-pq` on crates.io
+(`pkg:cargo/ferrohealth-openpgp-pq`), the one crate whose graph carries an
+accepted advisory.
 
 A VEX document is the machine-readable form of an argument. Each statement
 names the vulnerability, the product, a `status`, a `justification` from the
@@ -18,7 +20,7 @@ later.
 
 - **`not_affected` needs a justification from the OpenVEX vocabulary**, and
   the `impact_statement` says concretely why the code is unreachable in
-  FerroUI's use. "Low risk" is not a justification.
+  FerroSYS's use. "Low risk" is not a justification.
 - **A finding that can be fixed is fixed.** A statement is for a finding
   whose fix belongs to someone else, such as an unmaintained crate with no
   successor.
@@ -30,10 +32,10 @@ later.
 
 | File | Subject | Authored |
 |---|---|---|
-| `rust-advisories.openvex.json` | The Rust dependency advisories the advisory gate accepts. Each statement carries a `ferroui:reachability` block (our own extension; OpenVEX defines none) naming the crates the affected package is reached through. While the gate accepts none, it holds no statement, which says so. | **generated** |
+| `rust-advisories.openvex.json` | The Rust dependency advisories the advisory gate accepts. Each statement carries a `ferrosys:reachability` block (our own extension; OpenVEX defines none) naming the crates the affected package is reached through. | **generated** |
 
-FerroUI publishes no container image, so there is no document for an image's
-packages and no image scan.
+FerroSYS publishes no container image, so there is no document for an
+image's packages and no image scan.
 
 ## The generated document
 

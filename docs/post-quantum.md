@@ -28,6 +28,8 @@ updates both in the same pull request.
   hybrid solutions are recommended (§4.1).
 - **RFC 10024:** the TLS 1.3 hybrid group X25519MLKEM768 (codepoint
   0x11EC), within the hybrid design of RFC 9954.
+- **RFC 9980:** post-quantum cryptography in OpenPGP; ML-DSA-65+Ed25519
+  (algorithm ID 30) is the signature every implementation must support.
 - **RFC 9964:** ML-DSA for JOSE and COSE. **RFC 9881:** ML-DSA in X.509,
   CRLs and OCSP.
 
@@ -66,6 +68,8 @@ operator's certificates decide the algorithm.
 | TLS record protection | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-server/src/tls.rs` |
 | CRL and OCSP response signature verification | RSA, ECDSA, Ed25519 | no | RFC 9881 | `crates/ferrohealth-server/src/revocation/signature.rs` |
 | OCSP CertID and certificate digests | SHA-1 (RFC 6960 CertID), SHA-256 | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-server/src/revocation/ocsp.rs, crates/ferrohealth-server/src/revocation/chain.rs` |
+| OpenPGP signatures of ferrohealth-openpgp-pq | ML-DSA-65+Ed25519 (RFC 9980 algorithm ID 30) over SHA2-512, v6 keys and signatures | yes | RFC 9980 | `crates/ferrohealth-openpgp-pq/src/composite.rs` |
+| Password protection of a ferrohealth-openpgp-pq secret key | AEAD with an Argon2 derived key (RFC 9580 v6 S2K) | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-openpgp-pq/src/key.rs` |
 | DPoP proofs and client assertions the performance gate signs | ES256 (ECDSA P-256) | no | RFC 9964 | `crates/ferrohealth-perf/src/credentials.rs` |
 | crates.io publishing | Trusted Publishing (OIDC token from GitHub, RS256) | no | no standard yet | `.github/workflows/release.yml, .github/workflows/publish-crates.yml` |
 | Release build provenance | Sigstore attestation (ECDSA P-256) | no | no standard yet | `.github/workflows/release-crate.yml` |

@@ -29,4 +29,5 @@ or are configured from, and never promise one. Each crate has its own version li
 every release rolls out to every product at once. No crate is built before
 its crates.io name is reserved, which needs the owner. The seventh crate,
 `ferrohealth-perf` (#249), is a CI tool that runs beside a product and that
-no product links.
+no product links. The eighth, `ferrohealth-openpgp-pq` (#438), is the
+post-quantum OpenPGP signer FerroEHR and the licence tooling share.
