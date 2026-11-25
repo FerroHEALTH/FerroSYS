@@ -127,11 +127,12 @@ fn keys_certificates_and_signatures_read_back_in_both_encodings() {
     let signer = key.unlock(&Password::empty()).unwrap();
     let detached = signer.sign(&b"data"[..], Mode::Binary).unwrap();
     for encoding in [Encoding::Armored, Encoding::Binary] {
-        let key_bytes = key.encode(encoding).unwrap();
+        let key_bytes = encoding::encode(std::slice::from_ref(key.signed()), encoding).unwrap();
         let read = Key::read(&key_bytes).unwrap();
         assert_eq!(read.fingerprint(), key.fingerprint(), "key, {encoding:?}");
 
-        let certificate_bytes = key.certificate().encode(encoding).unwrap();
+        let certificate_bytes =
+            encoding::encode(std::slice::from_ref(key.certificate().signed()), encoding).unwrap();
         let certificate = Certificate::read(&certificate_bytes).unwrap();
         assert_eq!(
             certificate.fingerprint(),
@@ -153,8 +154,12 @@ fn armor_carries_no_crc24_footer() {
     let signer = key.unlock(&Password::empty()).unwrap();
     let detached = signer.sign(&b"data"[..], Mode::Binary).unwrap();
     let outputs = [
-        key.encode(Encoding::Armored).unwrap(),
-        key.certificate().encode(Encoding::Armored).unwrap(),
+        encoding::encode(std::slice::from_ref(key.signed()), Encoding::Armored).unwrap(),
+        encoding::encode(
+            std::slice::from_ref(key.certificate().signed()),
+            Encoding::Armored,
+        )
+        .unwrap(),
         encoding::encode(&[detached], Encoding::Armored).unwrap(),
     ];
     for output in outputs {
@@ -173,7 +178,11 @@ fn rpgp_parses_what_the_crate_writes() {
     let key = generated();
     let signer = key.unlock(&Password::empty()).unwrap();
     let detached = signer.sign(&b"data"[..], Mode::Binary).unwrap();
-    let certificate_bytes = key.certificate().encode(Encoding::Binary).unwrap();
+    let certificate_bytes = encoding::encode(
+        std::slice::from_ref(key.certificate().signed()),
+        Encoding::Binary,
+    )
+    .unwrap();
     let (parsed, _) = SignedPublicKey::from_reader_single(&*certificate_bytes).unwrap();
     assert_eq!(
         parsed.primary_key.fingerprint(),
@@ -229,7 +238,10 @@ fn a_locked_key_unlocks_only_with_its_password() {
         "relock"
     );
 
-    let read = Key::read(&key.encode(Encoding::Armored).unwrap()).unwrap();
+    let read = Key::read(
+        &encoding::encode(std::slice::from_ref(key.signed()), Encoding::Armored).unwrap(),
+    )
+    .unwrap();
     assert!(read.is_locked(), "stays locked on disk");
     assert!(
         matches!(read.unlock(&Password::from("wrong")), Err(Error::Locked(_))),

@@ -117,7 +117,7 @@ pub(crate) fn generate_key(arguments: &GenerateKey) -> Result<Vec<u8>, Failure> 
         key.lock(&Password::from(password.as_str()))
             .map_err(|error| Failure::from_error("generate-key", &error))?;
     }
-    key.encode(arguments.encoding)
+    encoding::encode(std::slice::from_ref(key.signed()), arguments.encoding)
         .map_err(|error| Failure::from_error("generate-key", &error))
 }
 

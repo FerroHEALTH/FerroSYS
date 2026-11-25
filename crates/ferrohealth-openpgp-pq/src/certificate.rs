@@ -218,15 +218,6 @@ impl Certificate {
         signature.verify(&self.key, data).map_err(Error::Invalid)?;
         Ok(Verification { created, mode })
     }
-
-    /// Writes the certificate.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Packet`] when a packet cannot be serialized.
-    pub fn encode(&self, encoding: Encoding) -> Result<Vec<u8>, Error> {
-        encoding::encode(std::slice::from_ref(&self.signed), encoding)
-    }
 }
 
 /// Writes `certificates` as one block, a keyring when there are several.

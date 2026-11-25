@@ -19,7 +19,6 @@ use rand::rngs::OsRng;
 
 use crate::certificate::Certificate;
 use crate::composite::{self, CompositeSecretKey, HASH};
-use crate::encoding::{self, Encoding};
 use crate::error::Error;
 use crate::mode::Mode;
 
@@ -221,15 +220,6 @@ impl Key {
             secret,
             certificate: self.certificate.clone(),
         })
-    }
-
-    /// Writes the key, with its secret material as it is (locked or not).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Packet`] when a packet cannot be serialized.
-    pub fn encode(&self, encoding: Encoding) -> Result<Vec<u8>, Error> {
-        encoding::encode(std::slice::from_ref(&self.signed), encoding)
     }
 }
 
