@@ -10,6 +10,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # Only a change CodeQL reads starts a pull-request analysis, and it never
+    # runs on a merge group (owner decision, 2026-11-25).
+    paths:
+      - ".github/workflows/**"
+      - ".github/actions/**"
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
   schedule:
     - cron: "23 5 * * 1"
 
