@@ -10,6 +10,8 @@ released by the tag `ferrohealth-openpgp-pq-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-25
+
 ### Added
 
 - ML-DSA-65+Ed25519 OpenPGP signatures (RFC 9980 algorithm ID 30) on RFC
@@ -38,3 +40,6 @@ the statements describe the dependencies it ships with.
   `crypto-bigint` (`security/vex/rust-advisories.openvex.json`). The crate
   signs and verifies only with ML-DSA-65+Ed25519 in aws-lc-rs and refuses
   every other algorithm before it is used.
+
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-openpgp-pq-v0.1.0...HEAD
+[0.1.0]: https://github.com/FerroHEALTH/FerroSYS/releases/tag/ferrohealth-openpgp-pq-v0.1.0
