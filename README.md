@@ -82,7 +82,7 @@ ferrohealth-secret = "=0.2.2"
 ferrohealth-config = "=0.4.5"
 ferrohealth-telemetry = { version = "=0.5.1", features = ["otlp", "prometheus", "axum"] }
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
-ferrohealth-server = { version = "=0.12.2", features = ["otlp"] }
+ferrohealth-server = { version = "=0.12.3", features = ["otlp"] }
 ferrohealth-usage-report = { version = "=0.5.0", features = ["telemetry"] }
 ```
 

@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-25
+
 ### Changed
 
 - The TLS 1.3 key exchange of the listener and of every client the crate
@@ -796,7 +798,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.2...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.3...HEAD
+[0.12.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.2...ferrohealth-server-v0.12.3
 [0.12.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.1...ferrohealth-server-v0.12.2
 [0.12.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.0...ferrohealth-server-v0.12.1
 [0.12.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.11.0...ferrohealth-server-v0.12.0
