@@ -10,6 +10,20 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Changed
+
+- The TLS 1.3 key exchange of the listener and of every client the crate
+  configures (the healthcheck, `TlsClient::client_config`,
+  `TlsClient::platform_config` and the revocation link) offers the
+  post-quantum hybrid X25519MLKEM768 (RFC 10024) first, then X25519, P-256
+  and P-384 for a peer that lacks it. The crate turns on rustls's
+  `prefer-post-quantum` feature, so the reqwest client `TlsClient::apply`
+  configures, and any other rustls user in the product that builds from the
+  default provider, offers it first too. `docs/post-quantum.md` lists every
+  cryptographic use of the FerroSYS crates and whether it is post-quantum
+  safe, with `conformance/post-quantum.tsv` as its machine-readable copy
+  (#436).
+
 ## [0.12.2] - 2026-11-24
 
 ### Fixed

@@ -7,7 +7,9 @@
 //! `[server.tls]` names, TLS 1.3 and 1.2 (RFC 8446, RFC 5246) over rustls
 //! with the aws-lc-rs provider, offering HTTP/2 and HTTP/1.1 by ALPN
 //! (RFC 7301). It prefers TLS 1.3 and offers only the four forward-secret
-//! TLS 1.2 cipher suites RFC 9325 §4.2 recommends (BCP 195). It asks a
+//! TLS 1.2 cipher suites RFC 9325 §4.2 recommends (BCP 195). Its TLS 1.3 key
+//! exchange prefers the post-quantum hybrid X25519MLKEM768 (RFC 10024) and
+//! takes X25519, P-256 or P-384 from a peer without it. It asks a
 //! client certificate as `client_auth` says, verified against
 //! `client_ca_file`, and hands a verified chain to the handlers as
 //! [`PeerCertificates`]. The key file is read through `ferrohealth-secret`,
@@ -158,10 +160,19 @@ macro_rules! tls_keys {
     };
 }
 
-/// The crypto provider of the listener and the healthcheck.
+/// The crypto provider of the listener and of every client this crate
+/// configures.
 pub(crate) fn provider() -> Arc<CryptoProvider> {
-    use rustls::crypto::aws_lc_rs::{cipher_suite, default_provider};
+    use rustls::crypto::aws_lc_rs::{cipher_suite, default_provider, kx_group};
     let mut provider = default_provider();
+    // NOTE: RFC 10024 and NIST IR 8547 §4.1.2; the hybrid group leads, and the
+    // classical groups remain for a peer that lacks it.
+    provider.kx_groups = vec![
+        kx_group::X25519MLKEM768,
+        kx_group::X25519,
+        kx_group::SECP256R1,
+        kx_group::SECP384R1,
+    ];
     // NOTE: RFC 9325 §4.2 recommends exactly these four TLS 1.2 suites, every one
     // forward secret (§7.3); the TLS 1.3 suites stay the provider's.
     provider

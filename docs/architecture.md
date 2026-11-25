@@ -214,7 +214,7 @@ crate adds it. `secrecy` 0.10.3, `serde` 1.0.229, `serde_json` 1.0.151,
 `opentelemetry-otlp` and `opentelemetry-proto` 0.33, `tracing-opentelemetry`
 0.34, `opentelemetry-prometheus` 0.33, `prometheus` 0.14, `axum` 0.8.9,
 `tower` 0.5.3, `tower-http` 0.7.1, `hyper` 1.11, `hyper-util` 0.1.21,
-`rustls` 0.23.46 with `aws_lc_rs`, `tokio-rustls` 0.26.6, `reqwest` 0.13.5,
+`rustls` 0.23.46 with `aws_lc_rs` and `prefer-post-quantum`, `tokio-rustls` 0.26.6, `reqwest` 0.13.5,
 `jiff` 0.2.37, `uuid` 1.26.1, `clap` 4.6.7. Toolchain 1.99.1, MSRV 1.98,
 edition 2024, the family lint set.
 
