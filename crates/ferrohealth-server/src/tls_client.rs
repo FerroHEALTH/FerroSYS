@@ -562,6 +562,54 @@ mod tests {
         assert_eq!("1", answer.text().await.expect("the body"));
     }
 
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn reqwest_agrees_on_x25519mlkem768_with_the_listener() {
+        let pki = Pki::new();
+        let section = TlsSection::new(pki.path("server.pem"), pki.path("server.key"));
+        let mut config = Arc::unwrap_or_clone(
+            crate::tls::server_config_of(&section, crate::tls::TlsKeys::SERVER)
+                .expect("the files read"),
+        );
+        config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let address = listener.local_addr().expect("the address");
+        let server = tokio::spawn(async move {
+            let (socket, _peer) = listener.accept().await.expect("a connection");
+            let mut stream = acceptor.accept(socket).await.expect("the handshake");
+            let group = stream
+                .get_ref()
+                .1
+                .negotiated_key_exchange_group()
+                .map(rustls::crypto::SupportedKxGroup::name);
+            let mut request = [0_u8; 1024];
+            let _read = stream.read(&mut request).await.expect("the request");
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n")
+                .await
+                .expect("the answer");
+            stream.shutdown().await.expect("the close");
+            group
+        });
+        let client = TlsClient::read("remote", &pki.client(false)).expect("the material reads");
+        let http = client
+            .apply(reqwest::Client::builder().resolve("localhost", address))
+            .expect("reqwest takes the material")
+            .build()
+            .expect("the client builds");
+        let answer = http
+            .get(format!("https://localhost:{}/", address.port()))
+            .send()
+            .await
+            .expect("the call is answered");
+        assert_eq!(http::StatusCode::NO_CONTENT, answer.status());
+        assert_eq!(
+            Some(rustls::NamedGroup::X25519MLKEM768),
+            server.await.expect("the server ends")
+        );
+    }
+
     #[test]
     fn the_certificate_is_the_first_of_the_identity_chain() {
         use rustls::pki_types::CertificateDer;

@@ -14,6 +14,9 @@ use axum::routing::get;
 use ferrohealth_health::lifecycle::Lifecycle;
 use ferrohealth_health::registry::Registry;
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+use rustls::crypto::CryptoProvider;
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, NamedGroup, ServerConfig, ServerConnection};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
@@ -120,7 +123,7 @@ async fn start(section: &TlsSection) -> SocketAddr {
 /// the connection's client address reached it too.
 async fn peer(address: SocketAddr, tls: &HealthcheckTls) -> Option<String> {
     let stream = tokio::net::TcpStream::connect(address).await.ok()?;
-    let name = rustls::pki_types::ServerName::IpAddress(address.ip().into());
+    let name = ServerName::IpAddress(address.ip().into());
     let mut stream = tokio_rustls::TlsConnector::from(tls.config())
         .connect(name, stream)
         .await
@@ -444,4 +447,144 @@ fn a_section_built_in_code_with_a_ca_under_no_client_auth_is_refused() {
             crate::section::ClientAuthError::NoClientCa(_)
         ))
     ));
+}
+
+/// The provider of a peer that offers only `groups`.
+fn offering(groups: Vec<&'static dyn rustls::crypto::SupportedKxGroup>) -> Arc<CryptoProvider> {
+    Arc::new(CryptoProvider {
+        kx_groups: groups,
+        ..rustls::crypto::aws_lc_rs::default_provider()
+    })
+}
+
+/// A client that accepts exactly the leaf of `files`, over `provider`.
+fn pinned_client(files: &Files, provider: Arc<CryptoProvider>) -> Arc<ClientConfig> {
+    let leaf = super::chain("leaf", &files.path("server.pem"))
+        .expect("the leaf reads")
+        .remove(0);
+    let pinned = super::Pinned {
+        leaf,
+        algorithms: provider.signature_verification_algorithms,
+    };
+    Arc::new(
+        ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("the versions")
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(pinned))
+            .with_no_client_auth(),
+    )
+}
+
+/// The group each side of an in-memory handshake between `client` and
+/// `server` agreed on.
+fn negotiated(client: Arc<ClientConfig>, server: Arc<ServerConfig>) -> (NamedGroup, NamedGroup) {
+    let name = ServerName::try_from("localhost").expect("a name");
+    let mut client = ClientConnection::new(client, name).expect("the client starts");
+    let mut server = ServerConnection::new(server).expect("the server starts");
+    let mut flights = 0;
+    while client.is_handshaking() || server.is_handshaking() {
+        flights += 1;
+        assert!(flights < 10, "the handshake ends");
+        let mut wire = Vec::new();
+        client.write_tls(&mut wire).expect("the client writes");
+        let mut unread = wire.as_slice();
+        while !unread.is_empty() {
+            server.read_tls(&mut unread).expect("the server reads");
+            server.process_new_packets().expect("the server accepts");
+        }
+        wire.clear();
+        server.write_tls(&mut wire).expect("the server writes");
+        let mut unread = wire.as_slice();
+        while !unread.is_empty() {
+            client.read_tls(&mut unread).expect("the client reads");
+            client.process_new_packets().expect("the client accepts");
+        }
+    }
+    let group = |found: Option<&'static dyn rustls::crypto::SupportedKxGroup>| {
+        found.expect("a group is agreed").name()
+    };
+    (
+        group(client.negotiated_key_exchange_group()),
+        group(server.negotiated_key_exchange_group()),
+    )
+}
+
+#[test]
+fn the_provider_offers_the_hybrid_group_first() {
+    let groups: Vec<NamedGroup> = provider()
+        .kx_groups
+        .iter()
+        .map(|group| group.name())
+        .collect();
+    assert_eq!(
+        vec![
+            NamedGroup::X25519MLKEM768,
+            NamedGroup::X25519,
+            NamedGroup::secp256r1,
+            NamedGroup::secp384r1,
+        ],
+        groups
+    );
+}
+
+#[test]
+fn the_listener_and_its_healthcheck_agree_on_x25519mlkem768() {
+    let files = Files::new();
+    let section = files.section(ClientAuth::None, false);
+    let server = super::server_config_of(&section, TlsKeys::SERVER).expect("the files read");
+    let client = HealthcheckTls::read_of(&section, TlsKeys::SERVER)
+        .expect("the leaf reads")
+        .config();
+    assert_eq!(
+        (NamedGroup::X25519MLKEM768, NamedGroup::X25519MLKEM768),
+        negotiated(client, server)
+    );
+}
+
+#[test]
+fn a_classical_only_client_still_connects_to_the_listener() {
+    let files = Files::new();
+    let server = super::server_config_of(&files.section(ClientAuth::None, false), TlsKeys::SERVER)
+        .expect("the files read");
+    for (offered, agreed) in [
+        (
+            rustls::crypto::aws_lc_rs::kx_group::X25519,
+            NamedGroup::X25519,
+        ),
+        (
+            rustls::crypto::aws_lc_rs::kx_group::SECP256R1,
+            NamedGroup::secp256r1,
+        ),
+        (
+            rustls::crypto::aws_lc_rs::kx_group::SECP384R1,
+            NamedGroup::secp384r1,
+        ),
+    ] {
+        let client = pinned_client(&files, offering(vec![offered]));
+        assert_eq!((agreed, agreed), negotiated(client, Arc::clone(&server)));
+    }
+}
+
+#[test]
+fn a_client_of_this_crate_still_connects_to_a_classical_only_server() {
+    let files = Files::new();
+    let server = Arc::new(
+        ServerConfig::builder_with_provider(offering(vec![
+            rustls::crypto::aws_lc_rs::kx_group::X25519,
+        ]))
+        .with_safe_default_protocol_versions()
+        .expect("the versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            super::chain("chain", &files.path("server.pem")).expect("the chain reads"),
+            super::private_key("key_file", &files.path("server.key")).expect("the key reads"),
+        )
+        .expect("the server configuration"),
+    );
+    let client = pinned_client(&files, provider());
+    assert_eq!(
+        (NamedGroup::X25519, NamedGroup::X25519),
+        negotiated(client, server)
+    );
 }
