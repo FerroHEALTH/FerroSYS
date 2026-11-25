@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+#
+# The prose half of the Rust-dependency VEX document.
+#
+# `security/vex/rust-advisories.openvex.json` is GENERATED from this file joined
+# with `deny.toml`, by `scripts/security/vex-generate.sh`. Never hand-edit the
+# JSON: `scripts/checks/vex-advisories.sh` regenerates it and fails on any
+# difference.
+#
+# WHY TWO FILES RATHER THAN ONE. The set of accepted advisory ids has exactly
+# one authority, the `[advisories].ignore` array in `deny.toml`, which is the
+# gate that decides whether a build passes. Duplicating that list here would
+# create a second list that drifts. So the ids come from `deny.toml` and only
+# the reasoning lives here, and the generator REFUSES to run if the two sets
+# disagree in either direction.
+#
+# The OpenVEX vocabulary is not free text: `status` and `justification` are
+# controlled fields from the specification
+# (https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md). A justification
+# must be one of `component_not_present`, `vulnerable_code_not_present`,
+# `vulnerable_code_not_in_execute_path`,
+# `vulnerable_code_cannot_be_controlled_by_adversary`,
+# `inline_mitigations_already_exist`, and the `impact` below has to argue for
+# the one chosen. "Low risk" is not a justification.
+#
+# Aliases are transcribed from the advisory's own RustSec entry
+# (https://rustsec.org/advisories/) so a scanner keyed on a CVE or GHSA
+# identifier rather than a RUSTSEC one still matches the statement.
+#
+# THE DEPENDENCY PATH IS STRUCTURED, NOT ONLY PROSE. Every statement's argument
+# rests on WHERE the affected crate enters the build, and an impact statement
+# that names the wrong path is a false claim that reads perfectly. So each
+# statement declares the path as data, and `scripts/checks/vex-reachability.sh`
+# compares it against the graph cargo resolves:
+#
+#   crate            the affected package name
+#   version          optional; pins the `cargo tree -i` query when several
+#                    versions of the crate coexist in the graph, and states
+#                    which one the argument is about
+#   carriers         the crates that depend DIRECTLY on it (depth 1 of the
+#                    inverted tree), exhaustive in both directions
+#   workspace_roots  the workspace members it is reachable from: a graph fact
+#                    over every feature, target and dependency kind, so test
+#                    and tooling crates appear here; it is NOT a claim about
+#                    what the shipped artifacts contain (that argument belongs
+#                    in `impact`)
+#
+# Both sets are exhaustive: naming a crate the graph does not have fails, and
+# so does a crate in the graph the statement does not name. An empty pair
+# asserts the crate is absent from the resolved graph entirely, which is what
+# makes a `component_not_present` justification checkable.
+
+[document]
+# A stable IRI for the document, and a timestamp that is HAND-SET rather than
+# taken from the clock: the generator must be deterministic, or the drift check
+# would fail on every run. Bump `version` and `timestamp` together whenever a
+# statement changes.
+id = "https://github.com/FerroHEALTH/FerroUI/blob/main/security/vex/rust-advisories.openvex.json"
+author = "Cadasto B.V."
+role = "vendor"
+timestamp = "2026-10-29T00:00:00Z"
+version = 2
+
+# What the statements are about: the one crate this repository publishes,
+# `ferrohealth-ui` on crates.io. The gallery is a workspace member that is
+# never published; it appears in `workspace_roots` because the graph holds it.
+products = [
+  "pkg:cargo/ferrohealth-ui",
+]
+
+# Accepted by the advisory gate. Every id here MUST appear in `deny.toml`'s
+# `[advisories].ignore`, and every id there MUST appear here. The generator
+# enforces both directions.
+
+# None today: the framework that carried `paste` (RUSTSEC-2024-0436) left
+# the workspace with FerroUI 0.6.0 (#510).
+
+# Lock-file-only advisories: findings cargo-deny never raises, because it
+# resolves cargo features, but which a scanner reading `Cargo.lock` alone
+# reports. None today; an entry here takes `[[lockfile_only]]` with the same
+# fields, and must NOT appear in `deny.toml`'s ignore list.

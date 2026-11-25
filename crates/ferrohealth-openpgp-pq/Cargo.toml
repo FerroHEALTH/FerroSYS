@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+[package]
+name = "ferrohealth-openpgp-pq"
+description = "Post-quantum OpenPGP signatures for the FerroHEALTH products: RFC 9980 ML-DSA-65+Ed25519 v6 keys and signatures over rPGP and aws-lc-rs, with a Stateless OpenPGP command line"
+# Its own version line, released by the tag ferrohealth-openpgp-pq-v<version>.
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = true
+readme = "README.md"
+keywords = ["openpgp", "post-quantum", "ml-dsa", "signature", "healthcare"]
+categories = ["cryptography", "command-line-utilities"]
+include = ["src/**", "tests/**", "README.md", "CHANGELOG.md"]
+
+# The third-party crates whose items the public API names, kept true by
+# scripts/checks/public-surface.sh: a line move of one takes the next minor.
+[package.metadata.ferrohealth]
+public-dependencies = ["pgp"]
+
+[features]
+default = ["cli"]
+# The `ferrohealth-sop` binary. A product that links the library turns
+# default features off.
+cli = ["dep:clap", "dep:jiff", "dep:serde_json"]
+
+[[bin]]
+name = "ferrohealth-sop"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+aws-lc-rs.workspace = true
+clap = { workspace = true, optional = true }
+jiff = { workspace = true, optional = true }
+pgp.workspace = true
+rand.workspace = true
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

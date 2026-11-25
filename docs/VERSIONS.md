@@ -13,6 +13,9 @@ beside the copy. Move a pin here, re-run the script, and commit both.
 | OpenTelemetry semantic conventions | `open-telemetry/semantic-conventions` release `v1.44.0`, commit `e10a930844c6951757a43b849d364f7d056ac32b` | `docs/specs/otel-semconv/` | `scripts/vendor/otel-semconv.sh` |
 | IETF RFC 5280 | `https://www.rfc-editor.org/rfc/rfc5280.txt` sha256 `a2f2628c0a83b873fc4786abd921f9b2c02395954b655d190bf16b831633345d`, the X.509 certificate and CRL profile | `docs/specs/ietf-pkix/` | `scripts/vendor/ietf-pkix.sh` |
 | IETF RFC 6960 | `https://www.rfc-editor.org/rfc/rfc6960.txt` sha256 `7e63ffa1ea2ce2737d9aaf895a63776e9105ddbdfc97b8ae4029e3e825b4cdea`, the Online Certificate Status Protocol | `docs/specs/ietf-pkix/` | `scripts/vendor/ietf-pkix.sh` |
+| IETF RFC 9580 | `https://www.rfc-editor.org/rfc/rfc9580.txt` sha256 `36540e57b63d24c0b17be0748b704bdeed3d643ce99a4fb1abb6469c1eb1ff18`, OpenPGP | `docs/specs/ietf-openpgp/` | `scripts/vendor/ietf-openpgp.sh` |
+| IETF RFC 9980 | `https://www.rfc-editor.org/rfc/rfc9980.txt` sha256 `3d2b30bdaecaf28bfde85545bd24e661a97f1e7b371a963778d4314a678c93ac`, post-quantum cryptography in OpenPGP, whose Appendix A.3 vectors the script also extracts into `crates/ferrohealth-openpgp-pq/tests/vectors/` | `docs/specs/ietf-openpgp/` | `scripts/vendor/ietf-openpgp.sh` |
+| IETF draft-dkg-openpgp-stateless-cli-16 | `https://www.ietf.org/archive/id/draft-dkg-openpgp-stateless-cli-16.txt` sha256 `3545c255c8af4db21757a6838ef06987bc0ec57889aa902f617e01ada5e48c53`, the Stateless OpenPGP command line `ferrohealth-sop` implements a subset of | `docs/specs/ietf-openpgp/` | `scripts/vendor/ietf-openpgp.sh` |
 
 ## Test images
 

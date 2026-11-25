@@ -104,7 +104,7 @@ wiremock = "0.6.5"
 # 2026-11-06: der 0.8.3 and x509-cert 0.3.0 are the newest releases, and
 # x509-ocsp 0.3.0-rc.0 is the only one on der 0.8 and x509-cert 0.3, the
 # lines FerroFED resolves.
-aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys"] }
 der = { version = "0.8.3", default-features = false, features = ["std", "oid"] }
 x509-cert = { version = "0.3.0", default-features = false, features = ["std"] }
 x509-ocsp = { version = "0.3.0-rc.0", default-features = false }
@@ -120,6 +120,14 @@ tokio-postgres = { version = "0.7.18", default-features = false, features = ["ru
 # platform's roots beside the plan's, as reqwest does for its HTTP requests,
 # on the line reqwest resolves. Verified against crates.io on 2026-11-08.
 rustls-platform-verifier = { version = "0.7.1", default-features = false }
+# ferrohealth-openpgp-pq: rPGP reads and writes the RFC 9580 v6 packets with
+# its `pqc` feature off, so no ml-dsa crate enters the graph; aws-lc-rs above
+# computes both halves of ML-DSA-65+Ed25519 (from 1.19.0, PqdsaKeyPair::from_seed).
+# rand 0.8 is the line rPGP's salts and S2K take their CryptoRng from.
+# Verified against crates.io on 2026-11-25.
+pgp = { version = "0.21.1", default-features = false }
+rand = { version = "0.8.5", default-features = false, features = ["std", "getrandom"] }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
 # tools/forwarders: the parser of the forwarder ratchet, on the lines the
 # workspace already locks. Verified against crates.io on 2026-11-04.
 anyhow = "1.0.104"
