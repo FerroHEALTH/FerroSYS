@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+#
+# The prose half of the Rust-dependency VEX document.
+#
+# `security/vex/rust-advisories.openvex.json` is GENERATED from this file joined
+# with `deny.toml`, by `scripts/security/vex-generate.sh`. Never hand-edit the
+# JSON: `scripts/checks/vex-advisories.sh` regenerates it and fails on any
+# difference.
+#
+# WHY TWO FILES RATHER THAN ONE. The set of accepted advisory ids has exactly
+# one authority, the `[advisories].ignore` array in `deny.toml`, which is the
+# gate that decides whether a build passes. Duplicating that list here would
+# create a second list that drifts. So the ids come from `deny.toml` and only
+# the reasoning lives here, and the generator REFUSES to run if the two sets
+# disagree in either direction.
+#
+# The OpenVEX vocabulary is not free text: `status` and `justification` are
+# controlled fields from the specification
+# (https://github.com/openvex/spec/blob/main/OPENVEX-SPEC.md). A justification
+# must be one of `component_not_present`, `vulnerable_code_not_present`,
+# `vulnerable_code_not_in_execute_path`,
+# `vulnerable_code_cannot_be_controlled_by_adversary`,
+# `inline_mitigations_already_exist`, and the `impact` below has to argue for
+# the one chosen. "Low risk" is not a justification.
+#
+# Aliases are transcribed from the advisory's own RustSec entry
+# (https://rustsec.org/advisories/) so a scanner keyed on a CVE or GHSA
+# identifier rather than a RUSTSEC one still matches the statement.
+#
+# THE DEPENDENCY PATH IS STRUCTURED, NOT ONLY PROSE. Every statement's argument
+# rests on WHERE the affected crate enters the build, and an impact statement
+# that names the wrong path is a false claim that reads perfectly. So each
+# statement declares the path as data, and `scripts/checks/vex-reachability.sh`
+# compares it against the graph cargo resolves:
+#
+#   crate            the affected package name
+#   version          optional; pins the `cargo tree -i` query when several
+#                    versions of the crate coexist in the graph, and states
+#                    which one the argument is about
+#   carriers         the crates that depend DIRECTLY on it (depth 1 of the
+#                    inverted tree), exhaustive in both directions
+#   workspace_roots  the workspace members it is reachable from: a graph fact
+#                    over every feature, target and dependency kind, so test
+#                    and tooling crates appear here; it is NOT a claim about
+#                    what the shipped artifacts contain (that argument belongs
+#                    in `impact`)
+#
+# Both sets are exhaustive: naming a crate the graph does not have fails, and
+# so does a crate in the graph the statement does not name. An empty pair
+# asserts the crate is absent from the resolved graph entirely, which is what
+# makes a `component_not_present` justification checkable.
+
+[document]
+# A stable IRI for the document, and a timestamp that is HAND-SET rather than
+# taken from the clock: the generator must be deterministic, or the drift check
+# would fail on every run. Bump `version` and `timestamp` together whenever a
+# statement changes.
+id = "https://github.com/FerroHEALTH/FerroSYS/blob/main/security/vex/rust-advisories.openvex.json"
+author = "Cadasto B.V."
+role = "vendor"
+timestamp = "2026-11-25T00:00:00Z"
+version = 1
+
+# What the statements are about: the crate that carries both advisories into
+# the graph, `ferrohealth-openpgp-pq` on crates.io, its library and its
+# `ferrohealth-sop` binary.
+products = [
+  "pkg:cargo/ferrohealth-openpgp-pq",
+]
+
+# Accepted by the advisory gate. Every id here MUST appear in `deny.toml`'s
+# `[advisories].ignore`, and every id there MUST appear here. The generator
+# enforces both directions.
+
+[[accepted]]
+id = "RUSTSEC-2023-0071"
+crate = "rsa"
+aliases = ["CVE-2023-49092", "GHSA-c38w-74pg-36hr", "GHSA-4grx-2x9w-596c"]
+carriers = ["pgp"]
+workspace_roots = [
+  "ferrohealth-openpgp-pq",
+]
+status = "not_affected"
+justification = "vulnerable_code_not_in_execute_path"
+impact = """
+The Marvin timing sidechannel leaks an RSA private key through the timing of \
+RSA private-key operations. `rsa` 0.9 is a non-optional dependency of `pgp` \
+0.21 (rPGP), which `ferrohealth-openpgp-pq` uses to read and write OpenPGP \
+packets. The crate performs no RSA operation of any kind: it accepts only \
+ML-DSA-65+Ed25519 (RFC 9980 algorithm 30) keys and signatures, refusing any \
+other algorithm with `Error::Algorithm` before a key is used or a signature \
+is hashed (`CompositePublicKey::try_from`, `Certificate::verify`), and both \
+halves of every signature it makes or checks run in `aws-lc-rs` \
+(`crates/ferrohealth-openpgp-pq/src/composite.rs`). rPGP's signing and \
+verification only reach the crate's own `SigningKey` and `VerifyingKey` \
+implementations. The test \
+`refusals::keys_of_another_algorithm_are_refused_before_any_rpgp_cryptography` \
+and the source check `refusals::the_crate_names_no_rpgp_public_key_primitive` \
+hold this. DELETING EVENT: an rPGP release on `rsa` 0.10, which fixes the \
+advisory; upgrade the day it ships.\
+"""
+
+[[accepted]]
+id = "RUSTSEC-2026-0387"
+crate = "crypto-bigint"
+version = "0.5.5"
+carriers = ["cx448", "elliptic-curve"]
+workspace_roots = [
+  "ferrohealth-openpgp-pq",
+]
+status = "not_affected"
+justification = "vulnerable_code_not_in_execute_path"
+impact = """
+The advisory concerns crypto-bigint 0.5 operations meant to be constant-time \
+that can branch on their operands, which leaks only when an operand is \
+secret. The crate is reached through `cx448` (Ed448) and `elliptic-curve` \
+0.13 (the ECDSA curves `p256`, `p384`, `p521` and `k256`), all carried by \
+`pgp` 0.21 (rPGP) as non-optional dependencies. `ferrohealth-openpgp-pq` \
+runs none of that arithmetic: it accepts only ML-DSA-65+Ed25519 (RFC 9980 \
+algorithm 30) keys and signatures, refusing an ECDSA, Ed448 or any other \
+key or signature with `Error::Algorithm` before it is used, and computes \
+both halves of every signature in `aws-lc-rs`. The test \
+`refusals::keys_of_another_algorithm_are_refused_before_any_rpgp_cryptography` \
+and the source check `refusals::the_crate_names_no_rpgp_public_key_primitive` \
+hold this. DELETING EVENT: an rPGP release on `elliptic-curve` 0.14 and \
+`crypto-bigint` 0.6 (rpgp/rpgp#573); upgrade the day it ships.\
+"""
+
+# Lock-file-only advisories: findings cargo-deny never raises, because it
+# resolves cargo features, but which a scanner reading `Cargo.lock` alone
+# reports. None today; an entry here takes `[[lockfile_only]]` with the same
+# fields, and must NOT appear in `deny.toml`'s ignore list.

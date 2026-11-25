@@ -15,8 +15,18 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-# An exception is dated and names the event that deletes it.
-ignore = []
+# An exception is dated and names the event that deletes it. Its argument
+# lives once, in security/vex/rust-advisories.toml, which
+# scripts/checks/vex-reachability.sh checks against the resolved graph.
+ignore = [
+  # 2026-11-25: Marvin attack in rsa 0.9, which pgp 0.21 requires; no fixed
+  # release. DELETING EVENT: an rPGP release on rsa 0.10.
+  { id = "RUSTSEC-2023-0071", reason = "rsa 0.9 via pgp; ferrohealth-openpgp-pq runs no RSA operation (security/vex/rust-advisories.toml)" },
+  # 2026-11-25: timing variability in crypto-bigint 0.5, which pgp 0.21
+  # requires through cx448 and elliptic-curve 0.13. DELETING EVENT: an rPGP
+  # release on elliptic-curve 0.14 and crypto-bigint 0.6 (rpgp/rpgp#573).
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 via pgp; ferrohealth-openpgp-pq runs no ECDSA or Ed448 operation (security/vex/rust-advisories.toml)" },
+]
 
 [licenses]
 version = 2
@@ -52,6 +62,7 @@ exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-server" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-usage-report" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-perf" },
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-openpgp-pq" },
   # The forwarder ratchet's detector under tools/, never published.
   { allow = ["BUSL-1.1"], crate = "forwarders" },
 ]

@@ -45,6 +45,7 @@ readonly CRATES=(
   ferrohealth-server
   ferrohealth-usage-report
   ferrohealth-perf
+  ferrohealth-openpgp-pq
 )
 
 # The crate a release tag names: the text before its last `-v`, when that is

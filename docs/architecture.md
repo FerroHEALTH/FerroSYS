@@ -73,6 +73,23 @@ instant, because tokio's timer wakes on whole milliseconds and every latency
 is timed from that instant; the report gives the generator's lag at p50,
 p99 and its maximum beside the latencies (#400).
 
+### The post-quantum OpenPGP signer
+
+`ferrohealth-openpgp-pq` (#438) signs and verifies with ML-DSA-65+Ed25519,
+RFC 9980 algorithm ID 30, on RFC 9580 version 6 keys and signatures.
+FerroEHR signs its version signatures, access-log checkpoints and system-log
+seals with it, and the licence tooling calls its `ferrohealth-sop` binary,
+a subset of the Stateless OpenPGP command line
+(draft-dkg-openpgp-stateless-cli-16), in place of GnuPG, which has no
+ML-DSA. rPGP 0.21 reads and writes the packets with its `pqc` feature off,
+which keeps `ml-dsa` 0.0.4 and RUSTSEC-2025-0144 out of the graph; the
+crate's key type implements rPGP's `KeyDetails`, `SigningKey` and
+`VerifyingKey`, and aws-lc-rs computes both halves. It takes no other
+FerroSYS crate. rPGP links `rsa` 0.9 and `crypto-bigint` 0.5 whatever runs;
+the two advisories on them are accepted with OpenVEX statements under
+`security/vex/`, because the crate refuses every other algorithm before
+using it.
+
 ### Dependency direction
 
 ```mermaid
@@ -262,6 +279,7 @@ needs them lands.
 | RFC 3986 §3.2.1 (userinfo) | `-secret` |
 | W3C Content Security Policy Level 3 | `-server` (`console`) |
 | The FerroPULSE report envelope v2 schema | `-usage-report` |
+| RFC 9580 (OpenPGP), RFC 9980 (post-quantum OpenPGP) and draft-dkg-openpgp-stateless-cli-16, `docs/specs/ietf-openpgp/` | `-openpgp-pq` |
 
 The IETF `draft-inadarei-api-health-check` and RFC 9457 are not adopted: no
 product uses either, and the readiness document is our own design.
@@ -279,3 +297,4 @@ product uses either, and the readiness document is our own design.
 | 2026-10-26 | FerroEHR's management surface stays in FerroEHR for now | owner |
 | 2026-10-26 | The lockup is drawn in the parent's steel, as for every shared library | owner |
 | 2026-11-06 | `ferrohealth-perf`, the performance gate, is built here, borrowing from Veredictum; its crate label is `perf-gate` | #249 |
+| 2026-11-25 | `ferrohealth-openpgp-pq`, the ML-DSA-65+Ed25519 OpenPGP signer FerroEHR and the licence tooling share, is built here over rPGP with `pqc` off and aws-lc-rs; the rsa and crypto-bigint advisories rPGP links are accepted with OpenVEX statements | owner, #438 |

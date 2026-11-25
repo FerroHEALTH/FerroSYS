@@ -4,7 +4,7 @@
 
 <img src="assets/brand/ferrosys-lockup-auto.svg" alt="FerroSYS" width="290">
 
-**The system plumbing every FerroHEALTH server shares, as Rust libraries: secrets, configuration, logging and telemetry, health checks, the HTTP server, the usage report and the performance gate.**
+**The system plumbing every FerroHEALTH server shares, as Rust libraries: secrets, configuration, logging and telemetry, health checks, the HTTP server, the usage report, the performance gate and post-quantum OpenPGP signatures.**
 
 [Family site](https://ferrohealth.eu/) ·
 [The crates](#the-crates) ·
@@ -65,6 +65,7 @@ own README, which is its crates.io page.
 | [`ferrohealth-server`](crates/ferrohealth-server/README.md) | [![crates.io](https://img.shields.io/crates/v/ferrohealth-server)](https://crates.io/crates/ferrohealth-server) | The HTTP stack (request id, panic catch, timeout, body limit, overload bound, API security headers), the health routes, the listener with TLS and the bounded drain on `SIGTERM`, the container healthcheck, the `serve`, `config check` and `healthcheck` subcommands, and RFC 9457 problem details. | `console`, `reqwest`, `platform-verifier`, `otlp`, `revocation`, `schema` |
 | [`ferrohealth-usage-report`](crates/ferrohealth-usage-report/README.md) | [![crates.io](https://img.shields.io/crates/v/ferrohealth-usage-report)](https://crates.io/crates/ferrohealth-usage-report) | The installation report to FerroPULSE on envelope v2: the random instance id, the latency window per request group, and the start and daily reporter. No clinical content, identifier, URL or request path is ever part of a report. | `telemetry`, `receive`, `schema` |
 | [`ferrohealth-perf`](crates/ferrohealth-perf/README.md) | [![crates.io](https://img.shields.io/crates/v/ferrohealth-perf)](https://crates.io/crates/ferrohealth-perf) | The performance gate a product's CI job runs against its server: idle CPU and database transactions at rest, then open-loop load latency, memory and CPU per request, judged against the change's base on the same host or a committed baseline. A binary that no product links. | none |
+| [`ferrohealth-openpgp-pq`](crates/ferrohealth-openpgp-pq/README.md) | [![crates.io](https://img.shields.io/crates/v/ferrohealth-openpgp-pq)](https://crates.io/crates/ferrohealth-openpgp-pq) | ML-DSA-65+Ed25519 OpenPGP signatures (RFC 9980) on version 6 keys: key generation, detached signing and verification over rPGP and aws-lc-rs, and the `ferrohealth-sop` Stateless OpenPGP command line. | `cli` (default) |
 
 Every `schema` feature implements `schemars::JsonSchema` on the crate's
 configuration types, for a product that generates its configuration
@@ -84,12 +85,19 @@ ferrohealth-telemetry = { version = "=0.5.1", features = ["otlp", "prometheus", 
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
 ferrohealth-server = { version = "=0.12.4", features = ["otlp"] }
 ferrohealth-usage-report = { version = "=0.5.0", features = ["telemetry"] }
+ferrohealth-openpgp-pq = { version = "=0.1.0", default-features = false }
 ```
 
 The performance gate is a binary:
 
 ```sh
 cargo install ferrohealth-perf --version =0.16.0 --locked
+```
+
+So is the Stateless OpenPGP command line, `ferrohealth-sop`:
+
+```sh
+cargo install ferrohealth-openpgp-pq --version =0.1.0 --locked
 ```
 
 The release plan of each crate refuses a tag while this page or the crate's
@@ -179,8 +187,9 @@ allow. The release process is in [`docs/release.md`](docs/release.md).
   [telemetry](https://docs.rs/ferrohealth-telemetry),
   [health](https://docs.rs/ferrohealth-health),
   [server](https://docs.rs/ferrohealth-server),
-  [usage-report](https://docs.rs/ferrohealth-usage-report) and
-  [perf](https://docs.rs/ferrohealth-perf).
+  [usage-report](https://docs.rs/ferrohealth-usage-report),
+  [perf](https://docs.rs/ferrohealth-perf) and
+  [openpgp-pq](https://docs.rs/ferrohealth-openpgp-pq).
 - The [architecture](docs/architecture.md), the design of record.
 - The pinned tools and standards in [`docs/VERSIONS.md`](docs/VERSIONS.md).
 - The [FerroHEALTH family book](https://ferrohealth.eu/docs/).

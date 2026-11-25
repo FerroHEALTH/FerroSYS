@@ -39,7 +39,7 @@
 # logged-in gh locally). Exit 2 on a usage error.
 set -euo pipefail
 
-readonly TAG_RE='^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+readonly TAG_RE='^ferrohealth-(secret|config|telemetry|health|server|usage-report|perf|openpgp-pq)-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 # The support period in years from the release date: the minimum of
 # Regulation (EU) 2024/2847 Art 13(8), as SECURITY.md states it.
 readonly SUPPORT_YEARS=5
