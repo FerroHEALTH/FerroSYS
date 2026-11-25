@@ -10,6 +10,28 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-11-25
+
+The tag `ferrohealth-server-v0.12.3` names the commit before the 0.12.3
+cut, so the release plan refused it and 0.12.3 never reached crates.io.
+0.12.4 ships the same change.
+
+### Changed
+
+- The TLS 1.3 key exchange of the listener and of every client the crate
+  configures (the healthcheck, `TlsClient::client_config`,
+  `TlsClient::platform_config` and the revocation link) offers the
+  post-quantum hybrid X25519MLKEM768 (RFC 10024) first, then X25519, P-256
+  and P-384 for a peer that lacks it. The crate turns on rustls's
+  `prefer-post-quantum` feature, so the reqwest client `TlsClient::apply`
+  configures, and any other rustls user in the product that builds from the
+  default provider, offers it first too. `docs/post-quantum.md` lists every
+  cryptographic use of the FerroSYS crates and whether it is post-quantum
+  safe, with `conformance/post-quantum.tsv` as its machine-readable copy
+  (#436).
+
+## [0.12.3] - 2026-11-25
+
 ### Changed
 
 - The TLS 1.3 key exchange of the listener and of every client the crate
@@ -796,7 +818,9 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.2...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.4...HEAD
+[0.12.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.3...ferrohealth-server-v0.12.4
+[0.12.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.2...ferrohealth-server-v0.12.3
 [0.12.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.1...ferrohealth-server-v0.12.2
 [0.12.1]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.0...ferrohealth-server-v0.12.1
 [0.12.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.11.0...ferrohealth-server-v0.12.0

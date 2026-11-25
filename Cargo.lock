@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-server"
-version = "0.12.2"
+version = "0.12.4"
 dependencies = [
  "allocation-counter",
  "aws-lc-rs",
