@@ -11,28 +11,26 @@ name: SonarQube Cloud
 on:
   push:
     branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened]
+  schedule:
+    - cron: "41 4 * * 1" # Mondays 04:41 UTC
 
-# A newer push to a pull request cancels its running analysis. On main a
-# running analysis finishes, so main is analyzed at its latest commit.
+# It runs on a push to main and weekly, never on a pull request or a merge
+# group: it gates no merge, and the org shares 20 concurrent jobs that the
+# gates need (owner decision, 2026-11-25). A newer push to main replaces a
+# running analysis.
 concurrency:
   group: sonar-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions: {}
 
 jobs:
   scan:
     name: analyze
-    # A fork or Dependabot pull request cannot read SONAR_TOKEN; the push to
-    # main after the merge analyzes the merged result.
-    if: github.event_name == 'push' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
-      pull-requests: read # PR decoration reads the pull-request metadata
     # The PostgreSQL of the ferrohealth-perf cases, as in ci.yml's nextest job.
     services:
       postgres:

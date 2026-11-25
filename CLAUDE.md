@@ -112,8 +112,10 @@ milestone set and its crates.io name reserved, which needs the owner.
 - `scripts/release/`: the release plan, the preflight, the milestone check
   and close, and the crates.io publish and read-back (`docs/release.md`).
 - `.github/`: CI with the single required `conclusion` job (it also runs on
-  `merge_group`), the PR guard re-run, CodeQL, SonarQube Cloud (`sonar.yml`,
-  advisory, its scope in `sonar-project.properties`), Scorecard, Dependabot, the
+  `merge_group`), the PR guard re-run, CodeQL (on pull requests that change
+  Rust, Cargo files or `.github/`, on `main` and weekly), SonarQube Cloud
+  (`sonar.yml`, advisory, its scope in `sonar-project.properties`, on `main`
+  and weekly only by the owner decision of 2026-11-25), Scorecard, Dependabot, the
   release lane (`release.yml` with the reusable `release-crate.yml`, and the
   manual `publish-crates.yml`, both under the `crates-io` environment),
   `ratchet-tighten.yml`, which lowers the ratchet baselines on `main` once a
