@@ -20,8 +20,8 @@
 # so a run still reports every finding.
 #
 # A merge group runs the light set: the guards without the publish dry run,
-# rustfmt, cargo-deny and the advisory-exception check, and the unit tests
-# with every feature. The pull request ran the full suite on the same change.
+# rustfmt, cargo-deny and the advisory-exception check, and every test target
+# compiled with every feature and the unit tests run. The pull request ran the full suite on the same change.
 #
 # The `conclusion` job is the single required status check on main.
 name: CI
@@ -284,9 +284,13 @@ jobs:
       - if: github.event_name != 'merge_group'
         run: cargo test --doc --workspace --all-features --locked
       # The merge group's smoke set: the pull request ran every suite, so the
-      # queue builds every feature once and runs the unit tests only.
+      # queue compiles every test target with every feature and runs only the
+      # unit tests.
       - if: github.event_name == 'merge_group'
-        run: cargo nextest run --workspace --lib --bins --all-features --locked --no-tests=warn
+        run: |
+          set -euo pipefail
+          cargo nextest run --workspace --all-features --no-run --locked
+          cargo nextest run --workspace --lib --bins --all-features --locked --no-tests=warn
       # The CPU ceiling of a refusal past the overload bound holds for an
       # optimized build; the unoptimized run above holds the refusal to
       # twice a bare 503 only (#419).
