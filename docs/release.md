@@ -156,7 +156,7 @@ The owner sets these once; the lane fails loud without them.
   so a pushed tag is never moved.
 - **The `main` ruleset** requires the `conclusion` check of `ci.yml`, signed
   commits and pull requests; with the merge queue on, `ci.yml` also runs on
-  `merge_group`. A
+  `merge_group`, with the light set its header names. A
 pushed tag is never moved or deleted; a bad cut ships forward as a new
 patch version.
 

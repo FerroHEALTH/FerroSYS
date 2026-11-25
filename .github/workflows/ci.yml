@@ -10,7 +10,7 @@
 #      wasm32 documents, rustdoc, the public dependency declarations and
 #      cargo-deny over one build cache.
 #   3. `nextest` runs the tests and the doctests.
-#   4. `cargo-semver-checks` runs on a pull request and in the merge queue.
+#   4. `cargo-semver-checks` runs on a pull request.
 #
 # Every job starts at once and pays one runner queue wait: the hosted runner
 # pool is shared across the organisation, so each job pays the wait for a
@@ -19,8 +19,11 @@
 # guards share one job, and each step there runs when an earlier one failed,
 # so a run still reports every finding.
 #
-# The `conclusion` job is the single required status check on main, and the
-# workflow runs on `merge_group`, so it serves a merge queue as it is.
+# A merge group runs the light set: the guards without the publish dry run,
+# rustfmt, cargo-deny and the advisory-exception check, and every test target
+# compiled with every feature and the unit tests run. The pull request ran the full suite on the same change.
+#
+# The `conclusion` job is the single required status check on main.
 name: CI
 
 on:
@@ -180,7 +183,7 @@ jobs:
       # NOTE: Cargo packages the workspace members together, so a crate verifies
       # against the workspace crates it depends on before those are on crates.io.
       - name: Publish dry run
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'merge_group' }}
         run: cargo publish --workspace --dry-run --locked
 
   # ---- Rust ------------------------------------------------------------------
@@ -210,24 +213,24 @@ jobs:
       # Each crate is linted with its default features and with every
       # feature, the two builds a product links.
       - name: clippy
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'merge_group' }}
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: clippy with every feature
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'merge_group' }}
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # The documents a console's browser half reads compile for wasm32 with
       # no feature: today the readiness document of ferrohealth-health.
       - name: wasm32 documents
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'merge_group' }}
         run: cargo clippy -p ferrohealth-health --target wasm32-unknown-unknown --locked -- -D warnings
       - name: rustdoc
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'merge_group' }}
         run: cargo doc --locked --workspace --all-features --no-deps --document-private-items
       # Each crate's declared third-party public dependencies are the crates
       # its rustdoc JSON API names, so the SemVer guards count their line
       # moves (.claude/rules/crates-publishing.md).
       - name: public dependencies
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'merge_group' }}
         run: bash scripts/checks/public-surface.sh
       - name: cargo-deny
         if: ${{ !cancelled() }}
@@ -274,13 +277,25 @@ jobs:
           tool: cargo-nextest
       # A crate that holds its name at 0.0.0 has no test yet, which is no
       # failure of the workspace.
-      - run: cargo nextest run --workspace --locked --no-tests=warn
-      - run: cargo nextest run --workspace --all-features --locked --no-tests=warn
-      - run: cargo test --doc --workspace --all-features --locked
+      - if: github.event_name != 'merge_group'
+        run: cargo nextest run --workspace --locked --no-tests=warn
+      - if: github.event_name != 'merge_group'
+        run: cargo nextest run --workspace --all-features --locked --no-tests=warn
+      - if: github.event_name != 'merge_group'
+        run: cargo test --doc --workspace --all-features --locked
+      # The merge group's smoke set: the pull request ran every suite, so the
+      # queue compiles every test target with every feature and runs only the
+      # unit tests.
+      - if: github.event_name == 'merge_group'
+        run: |
+          set -euo pipefail
+          cargo nextest run --workspace --all-features --no-run --locked
+          cargo nextest run --workspace --lib --bins --all-features --locked --no-tests=warn
       # The CPU ceiling of a refusal past the overload bound holds for an
       # optimized build; the unoptimized run above holds the refusal to
       # twice a bare 503 only (#419).
-      - run: cargo nextest run --release --locked -p ferrohealth-server --test it -E 'test(refusal_cost)'
+      - if: github.event_name != 'merge_group'
+        run: cargo nextest run --release --locked -p ferrohealth-server --test it -E 'test(refusal_cost)'
 
   # Every crate's public API against its newest version on crates.io, on the
   # default feature heuristic and with no default features: a break the
@@ -289,15 +304,14 @@ jobs:
   # requirements between the crates stay safe (scripts/checks/semver.sh).
   semver:
     name: cargo-semver-checks
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
     steps:
-      # The pull request's merge commit, or the merge group's commit, and its
-      # first parent, the base, so the check judges only a change that
-      # reaches a crate.
+      # The pull request's merge commit and its first parent, the base, so
+      # the check judges only a change that reaches a crate.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
