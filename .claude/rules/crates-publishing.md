@@ -48,14 +48,14 @@ is active among what one pass does not catch). Either pass failing fails
 the crate, and a judge that could not build is named apart from a break.
 It runs:
 
-- on every pull request and in the merge queue whenever the change reaches
-  a crate, over every crate past 0.0.0 (the `cargo-semver-checks` job of
-  `ci.yml`, `semver.sh --changed` against the first parent), so a breaking
-  change carries its minor bump in the pull request that breaks. A change
-  that reaches no crate leaves every API as its base has it, and is not
-  judged: judging it would judge only the base, against whatever crates.io
-  holds when the run starts. A crate with no release on crates.io has
-  nothing to compare with, and the job's output names it;
+- on every pull request whenever the change reaches a crate, over every
+  crate past 0.0.0 (the `cargo-semver-checks` job of `ci.yml`, `semver.sh
+  --changed` against the first parent), so a breaking change carries its
+  minor bump in the pull request that breaks. A change that reaches no crate
+  leaves every API as its base has it, and is not judged: judging it would
+  judge only the base, against whatever crates.io holds when the run starts.
+  A crate with no release on crates.io has nothing to compare with, and the
+  job's output names it;
 - in the release plan (`scripts/release/plan.sh`, which
   `scripts/release/preflight.sh` and the `plan` job of `release.yml` both
   run), over the crate the tag releases.
