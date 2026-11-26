@@ -35,7 +35,7 @@ reads its settings from a file and the environment, and keeps passwords out
 of every log line.
 
 FerroSYS is that code, written once as Rust library crates that FerroEHR,
-FerroBRIDGE, FerroFED, FerroPIX and FerroTERM all link. Every server
+FerroBRIDGE, FerroFED, FerroPIX, FerroTERM and FerroSMART all link. Every server
 therefore logs, configures, reports its health and shuts down the same way,
 and an operator learns it once.
 
@@ -196,15 +196,14 @@ allow. The release process is in [`docs/release.md`](docs/release.md).
 
 ## Part of FerroHEALTH
 
-FerroHEALTH is five servers, each its own product, that reach each other
+FerroHEALTH is six servers, each its own product, that reach each other
 only over published standards: FerroEHR stores the record, FerroBRIDGE
 translates it to FHIR and the OMOP research model, FerroFED connects records
-across organisations and borders, FerroPIX matches patient identities, and
-FerroTERM serves the code systems.
+across organisations and borders, FerroPIX matches patient identities,
+FerroTERM serves the code systems, and FerroSMART, the SMART authorization
+server, issues the access tokens.
 
-FerroSMART, the SMART authorization server being built, issues the access
-tokens, and every server checks its callers with FerroSMART's
-`ferrohealth-smart`. Work that every server needs lives in shared libraries,
+Every server checks its callers with FerroSMART's `ferrohealth-smart`. Work that every server needs lives in shared libraries,
 so it is written once: FerroAUDIT for the audit trail, FerroUI for the web
 consoles, and FerroSYS for the system plumbing.
 
