@@ -8,7 +8,9 @@
 # names to the tree, the table of docs/post-quantum.md to the file, and the
 # shields.io endpoint badge conformance/badges/post-quantum.json, which the
 # README reads, to the count the shared helper badge_post_quantum draws and
-# to the shared length limits of badge_length_check.
+# to the shared length limits of badge_length_check. It also holds the README
+# badge block to the shared shape: the one caption beside a bold heading, no
+# other line of prose, and no badge GitHub would show as text.
 #
 #   scripts/checks/post-quantum.sh             check; warn on drift
 #   scripts/checks/post-quantum.sh --update    rewrite the table and the badge
@@ -150,6 +152,15 @@ self_test() {
   badge_count_color_self_test >/dev/null || failed=1
   printf '[![x](https://img.shields.io/badge/CRA-information%%20for%%20all%%20users-blue?logo=x)](x)\n' >"$work/long.md"
   expect 1 "a static badge past the limit" badge_length_readme "$work/long.md"
+  printf '**Compliance**<br>\n%s<br>\n[![x](https://img.shields.io/endpoint?url=x.json)](x)\n' "$badge_caption" >"$work/block.md"
+  expect 0 "a badge block of one caption" badge_block_check "$work/block.md"
+  expect 0 "the caption beside a bold heading" badge_caption_check "$work/block.md"
+  expect 0 "a badge block GitHub renders" badge_render_check "$work/block.md"
+  printf '<sub>a second line of prose</sub><br>\n' >>"$work/block.md"
+  expect 1 "a badge block with two lines of prose" badge_block_check "$work/block.md"
+  printf '<!-- m -->\n<br>\n[![x](https://img.shields.io/endpoint?url=x.json)](x)\n' >"$work/raw.md"
+  expect 1 "a badge GitHub shows as text" badge_render_check "$work/raw.md"
+  expect 1 "a README without the caption" badge_caption_check "$work/raw.md"
   sed $'s#\tno\t#\tyes\t#' "$work/inventory.tsv" >"$work/moved.tsv"
   expect 1 "a badge whose count moved under check" emit_badge "$work/badges/pq.json" "$work/moved.tsv" check
   printf '# Page\n\nintro\n\n| Use | Algorithm | Safe | Post-quantum standard | Location |\n|---|---|---|---|---|\n| stale | x | no | y | z |\n\nrest\n' >"$work/page.md"
@@ -190,6 +201,9 @@ emit_table "$PAGE" "$INVENTORY" "$mode" || failed=1
 emit_badge "$BADGE" "$INVENTORY" "$mode" || failed=1
 badge_length_check "$BADGE" || failed=1
 badge_length_readme README.md || failed=1
+badge_caption_check README.md || failed=1
+badge_block_check README.md || failed=1
+badge_render_check README.md || failed=1
 if [[ "$failed" -eq 0 ]]; then
   echo "post-quantum: $(jq -r .message "$BADGE") uses safe"
 fi
