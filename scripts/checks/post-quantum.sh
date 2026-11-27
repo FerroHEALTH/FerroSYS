@@ -147,6 +147,9 @@ self_test() {
   jq -c '.label = "post-quantum safe cryptographic uses"' "$work/badges/pq.json" >"$work/long.json"
   expect 1 "a label past the limit" badge_length_check "$work/long.json"
   badge_length_self_test >/dev/null || failed=1
+  badge_count_color_self_test >/dev/null || failed=1
+  printf '[![x](https://img.shields.io/badge/CRA-information%%20for%%20all%%20users-blue?logo=x)](x)\n' >"$work/long.md"
+  expect 1 "a static badge past the limit" badge_length_readme "$work/long.md"
   sed $'s#\tno\t#\tyes\t#' "$work/inventory.tsv" >"$work/moved.tsv"
   expect 1 "a badge whose count moved under check" emit_badge "$work/badges/pq.json" "$work/moved.tsv" check
   printf '# Page\n\nintro\n\n| Use | Algorithm | Safe | Post-quantum standard | Location |\n|---|---|---|---|---|\n| stale | x | no | y | z |\n\nrest\n' >"$work/page.md"
@@ -186,6 +189,7 @@ locations_of "$INVENTORY" . || failed=1
 emit_table "$PAGE" "$INVENTORY" "$mode" || failed=1
 emit_badge "$BADGE" "$INVENTORY" "$mode" || failed=1
 badge_length_check "$BADGE" || failed=1
+badge_length_readme README.md || failed=1
 if [[ "$failed" -eq 0 ]]; then
   echo "post-quantum: $(jq -r .message "$BADGE") uses safe"
 fi
