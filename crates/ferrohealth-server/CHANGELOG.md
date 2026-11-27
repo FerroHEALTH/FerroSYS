@@ -10,6 +10,20 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+
+- The revocation check verifies CRLs, OCSP answers and the certificates of
+  their chain that an ML-DSA-44, ML-DSA-65 or ML-DSA-87 key signs
+  (RFC 9881). The key and the signature must name the same `id-ml-dsa-*`
+  OID with no parameters; any other pairing counts as no signature. The
+  listener and every client present and verify ML-DSA certificates in
+  TLS 1.3 (#449).
+
+### Fixed
+
+- The post-quantum inventory no longer lists Ed25519 among the algorithms
+  the revocation check verifies, which it never did (#449).
+
 ## [0.12.4] - 2026-11-25
 
 The tag `ferrohealth-server-v0.12.3` names the commit before the 0.12.3

@@ -34,22 +34,26 @@ struct Files {
 
 impl Files {
     fn new() -> Self {
+        Self::of(&rcgen::PKCS_ECDSA_P256_SHA256)
+    }
+
+    /// The files of one test, every key of them an `algorithm` key.
+    fn of(algorithm: &'static rcgen::SignatureAlgorithm) -> Self {
         let dir = tempfile::tempdir().expect("a directory");
-        let server = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()])
+        let server_key = KeyPair::generate_for(algorithm).expect("a server key");
+        let server = CertificateParams::new(vec!["localhost".to_owned()])
+            .expect("server parameters")
+            .self_signed(&server_key)
             .expect("a server certificate");
-        write(dir.path(), "server.pem", &server.cert.pem());
-        write(
-            dir.path(),
-            "server.key",
-            &server.signing_key.serialize_pem(),
-        );
-        let ca_key = KeyPair::generate().expect("a CA key");
+        write(dir.path(), "server.pem", &server.pem());
+        write(dir.path(), "server.key", &server_key.serialize_pem());
+        let ca_key = KeyPair::generate_for(algorithm).expect("a CA key");
         let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("CA parameters");
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let ca = ca_params.self_signed(&ca_key).expect("a CA certificate");
         write(dir.path(), "ca.pem", &ca.pem());
         let issuer = Issuer::new(ca_params, ca_key);
-        let client_key = KeyPair::generate().expect("a client key");
+        let client_key = KeyPair::generate_for(algorithm).expect("a client key");
         let client = CertificateParams::new(vec!["client.example".to_owned()])
             .expect("client parameters")
             .signed_by(&client_key, &issuer)
@@ -163,6 +167,28 @@ async fn a_required_client_certificate_is_verified_and_reaches_the_handler() {
         Outcome::Healthy,
         check_tls(address, "", Duration::from_secs(5), &with).await
     );
+}
+
+// NOTE: RFC 9881 §3 and §4 define ML-DSA certificates; rustls signs and verifies them in
+// TLS 1.3 under the ML-DSA signature schemes of draft-ietf-tls-mldsa.
+#[tokio::test]
+async fn ml_dsa_certificates_authenticate_the_listener_and_the_client() {
+    for algorithm in [
+        &rcgen::PKCS_ML_DSA_44,
+        &rcgen::PKCS_ML_DSA_65,
+        &rcgen::PKCS_ML_DSA_87,
+    ] {
+        let files = Files::of(algorithm);
+        let address = start(&files.section(ClientAuth::Required, false)).await;
+        let with =
+            HealthcheckTls::read_of(&files.section(ClientAuth::Required, true), TlsKeys::SERVER)
+                .expect("the identity reads");
+        assert_eq!(
+            Some("1".to_owned()),
+            peer(address, &with).await,
+            "{algorithm:?}: both ML-DSA certificates verify"
+        );
+    }
 }
 
 #[tokio::test]
