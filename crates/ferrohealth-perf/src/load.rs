@@ -124,9 +124,7 @@ fn sign(
     url: &Url,
 ) -> Result<Option<String>, LoadError> {
     credentials
-        .dpop(position)
-        .map(|key| key.proof(request.method.as_str(), url, bearer(request)))
-        .transpose()
+        .proof(position, &request.method, url, bearer(request))
         .map_err(LoadError::Proof)
 }
 

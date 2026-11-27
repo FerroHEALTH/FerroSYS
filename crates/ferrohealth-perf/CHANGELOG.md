@@ -10,6 +10,18 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.17.0]
+
+### Changed
+
+- Breaking: a request's `dpop_key_file` is read by `ferrohealth-smart`'s
+  `DpopKey`, the family's client key. A P-256 or P-384 key signs ES256 or
+  ES384, and an ML-DSA-44, ML-DSA-65 or ML-DSA-87 key in PKCS#8 signs ML-DSA
+  proofs (RFC 9964), so a plan can put a server's ML-DSA verification under
+  load. `credentials::DpopKey` is removed, `Credentials::dpop` gives way to
+  `Credentials::proof`, and `CredentialError::Parse` and
+  `CredentialError::Sign` carry their cause (#450).
+
 ## [0.16.0] - 2026-11-22
 
 ### Added

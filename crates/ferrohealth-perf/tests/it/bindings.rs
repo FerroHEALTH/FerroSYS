@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use aws_lc_rs::digest::{SHA256, digest};
 use aws_lc_rs::signature::{
-    ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, UnparsedPublicKey,
+    ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, ML_DSA_65,
+    ML_DSA_65_SIGNING, PqdsaKeyPair, UnparsedPublicKey,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -202,6 +203,8 @@ struct ProofChecker {
     jtis: Arc<Mutex<BTreeSet<String>>>,
     refusals: Arc<Mutex<Vec<String>>>,
     token: &'static str,
+    /// The `alg` every proof must name.
+    alg: &'static str,
     // NOTE: no specification governs this: our own design; wiremock names the request URL without its host, so the checker holds the server's base.
     base: String,
 }
@@ -226,14 +229,11 @@ impl ProofChecker {
             serde_json::from_slice(&bytes).map_err(|e| e.to_string())
         };
         let (head, body) = (decode(head)?, decode(claims)?);
-        if head["typ"] != "dpop+jwt" || head["alg"] != "ES256" {
+        if head["typ"] != "dpop+jwt" || head["alg"] != self.alg {
             return Err(format!("header {head}"));
         }
-        let coordinate =
+        let member =
             |name: &str| URL_SAFE_NO_PAD.decode(head["jwk"][name].as_str().unwrap_or_default());
-        let mut point = vec![4_u8];
-        point.extend(coordinate("x").map_err(|e| e.to_string())?);
-        point.extend(coordinate("y").map_err(|e| e.to_string())?);
         let signature = URL_SAFE_NO_PAD
             .decode(signature)
             .map_err(|e| e.to_string())?;
@@ -241,9 +241,18 @@ impl ProofChecker {
             .rsplit_once('.')
             .map(|(input, _)| input)
             .unwrap_or_default();
-        UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, &point)
-            .verify(signed.as_bytes(), &signature)
-            .map_err(|_bad| "the signature does not verify".to_owned())?;
+        let verified = if self.alg == "ES256" {
+            let mut point = vec![4_u8];
+            point.extend(member("x").map_err(|e| e.to_string())?);
+            point.extend(member("y").map_err(|e| e.to_string())?);
+            UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, &point)
+                .verify(signed.as_bytes(), &signature)
+        } else {
+            // NOTE: RFC 9964 §3: an AKP key carries its raw public key in `pub`.
+            let public = member("pub").map_err(|e| e.to_string())?;
+            UnparsedPublicKey::new(&ML_DSA_65, &public).verify(signed.as_bytes(), &signature)
+        };
+        verified.map_err(|_bad| "the signature does not verify".to_owned())?;
         let htu = format!("{}{}", self.base, request.url.path());
         if body["htm"] != request.method.as_str() || body["htu"] != htu.as_str() {
             return Err(format!(
@@ -282,13 +291,23 @@ impl Respond for ProofChecker {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn every_request_carries_a_fresh_proof_that_verifies() {
+/// The PEM of a PKCS#8 private key.
+fn pkcs8_pem(der: &[u8]) -> String {
+    format!(
+        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+        STANDARD.encode(der)
+    )
+}
+
+/// Sends a plan of two requests, each signing its proofs with the key
+/// `pem`, against a server that checks every proof names `alg` and verifies.
+async fn proofs_verify(pem: &str, alg: &'static str) {
     let server = MockServer::start().await;
     let checker = ProofChecker {
         jtis: Arc::new(Mutex::new(BTreeSet::new())),
         refusals: Arc::new(Mutex::new(Vec::new())),
         token: "a-bound-token",
+        alg,
         base: server.uri(),
     };
     Mock::given(wiremock::matchers::any())
@@ -296,16 +315,7 @@ async fn every_request_carries_a_fresh_proof_that_verifies() {
         .mount(&server)
         .await;
     let dir = tempfile::tempdir().unwrap();
-    let document = EcdsaKeyPair::generate_pkcs8(
-        &ECDSA_P256_SHA256_FIXED_SIGNING,
-        &aws_lc_rs::rand::SystemRandom::new(),
-    )
-    .unwrap();
-    let pem = format!(
-        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
-        STANDARD.encode(document.as_ref())
-    );
-    let key = write(dir.path(), "dpop.pem", &pem);
+    let key = write(dir.path(), "dpop.pem", pem);
     let text = format!(
         "{LOAD}[[requests]]\ngroup = \"read\"\nmethod = \"GET\"\npath = \"/fhir/Patient?x=1\"\n\
          status = 200\ndpop_key_file = '{key}'\nheaders = {{ authorization = \"Bearer a-bound-token\" }}\n\
@@ -326,7 +336,7 @@ async fn every_request_carries_a_fresh_proof_that_verifies() {
     .unwrap();
     assert!(
         outcome.failures.is_empty(),
-        "{:?}: {:?}",
+        "{alg}: {:?}: {:?}",
         outcome.failures,
         checker.refusals.lock().unwrap().first()
     );
@@ -334,8 +344,27 @@ async fn every_request_carries_a_fresh_proof_that_verifies() {
     assert_eq!(
         20,
         checker.jtis.lock().unwrap().len(),
-        "a new jti for every request"
+        "{alg}: a new jti for every request"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_request_carries_a_fresh_proof_that_verifies() {
+    let document = EcdsaKeyPair::generate_pkcs8(
+        &ECDSA_P256_SHA256_FIXED_SIGNING,
+        &aws_lc_rs::rand::SystemRandom::new(),
+    )
+    .unwrap();
+    proofs_verify(&pkcs8_pem(document.as_ref()), "ES256").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ml_dsa_key_signs_ml_dsa_proofs_that_verify() {
+    let document = PqdsaKeyPair::generate(&ML_DSA_65_SIGNING)
+        .unwrap()
+        .to_pkcs8v1()
+        .unwrap();
+    proofs_verify(&pkcs8_pem(document.as_ref()), "ML-DSA-65").await;
 }
 
 #[test]
