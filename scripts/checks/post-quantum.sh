@@ -7,7 +7,8 @@
 # from FerroSMART) describes. The gate holds every repository path a location
 # names to the tree, the table of docs/post-quantum.md to the file, and the
 # shields.io endpoint badge conformance/badges/post-quantum.json, which the
-# README reads, to the count the shared helper badge_post_quantum draws.
+# README reads, to the count the shared helper badge_post_quantum draws and
+# to the shared length limits of badge_length_check.
 #
 #   scripts/checks/post-quantum.sh             check; warn on drift
 #   scripts/checks/post-quantum.sh --update    rewrite the table and the badge
@@ -142,6 +143,10 @@ self_test() {
     failed=1
   fi
   expect 0 "the badge carries a logo" badge_logo_check "$work/badges/pq.json"
+  expect 0 "the badge fits the length limits" badge_length_check "$work/badges/pq.json"
+  jq -c '.label = "post-quantum safe cryptographic uses"' "$work/badges/pq.json" >"$work/long.json"
+  expect 1 "a label past the limit" badge_length_check "$work/long.json"
+  badge_length_self_test >/dev/null || failed=1
   sed $'s#\tno\t#\tyes\t#' "$work/inventory.tsv" >"$work/moved.tsv"
   expect 1 "a badge whose count moved under check" emit_badge "$work/badges/pq.json" "$work/moved.tsv" check
   printf '# Page\n\nintro\n\n| Use | Algorithm | Safe | Post-quantum standard | Location |\n|---|---|---|---|---|\n| stale | x | no | y | z |\n\nrest\n' >"$work/page.md"
@@ -180,6 +185,7 @@ failed=0
 locations_of "$INVENTORY" . || failed=1
 emit_table "$PAGE" "$INVENTORY" "$mode" || failed=1
 emit_badge "$BADGE" "$INVENTORY" "$mode" || failed=1
+badge_length_check "$BADGE" || failed=1
 if [[ "$failed" -eq 0 ]]; then
   echo "post-quantum: $(jq -r .message "$BADGE") uses safe"
 fi
