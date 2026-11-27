@@ -21,6 +21,9 @@
 **Quality and security**<br>
 [![Security policy](https://img.shields.io/badge/security-policy-brightgreen?logo=github)](SECURITY.md)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/FerroHEALTH/FerroSYS/badge)](https://scorecard.dev/viewer/?uri=github.com/FerroHEALTH/FerroSYS)
+
+<sub>Self-tested and self-assessed; none is a certification.</sub><br>
+**Compliance**<br>
 [![Post-quantum safe uses, self-assessed](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FFerroHEALTH%2FFerroSYS%2Fmain%2Fconformance%2Fbadges%2Fpost-quantum.json)](docs/post-quantum.md)
 
 </div>
