@@ -4,9 +4,10 @@
 //! The signature check of a certificate, a CRL and an OCSP response.
 //!
 //! The issuer's key verifies RSA PKCS#1 v1.5 and ECDSA with SHA-256,
-//! SHA-384 or SHA-512. SHA-1 and any other algorithm, RSASSA-PSS among
-//! them, are refused, so a status signed with one counts as not given. No
-//! specification governs the set: our own design.
+//! SHA-384 or SHA-512, and ML-DSA-44, ML-DSA-65 and ML-DSA-87 (RFC 9881).
+//! SHA-1 and any other algorithm, RSASSA-PSS among them, are refused, so a
+//! status signed with one counts as not given. No specification governs the
+//! set: our own design.
 
 use aws_lc_rs::signature::{self, UnparsedPublicKey, VerificationAlgorithm};
 use der::Encode;
@@ -27,6 +28,9 @@ const ECDSA_WITH_SHA512: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.84
 const P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 const P384: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.34");
 const P521: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.35");
+const ID_ML_DSA_44: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17");
+const ID_ML_DSA_65: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
+const ID_ML_DSA_87: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19");
 
 /// Verifies `subject`'s signature with `issuer`'s key.
 pub(super) fn verify_certificate(
@@ -70,6 +74,18 @@ fn verification(
     key: &SubjectPublicKeyInfoOwned,
     algorithm: &AlgorithmIdentifierOwned,
 ) -> Result<&'static dyn VerificationAlgorithm, SignatureError> {
+    if let Some(ml_dsa) = ml_dsa(key.algorithm.oid) {
+        // NOTE: RFC 9881 §2 and §3: the key's and the signature's identifier are the
+        // same id-ml-dsa-* OID, and the parameters of both MUST be absent.
+        let conforming = algorithm.oid == key.algorithm.oid
+            && algorithm.parameters.is_none()
+            && key.algorithm.parameters.is_none();
+        return if conforming {
+            Ok(ml_dsa)
+        } else {
+            Err(SignatureError::Unsupported)
+        };
+    }
     if key.algorithm.oid == RSA_ENCRYPTION {
         return match algorithm.oid {
             oid if oid == SHA256_WITH_RSA => Ok(&signature::RSA_PKCS1_2048_8192_SHA256),
@@ -99,5 +115,99 @@ fn verification(
         (c, h) if c == P521 && h == ECDSA_WITH_SHA384 => Ok(&signature::ECDSA_P521_SHA384_ASN1),
         (c, h) if c == P521 && h == ECDSA_WITH_SHA512 => Ok(&signature::ECDSA_P521_SHA512_ASN1),
         _ => Err(SignatureError::Unsupported),
+    }
+}
+
+/// The ML-DSA verification of the key identifier `oid`, which RFC 9881 §2
+/// gives as one OID per parameter set; the signature is pure ML-DSA with the
+/// empty context string (§3).
+fn ml_dsa(oid: ObjectIdentifier) -> Option<&'static dyn VerificationAlgorithm> {
+    match oid {
+        o if o == ID_ML_DSA_44 => Some(&signature::ML_DSA_44),
+        o if o == ID_ML_DSA_65 => Some(&signature::ML_DSA_65),
+        o if o == ID_ML_DSA_87 => Some(&signature::ML_DSA_87),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_lc_rs::encoding::AsDer as _;
+    use aws_lc_rs::signature::{
+        KeyPair as _, ML_DSA_44_SIGNING, ML_DSA_65_SIGNING, ML_DSA_87_SIGNING, PqdsaKeyPair,
+        PqdsaSigningAlgorithm,
+    };
+    use der::Decode as _;
+    use der::asn1::{Any, ObjectIdentifier};
+    use x509_cert::spki::{AlgorithmIdentifierOwned, SubjectPublicKeyInfoOwned};
+
+    use super::{ID_ML_DSA_44, ID_ML_DSA_65, ID_ML_DSA_87, SignatureError, verify};
+
+    const SETS: [(&PqdsaSigningAlgorithm, ObjectIdentifier); 3] = [
+        (&ML_DSA_44_SIGNING, ID_ML_DSA_44),
+        (&ML_DSA_65_SIGNING, ID_ML_DSA_65),
+        (&ML_DSA_87_SIGNING, ID_ML_DSA_87),
+    ];
+
+    /// A generated key of `set`, its `SubjectPublicKeyInfo`, and its signature over `message`.
+    fn signed(
+        set: &'static PqdsaSigningAlgorithm,
+        message: &[u8],
+    ) -> (SubjectPublicKeyInfoOwned, Vec<u8>) {
+        let pair = PqdsaKeyPair::generate(set).expect("a key");
+        let spki = pair.public_key().as_der().expect("the key encodes");
+        let spki = SubjectPublicKeyInfoOwned::from_der(spki.as_ref()).expect("the key decodes");
+        let mut signature = vec![0; set.signature_len()];
+        let written = pair.sign(message, &mut signature).expect("it signs");
+        signature.truncate(written);
+        (spki, signature)
+    }
+
+    fn named(oid: ObjectIdentifier) -> AlgorithmIdentifierOwned {
+        AlgorithmIdentifierOwned {
+            oid,
+            parameters: None,
+        }
+    }
+
+    #[test]
+    fn every_ml_dsa_parameter_set_verifies() {
+        for (set, oid) in SETS {
+            let (spki, signature) = signed(set, b"tbsCertList");
+            assert_eq!(oid, spki.algorithm.oid, "the key names its parameter set");
+            assert!(
+                verify(&spki, &named(oid), b"tbsCertList", &signature).is_ok(),
+                "{oid}"
+            );
+            assert!(
+                matches!(
+                    verify(&spki, &named(oid), b"another list", &signature),
+                    Err(SignatureError::Invalid)
+                ),
+                "{oid}: another message"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ml_dsa_signature_under_another_identifier_is_refused() {
+        let (spki, signature) = signed(&ML_DSA_65_SIGNING, b"tbsResponseData");
+        assert!(matches!(
+            verify(&spki, &named(ID_ML_DSA_44), b"tbsResponseData", &signature),
+            Err(SignatureError::Unsupported)
+        ));
+    }
+
+    #[test]
+    fn an_ml_dsa_identifier_with_parameters_is_refused() {
+        let (spki, signature) = signed(&ML_DSA_65_SIGNING, b"tbsResponseData");
+        let with = AlgorithmIdentifierOwned {
+            oid: ID_ML_DSA_65,
+            parameters: Some(Any::null()),
+        };
+        assert!(matches!(
+            verify(&spki, &with, b"tbsResponseData", &signature),
+            Err(SignatureError::Unsupported)
+        ));
     }
 }

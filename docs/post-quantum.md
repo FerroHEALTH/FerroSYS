@@ -39,7 +39,9 @@ either disagrees with it or a location names a file the tree does not hold.
 A row is `safe` when every key it depends on is established or verified by
 a post-quantum or hybrid mechanism, or when it is a symmetric primitive at
 128 bits or more. A row whose post-quantum form has no standard yet counts
-as not safe.
+as not safe. A row whose keys the operator's certificates hold counts as safe
+when FerroSYS presents and verifies their post-quantum form under its
+standard.
 
 ## What FerroSYS does
 
@@ -54,9 +56,15 @@ same order from the default provider.
 
 The key exchange protects what a session carries against an attacker who
 records it now and decrypts it later, the risk the roadmap gives first
-place. The certificate signatures that authenticate a peer stay classical:
-no TLS 1.3 signature scheme for ML-DSA is published as an RFC yet, and the
-operator's certificates decide the algorithm.
+place. A peer is authenticated by the certificates the operator issues.
+The listener and every client present and verify ML-DSA-44, ML-DSA-65 and
+ML-DSA-87 certificates (RFC 9881) in TLS 1.3, under the signature schemes
+IANA assigned at 0x0904 to 0x0906 for draft-ietf-tls-mldsa-06. The
+revocation check verifies CRLs and OCSP answers that an ML-DSA CA signs.
+The operator's PKI decides the algorithm, so these two rows count as safe:
+an ML-DSA PKI is verified end to end, and a classical PKI is the
+operator's choice. TLS 1.2 defines no ML-DSA signature, so a connection
+that falls back to TLS 1.2 authenticates classically.
 
 ## The inventory
 
@@ -67,9 +75,9 @@ operator's certificates decide the algorithm.
 | TLS 1.3 key exchange of reqwest clients and other default-provider rustls users | X25519MLKEM768 first (rustls prefer-post-quantum) | yes | RFC 10024 | `Cargo.toml (rustls features), crates/ferrohealth-server/src/tls_client.rs (TlsClient::apply)` |
 | TLS 1.3 key exchange of the OTLP export | X25519MLKEM768 first, through the TlsClient configuration | yes | RFC 10024 | `crates/ferrohealth-telemetry/src/telemetry/otlp.rs` |
 | TLS 1.2 key exchange where min_version lowers the minimum | ECDHE over X25519, P-256 or P-384 | no | no standard yet | `crates/ferrohealth-server/src/tls.rs (protocol_versions)` |
-| TLS server and client certificate authentication | ECDSA, RSA or Ed25519, as the operator's certificates hold | no | no standard yet | `crates/ferrohealth-server/src/tls.rs, crates/ferrohealth-server/src/tls_client.rs` |
+| TLS server and client certificate authentication | ML-DSA-44, ML-DSA-65 or ML-DSA-87 in TLS 1.3, or ECDSA, RSA or Ed25519, as the operator's certificates hold | yes | RFC 9881; draft-ietf-tls-mldsa-06 (IANA TLS SignatureScheme 0x0904 to 0x0906) | `crates/ferrohealth-server/src/tls.rs, crates/ferrohealth-server/src/tls_client.rs` |
 | TLS record protection | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-server/src/tls.rs` |
-| CRL and OCSP response signature verification | RSA, ECDSA, Ed25519 | no | RFC 9881 | `crates/ferrohealth-server/src/revocation/signature.rs` |
+| CRL and OCSP response signature verification | ML-DSA-44, ML-DSA-65 or ML-DSA-87, or RSA PKCS#1 v1.5 or ECDSA, as the issuing CA's key holds | yes | RFC 9881 | `crates/ferrohealth-server/src/revocation/signature.rs` |
 | OCSP CertID and certificate digests | SHA-1 (RFC 6960 CertID), SHA-256 | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-server/src/revocation/ocsp.rs, crates/ferrohealth-server/src/revocation/chain.rs` |
 | OpenPGP signatures of ferrohealth-openpgp-pq | ML-DSA-65+Ed25519 (RFC 9980 algorithm ID 30) over SHA2-512, v6 keys and signatures | yes | RFC 9980 | `crates/ferrohealth-openpgp-pq/src/composite.rs` |
 | Password protection of a ferrohealth-openpgp-pq secret key | AEAD with an Argon2 derived key (RFC 9580 v6 S2K) | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-openpgp-pq/src/key.rs` |
