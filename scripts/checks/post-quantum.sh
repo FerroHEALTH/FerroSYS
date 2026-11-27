@@ -190,6 +190,9 @@ emit_table "$PAGE" "$INVENTORY" "$mode" || failed=1
 emit_badge "$BADGE" "$INVENTORY" "$mode" || failed=1
 badge_length_check "$BADGE" || failed=1
 badge_length_readme README.md || failed=1
+badge_block_check README.md || failed=1
+badge_render_check README.md || failed=1
+badge_caption_check README.md || failed=1
 if [[ "$failed" -eq 0 ]]; then
   echo "post-quantum: $(jq -r .message "$BADGE") uses safe"
 fi
