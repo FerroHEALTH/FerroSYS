@@ -10,6 +10,8 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-28
+
 ### Added
 
 - The revocation check verifies CRLs, OCSP answers and the certificates of
@@ -832,7 +834,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.4...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.13.0...HEAD
+[0.13.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.4...ferrohealth-server-v0.13.0
 [0.12.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.3...ferrohealth-server-v0.12.4
 [0.12.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.2...ferrohealth-server-v0.12.3
 [0.12.2]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.1...ferrohealth-server-v0.12.2
