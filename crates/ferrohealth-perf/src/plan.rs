@@ -278,9 +278,9 @@ pub struct Request {
     /// Header fields sent with it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
-    /// A P-256 private key in PKCS#8 PEM that signs a fresh `DPoP` proof
-    /// for every send of this request (RFC 9449 §4); its bearer token, if
-    /// any, goes out under the `DPoP` scheme.
+    /// A P-256, P-384 or ML-DSA private key in PEM that signs a fresh
+    /// `DPoP` proof for every send of this request (RFC 9449 §4, RFC 9964);
+    /// its bearer token, if any, goes out under the `DPoP` scheme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dpop_key_file: Option<PathBuf>,
 }

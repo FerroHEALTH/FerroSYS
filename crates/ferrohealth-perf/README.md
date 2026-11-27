@@ -274,8 +274,11 @@ RFC 9700 §2.2, and the load phase presents either:
   product uses for its outbound TLS keys, so a file that holds no
   certificate refuses the plan. The load client and the MLLP sender speak
   TLS 1.3 unless `[load] min_version` lowers it to `"1.2"`.
-- `dpop_key_file` on a request: a P-256 private key in PKCS#8 PEM. Every send
-  of that request carries a fresh `DPoP` proof (RFC 9449 §4.2) with a new
+- `dpop_key_file` on a request: a private key in PEM, read by
+  `ferrohealth-smart`'s `DpopKey`. A P-256 or P-384 key signs ES256 or ES384,
+  and an ML-DSA-44, ML-DSA-65 or ML-DSA-87 key in PKCS#8 signs with its
+  parameter set (RFC 9964), so an ML-DSA key puts the server's ML-DSA
+  verification under load. Every send of that request carries a fresh `DPoP` proof (RFC 9449 §4.2) with a new
   `jti`, `htm` and `htu` from the request, `iat` now, and `ath` over the
   bearer token of its `authorization` header, which goes out under the
   `DPoP` scheme. The proof is signed before the request's intended instant,
