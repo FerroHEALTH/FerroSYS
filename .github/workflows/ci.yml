@@ -112,6 +112,12 @@ jobs:
             bash scripts/checks/changelog-structure.sh "$changelog"
             VEX_ROOT=. bash scripts/checks/changelog-security.sh --section Unreleased "$changelog"
           done
+      - name: The post-quantum gate refuses what it claims to
+        if: ${{ !cancelled() }}
+        run: bash scripts/checks/post-quantum.sh --self-test
+      - name: The post-quantum inventory, its table and its README badge agree
+        if: ${{ !cancelled() }}
+        run: bash scripts/checks/post-quantum.sh --check
       - name: Comment style
         if: ${{ !cancelled() }}
         run: bash scripts/checks/comment-style.sh --all

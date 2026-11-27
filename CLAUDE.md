@@ -102,7 +102,10 @@ milestone set and its crates.io name reserved, which needs the owner.
   dependency edges).
 - `scripts/checks/`: the committed guards (comment style, licence headers,
   `TODO(#N)` issues, the changelog structure and Security rules, the crate
-  version rule, the advisory exceptions, and
+  version rule, the advisory exceptions, `post-quantum.sh`, which holds
+  `conformance/post-quantum.tsv`, the table of `docs/post-quantum.md` and the
+  README badge under `conformance/badges/` to each other through the badge
+  helper vendored from FerroSMART in `badge-logos/`, and
   `semver.sh`, cargo-semver-checks against crates.io in two feature passes,
   with `scripts/lib/public-deps.sh` counting a public dependency's line move
   as a break, and `public-surface.sh` keeping each crate's declared

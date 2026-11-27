@@ -10,7 +10,10 @@ cryptographically relevant quantum computer. The machine-readable copy is
 columns: `use`, `algorithm`, `safe` (`yes` or `no`), `pq_standard` (the
 standard that defines the post-quantum form, or `no standard yet`) and
 `location`. Every change that adds, removes or changes a cryptographic use
-updates both in the same pull request.
+updates both in the same pull request. `scripts/checks/post-quantum.sh
+--update` rewrites the table below and the README badge
+(`conformance/badges/post-quantum.json`) from the file, and CI fails when
+either disagrees with it or a location names a file the tree does not hold.
 
 ## The sources
 
