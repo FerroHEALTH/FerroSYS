@@ -56,8 +56,38 @@ const AIA: [u64; 9] = [1, 3, 6, 1, 5, 5, 7, 1, 1];
 /// `id-ad-ocsp` (RFC 5280 §4.2.2.1).
 const AD_OCSP: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.48.1");
 
-/// `ecdsa-with-SHA256` (RFC 5758 §3.2), the algorithm of the generated keys.
+/// `ecdsa-with-SHA256` (RFC 5758 §3.2), the algorithm of the ECDSA keys.
 const ECDSA_WITH_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+
+/// `id-ml-dsa-65` (RFC 9881 §2), the algorithm of the ML-DSA keys.
+const ID_ML_DSA_65: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
+
+/// The algorithm of every key the harness generates, and so of every
+/// certificate, CRL and OCSP answer it signs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Keys {
+    /// ECDSA P-256 with SHA-256.
+    Ecdsa,
+    /// ML-DSA-65.
+    MlDsa,
+}
+
+impl Keys {
+    fn generate(self) -> KeyPair {
+        match self {
+            Self::Ecdsa => KeyPair::generate(),
+            Self::MlDsa => KeyPair::generate_for(&rcgen::PKCS_ML_DSA_65),
+        }
+        .expect("a key")
+    }
+
+    fn signature_algorithm(self) -> ObjectIdentifier {
+        match self {
+            Self::Ecdsa => ECDSA_WITH_SHA256,
+            Self::MlDsa => ID_ML_DSA_65,
+        }
+    }
+}
 
 /// The one revocation source the front's server certificate names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,12 +141,12 @@ impl Pki {
     /// A chain whose intermediate names an unreachable root CRL; enough for
     /// a test that opens no connection.
     pub(super) fn generate() -> Self {
-        Self::with("http://127.0.0.1:9")
+        Self::with("http://127.0.0.1:9", Keys::Ecdsa)
     }
 
-    /// A chain whose intermediate names the root CRL under `base`.
-    fn with(base: &str) -> Self {
-        let root_key = KeyPair::generate().expect("a root key");
+    /// A chain of `keys` whose intermediate names the root CRL under `base`.
+    fn with(base: &str, keys: Keys) -> Self {
+        let root_key = keys.generate();
         let mut root_params = CertificateParams::new(Vec::<String>::new()).expect("parameters");
         root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         root_params
@@ -126,7 +156,7 @@ impl Pki {
             certificate: root_params.self_signed(&root_key).expect("the root"),
             issuer: Issuer::new(root_params, root_key),
         };
-        let key = KeyPair::generate().expect("an intermediate key");
+        let key = keys.generate();
         let mut params = CertificateParams::new(Vec::<String>::new()).expect("parameters");
         params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
         params
@@ -140,7 +170,7 @@ impl Pki {
                 .expect("the intermediate"),
             issuer: Issuer::new(params, key),
         };
-        let client_key = KeyPair::generate().expect("a client key");
+        let client_key = keys.generate();
         let mut client_params = CertificateParams::new(Vec::<String>::new()).expect("parameters");
         client_params
             .distinguished_name
@@ -177,14 +207,19 @@ pub(super) struct Front {
 }
 
 impl Front {
-    /// Starts a front on a free loopback port whose server certificate
-    /// names `source` and stands as `standing` says.
+    /// Starts a front of ECDSA keys on a free loopback port whose server
+    /// certificate names `source` and stands as `standing` says.
     pub(super) async fn start(source: Source, standing: Standing) -> Self {
+        Self::start_with(source, standing, Keys::Ecdsa).await
+    }
+
+    /// Starts a front as [`Front::start`] does, with every key `keys`.
+    pub(super) async fn start_with(source: Source, standing: Standing, keys: Keys) -> Self {
         let status = MockServer::start().await;
         let base = status.uri();
-        let pki = Pki::with(&base);
+        let pki = Pki::with(&base, keys);
         let unreachable = unreachable().await;
-        let server_key = KeyPair::generate().expect("a server key");
+        let server_key = keys.generate();
         let mut params =
             CertificateParams::new(vec![Ipv4Addr::LOCALHOST.to_string()]).expect("parameters");
         params
@@ -244,6 +279,7 @@ impl Front {
                 .subject()
                 .clone(),
             issuer: pki.intermediate.issuer,
+            algorithm: keys.signature_algorithm(),
             known,
             revoked,
             trailing: source == Source::TrailingOcsp,
@@ -448,6 +484,8 @@ async fn serve_crl(status: &MockServer, at: &str, issuer: &Issuer<'static, KeyPa
 struct Responder {
     subject: Name,
     issuer: Issuer<'static, KeyPair>,
+    /// The identifier of the signature algorithm of the issuer's key.
+    algorithm: ObjectIdentifier,
     known: BTreeSet<u64>,
     revoked: BTreeSet<u64>,
     /// Whether the answer carries trailing data inside its `ResponseData`.
@@ -522,7 +560,7 @@ impl Responder {
         let basic = BasicOcspResponse {
             tbs_response_data: data,
             signature_algorithm: AlgorithmIdentifierOwned {
-                oid: ECDSA_WITH_SHA256,
+                oid: self.algorithm,
                 parameters: None,
             },
             signature: BitString::from_bytes(&signature).expect("a bit string"),

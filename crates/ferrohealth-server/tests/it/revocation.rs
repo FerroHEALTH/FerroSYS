@@ -25,7 +25,7 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::TlsConnector;
 use url::Url;
 
-use self::front::{Front, Source, Standing};
+use self::front::{Front, Keys, Source, Standing};
 
 /// The budget of one check.
 const WITHIN: Duration = Duration::from_secs(5);
@@ -127,6 +127,38 @@ async fn a_certificate_its_ocsp_responder_revokes_fails_and_nothing_is_sent() {
         "a revoked certificate fails: {checked:?}"
     );
     assert_eq!(0, front.requests(), "nothing was sent");
+}
+
+// NOTE: RFC 9881 §3: an ML-DSA CA signs its certificates and CRLs under id-ml-dsa-*, and
+// the same identifier signs an OCSP answer (RFC 6960 §4.2.1).
+#[tokio::test]
+async fn an_ml_dsa_chain_clears_by_its_crls_and_its_ocsp_responder() {
+    for source in [Source::Crl, Source::Ocsp] {
+        let front = Front::start_with(source, Standing::Good, Keys::MlDsa).await;
+        assert_eq!(
+            http::StatusCode::OK,
+            cleared_and_asked(&front).await,
+            "{source:?}"
+        );
+        assert_eq!(
+            1,
+            front.requests(),
+            "{source:?}: the request reached the front"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_ml_dsa_signed_revocation_fails_and_nothing_is_sent() {
+    for source in [Source::Crl, Source::Ocsp] {
+        let front = Front::start_with(source, Standing::Revoked, Keys::MlDsa).await;
+        let checked = check(&front).clear(&ping(&front), WITHIN).await;
+        assert!(
+            matches!(checked, Err(RevocationError::Revoked { depth: 0 })),
+            "{source:?}: a revoked certificate fails: {checked:?}"
+        );
+        assert_eq!(0, front.requests(), "{source:?}: nothing was sent");
+    }
 }
 
 #[tokio::test]
