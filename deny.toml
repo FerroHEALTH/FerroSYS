@@ -63,6 +63,9 @@ exceptions = [
   { allow = ["BUSL-1.1"], crate = "ferrohealth-usage-report" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-perf" },
   { allow = ["BUSL-1.1"], crate = "ferrohealth-openpgp-pq" },
+  # The family's SMART crate, under the same licence and Licensor, whose
+  # DPoP key ferrohealth-perf signs with.
+  { allow = ["BUSL-1.1"], crate = "ferrohealth-smart" },
   # The forwarder ratchet's detector under tools/, never published.
   { allow = ["BUSL-1.1"], crate = "forwarders" },
 ]
