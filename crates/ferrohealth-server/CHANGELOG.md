@@ -10,7 +10,7 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
-## [0.14.0]
+## [0.14.0] - 2026-11-28
 
 ### Changed
 
@@ -868,7 +868,8 @@ Shipped with functional changes because: the two fixes beside it are in the same
 - `console` (feature `console`): the nonce Content-Security-Policy and the
   security headers of an operator console (#17).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.13.0...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.14.0...HEAD
+[0.14.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.13.0...ferrohealth-server-v0.14.0
 [0.13.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.4...ferrohealth-server-v0.13.0
 [0.12.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.3...ferrohealth-server-v0.12.4
 [0.12.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-server-v0.12.2...ferrohealth-server-v0.12.3

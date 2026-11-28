@@ -115,7 +115,7 @@ runs the same stack, the same health routes and the same shutdown.
 
 ```toml
 [dependencies]
-ferrohealth-server = "=0.13.0"
+ferrohealth-server = "=0.14.0"
 ```
 
 Start the telemetry with `telemetry::install` (feature `otlp`), which also
