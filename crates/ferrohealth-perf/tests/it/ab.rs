@@ -194,14 +194,18 @@ async fn paths(server: &MockServer) -> Vec<String> {
         .collect()
 }
 
-/// Asserts that `output` is a run the judge passed or could not judge on
-/// this runner's timing, never a breach, and returns its exit code; the
-/// verdict on timing is the judging tests' subject (#291).
-fn passed_or_unjudged(output: &Output) -> i32 {
+/// Asserts that `output` is a verdict of the judge, a pass, a breach or a
+/// run it could not judge, never a harness error, and returns its exit code.
+/// Two arms on one host differ by that host's scheduling, which at these
+/// latencies the judge can read as a breach, so a test of what the arms
+/// send takes any verdict; the verdict on timing is the judging tests'
+/// subject (#291, #465).
+fn judged(output: &Output) -> i32 {
     let code = output.status.code();
     let stdout = text(&output.stdout);
     match code {
         Some(0) => assert!(stdout.contains("the A/B run passed"), "{stdout}"),
+        Some(1) => assert!(stdout.contains("the A/B run failed"), "{stdout}"),
         Some(2) => assert!(
             stdout.contains("the A/B run could not be judged"),
             "a setup error, not a refusal on timing: {stdout}{}",
@@ -254,7 +258,7 @@ async fn each_arm_reads_the_id_its_own_values_name() {
         ],
         &dir.path().join("step.md"),
     );
-    let code = passed_or_unjudged(&output);
+    let code = judged(&output);
     let stdout = text(&output.stdout);
     for (server, wanted) in [(&base, "/item/b-1"), (&head, "/item/h-1")] {
         let sent = paths(server).await;
@@ -400,7 +404,7 @@ async fn the_two_phases_of_a_pair_take_turns_at_once() {
         ],
         &dir.path().join("step.md"),
     );
-    passed_or_unjudged(&output);
+    judged(&output);
     let arms = paths(&server).await;
     let turns = arms.windows(2).filter(|two| two[0] != two[1]).count();
     assert!(
