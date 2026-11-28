@@ -8,9 +8,12 @@
 //! refusals: the stack runs on a current-thread runtime of its own behind a
 //! loopback listener, with the request log and the admission metered and
 //! every log line formatted as JSON and written to the null device, and the
-//! client sends from another thread over one kept-alive connection. CPU
-//! time is what the refusals take from the requests the server serves, and
-//! unlike the wall clock it does not grow when other tests share the cores.
+//! client sends from a current-thread runtime of its own over one kept-alive
+//! connection. CPU time is what the refusals take from the requests the
+//! server serves, and unlike the wall clock it does not grow when other tests
+//! share the cores. On Linux both threads are pinned to one CPU: each request
+//! wakes the server, so its cost depends on the cores the scheduler places
+//! the two threads on, and pinned it is the same in every phase (#464).
 //!
 //! The same thread serves a bare axum route that answers `503` at once, the
 //! floor of an exchange on this transport. In every build a refusal costs
@@ -244,8 +247,37 @@ async fn cpu_of(
     server.cpu().await.saturating_sub(before)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn a_refusal_costs_the_server_at_most_fifty_microseconds_of_cpu() {
+/// Pins the calling thread, and every thread it starts after, to the first
+/// CPU it may run on.
+#[cfg(target_os = "linux")]
+fn pin() {
+    use rustix::thread::{CpuSet, sched_getaffinity, sched_setaffinity};
+    let allowed = sched_getaffinity(None).expect("the thread's CPUs");
+    let first = (0..CpuSet::MAX_CPU)
+        .find(|cpu| allowed.is_set(*cpu))
+        .expect("a CPU the thread may run on");
+    let mut one = CpuSet::new();
+    one.set(first);
+    sched_setaffinity(None, &one).expect("the thread is pinned");
+}
+
+/// The scheduler places the threads where no affinity call exists.
+#[cfg(not(target_os = "linux"))]
+const fn pin() {}
+
+#[test]
+fn a_refusal_costs_the_server_at_most_fifty_microseconds_of_cpu() {
+    pin();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the client runtime")
+        .block_on(refusal_cost());
+}
+
+/// The client of [`a_refusal_costs_the_server_at_most_fifty_microseconds_of_cpu`],
+/// on the pinned thread; the server thread it starts inherits the pin.
+async fn refusal_cost() {
     let server = Server::start();
     let mut holder = connect(server.address).await;
     let entered = Arc::clone(&server.entered);
