@@ -95,7 +95,7 @@ ferrohealth-openpgp-pq = { version = "=0.1.0", default-features = false }
 The performance gate is a binary:
 
 ```sh
-cargo install ferrohealth-perf --version =0.18.0 --locked
+cargo install ferrohealth-perf --version =0.19.0 --locked
 ```
 
 So is the Stateless OpenPGP command line, `ferrohealth-sop`:
