@@ -84,7 +84,7 @@ lockfile alone decides the build:
 ```toml
 [dependencies]
 ferrohealth-secret = "=0.2.2"
-ferrohealth-config = "=0.4.5"
+ferrohealth-config = "=0.5.0"
 ferrohealth-telemetry = { version = "=0.5.1", features = ["otlp", "prometheus", "axum"] }
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
 ferrohealth-server = { version = "=0.13.0", features = ["otlp"] }
