@@ -290,7 +290,43 @@ pub struct Request {
     /// its bearer token, if any, goes out under the `DPoP` scheme.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dpop_key_file: Option<PathBuf>,
+    /// The `private_key_jwt` client assertion signed fresh for every send of
+    /// this request and appended to its form body (RFC 7523 §2.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_assertion: Option<ClientAssertion>,
 }
+
+/// The `client_assertion` table of a request: who the assertion names and
+/// the key that signs it (RFC 7523 §3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientAssertion {
+    /// The client id, the assertion's `iss` and `sub`.
+    pub client_id: String,
+    /// The private key in PEM that signs it, read by `ferrohealth-smart`'s
+    /// `AssertionKey`: EC, RSA, Ed25519 or ML-DSA.
+    pub key_file: PathBuf,
+    /// The assertion's `aud`; the request's URL without query or fragment,
+    /// its token endpoint, when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    /// The `kid` of its header; the key's RFC 7638 thumbprint when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// The JWS algorithm; the key's own when unset (an RSA key signs RS384).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
+    /// The header's `typ`: `JWT` when unset, as SMART App Launch 2.2.0
+    /// (Client Authentication: Asymmetric) has it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typ: Option<String>,
+}
+
+/// The media type of the form body a client assertion is appended to.
+const FORM: &str = "application/x-www-form-urlencoded";
+
+/// The `typ` of a client assertion when its table names none.
+pub const ASSERTION_TYP: &str = "JWT";
 
 /// A plan file that cannot be read or is refused.
 #[derive(Debug, Error)]
@@ -492,6 +528,23 @@ impl Request {
         }
         if let Some(body) = &self.body {
             placeholders(body)?;
+        }
+        if let Some(assertion) = &self.client_assertion {
+            let form = self.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("content-type")
+                    && value
+                        .split(';')
+                        .next()
+                        .is_some_and(|media| media.trim().eq_ignore_ascii_case(FORM))
+            });
+            if !form {
+                return Err(format!(
+                    "client_assertion needs a content-type header of {FORM}, the body it is appended to"
+                ));
+            }
+            if assertion.client_id.is_empty() {
+                return Err(String::from("client_assertion.client_id must not be empty"));
+            }
         }
         Ok(())
     }

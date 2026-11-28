@@ -8,6 +8,7 @@
 #![cfg(test)]
 
 mod ab;
+mod assertion;
 mod bindings;
 mod cli;
 mod load;

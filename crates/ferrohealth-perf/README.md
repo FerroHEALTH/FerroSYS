@@ -297,6 +297,40 @@ The token itself stays the product's: mint it bound to the identity's
 thumbprint (`cnf."x5t#S256"`) or to the key (`cnf.jkt`). A relative path is
 read from the working directory, and a file that cannot be read or parsed
 refuses the plan before any phase runs.
+
+### Client assertions
+
+A token endpoint request of a client that authenticates with
+`private_key_jwt` carries a client assertion its server takes once (RFC
+7523 §3). A request's `client_assertion` table signs a fresh one for every
+send and appends `client_assertion_type` and `client_assertion` to its form
+body:
+
+```toml
+[[requests]]
+group = "token"
+method = "POST"
+path = "/token"
+status = 200
+body = "grant_type=client_credentials&scope=system%2FPatient.rs"
+headers = { content-type = "application/x-www-form-urlencoded" }
+client_assertion = { client_id = "perf-backend", key_file = "target/perf/client.pem" }
+# audience = "https://as.example/token"  # the request's URL without query, by default
+# kid = "client-1"                        # the key's RFC 7638 thumbprint, by default
+# algorithm = "RS384"                     # the key's own, by default
+# typ = "JWT"                             # the default, as SMART App Launch 2.2.0 has it
+```
+
+The key is read by `ferrohealth-smart`'s `AssertionKey`, the family's
+client assertion key: an EC key signs ES256 or ES384, an RSA key RS384 or
+the `algorithm` named, an Ed25519 key `EdDSA`, and an ML-DSA key its
+parameter set (RFC 9964). Each assertion carries `iss` and `sub` the client
+id, `aud`, a new `jti`, `iat` now and an `exp` a minute ahead. It is signed
+before the request's intended instant, as a `DPoP` proof is, so the latency
+stays the server's. A request whose `content-type` is not
+`application/x-www-form-urlencoded`, an empty client id, a key that cannot
+be read and an algorithm the key cannot sign refuse the plan before any
+phase runs.
 Arrival `i` sends request `i` modulo the set, so repeat an entry to weight
 it.
 

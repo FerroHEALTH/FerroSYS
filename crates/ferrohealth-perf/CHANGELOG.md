@@ -10,6 +10,19 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.19.0]
+
+### Added
+
+- Breaking: a request's `client_assertion` table signs a fresh
+  `private_key_jwt` client assertion (RFC 7523 §2.2) for every send and
+  appends it to the form body, so a plan can put a token endpoint's client
+  credentials grant under load. The key is read by `ferrohealth-smart`'s
+  `AssertionKey`; each assertion carries a new `jti` and `iat` now, and its
+  `aud` is the request's URL unless the table names one. `Request` gains
+  `client_assertion`, `CredentialError` gains `Assertion`, and
+  `Credentials::assertion` signs one (#480).
+
 ## [0.18.0] - 2026-11-28
 
 ### Changed
