@@ -10,7 +10,7 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
-## [0.5.0]
+## [0.5.0] - 2026-11-28
 
 ### Added
 
@@ -328,7 +328,8 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
   value and source, secrets shown as `***` through the types of
   `ferrohealth-secret` (#14).
 
-[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.5...HEAD
+[Unreleased]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.5.0...HEAD
+[0.5.0]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.5...ferrohealth-config-v0.5.0
 [0.4.5]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.4...ferrohealth-config-v0.4.5
 [0.4.4]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.3...ferrohealth-config-v0.4.4
 [0.4.3]: https://github.com/FerroHEALTH/FerroSYS/compare/ferrohealth-config-v0.4.2...ferrohealth-config-v0.4.3
