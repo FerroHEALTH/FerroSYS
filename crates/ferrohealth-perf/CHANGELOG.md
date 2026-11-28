@@ -10,6 +10,19 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.20.0]
+
+### Changed
+
+- Breaking: a load phase, and in A/B mode the head over the base, is judged
+  steady per group. Every group whose halves resolve a p50 or p95 must hold
+  its second half over its first within 0.8 to 1.25, and a refusal names
+  each group out of range. The median of the whole mix decided before, so a
+  plan whose fast and slow groups stood in about equal shares was refused
+  though each group held steady. `Steadiness` holds `groups` of the new
+  `Ratios`, gains `unsteady`, and `LoadReport::overall_halves` is removed
+  (#483).
+
 ## [0.19.0] - 2026-11-28
 
 ### Added
