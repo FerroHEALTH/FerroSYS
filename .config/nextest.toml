@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Cadasto B.V.
+# SPDX-License-Identifier: BUSL-1.1
+#
+# The tests whose verdict is a measurement run alone. The refusal cost reads
+# the server thread's CPU time, and the A/B judge compares two arms' latency
+# and CPU; a test running beside them on a shared core (on a hosted runner,
+# its SMT sibling) slows the measured thread and lands in whichever phase it
+# overlaps, which is how both failed on CI (#464, #465). Taking every test
+# slot keeps the rest of the run off their cores. No specification governs
+# this: our own design.
+# https://nexte.st/docs/configuration/threads-required/
+[[profile.default.overrides]]
+filter = '(package(ferrohealth-server) & binary(it) & test(/^stack::refusal_cost::/)) | (package(ferrohealth-perf) & binary(it) & test(/^ab::/))'
+threads-required = "num-test-threads"
