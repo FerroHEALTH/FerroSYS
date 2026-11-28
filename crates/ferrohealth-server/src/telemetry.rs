@@ -7,9 +7,10 @@
 //! `ferrohealth-telemetry` reads no TLS file, so an `https://` collector
 //! needs a rustls configuration handed to `Telemetry::with_tls`. [`build`]
 //! is that hand-over, written once for every product binary: it reads
-//! `telemetry.otlp.tls` with [`TlsClient`] over the platform's verifier and
-//! the table's extra roots, so the trust roots, the client identity and the
-//! minimum version hold. [`install`] is the start every binary makes over
+//! `telemetry.otlp.tls` with [`TlsClient::platform_config`], so the trust
+//! roots, the client identity and the minimum version hold, and a collector
+//! whose chain reaches a root of `trust_roots_file` is kept cleared for
+//! revocation by a [`Clearing`]. [`install`] is the start every binary makes over
 //! it: the telemetry built, its subscriber installed on the detected console,
 //! and the family's panic hook in place of Rust's. No specification governs
 //! the hand-over: our own design.
@@ -19,10 +20,14 @@ use std::sync::Arc;
 use ferrohealth_telemetry::section::TelemetrySection;
 use ferrohealth_telemetry::telemetry::{Console, FilterHandle, InitError, Service, Telemetry};
 
+use crate::revocation::Clearing;
 use crate::tls_client::{TlsClient, TlsClientError};
 
 /// The dotted key of the collector's TLS table.
 const OTLP_TLS: &str = "telemetry.otlp.tls";
+
+/// How long one revocation check of the collector may take.
+const CLEAR_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The telemetry could not be built.
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +36,9 @@ pub enum TelemetryBuildError {
     /// `telemetry.otlp.tls` could not be read into a TLS configuration.
     #[error("telemetry.otlp.tls is refused")]
     Tls(#[source] TlsClientError),
+    /// The collector's endpoint is no URL its revocation check can clear.
+    #[error("telemetry.otlp.endpoint is no URL")]
+    Endpoint(#[source] url::ParseError),
     /// The providers could not be built.
     #[error("the telemetry could not be built")]
     Init(#[source] InitError),
@@ -47,6 +55,7 @@ pub enum TelemetryBuildError {
 pub struct Installed {
     telemetry: Arc<Telemetry>,
     filter: FilterHandle,
+    clearing: Option<Arc<Clearing>>,
 }
 
 impl Installed {
@@ -60,6 +69,13 @@ impl Installed {
     #[must_use]
     pub const fn filter(&self) -> &FilterHandle {
         &self.filter
+    }
+
+    /// The task that keeps the collector cleared for revocation, when its
+    /// TLS table names `trust_roots_file`.
+    #[must_use]
+    pub fn clearing(&self) -> Option<&Clearing> {
+        self.clearing.as_deref()
     }
 
     /// Flushes and stops the exporters before the process exits, logging a
@@ -78,7 +94,9 @@ impl Installed {
 /// `telemetry.otlp.tls` and handed to `Telemetry::with_tls`, which dials
 /// an `https://` collector over it and leaves a plain-HTTP one without it;
 /// with no `[telemetry.otlp]` no TLS is read. With `[telemetry.otlp]` this
-/// runs inside the Tokio runtime that carries the export.
+/// runs inside the Tokio runtime that carries the export. When the table
+/// names `trust_roots_file`, the returned [`Clearing`] keeps the collector
+/// cleared for revocation, and the export reaches it only while it does.
 ///
 /// # Errors
 ///
@@ -89,14 +107,26 @@ impl Installed {
 pub fn build(
     section: &TelemetrySection,
     service: Service,
-) -> Result<Telemetry, TelemetryBuildError> {
+) -> Result<(Telemetry, Option<Clearing>), TelemetryBuildError> {
     let Some(otlp) = &section.otlp else {
-        return Telemetry::new(section, service).map_err(TelemetryBuildError::Init);
+        return Telemetry::new(section, service)
+            .map(|telemetry| (telemetry, None))
+            .map_err(TelemetryBuildError::Init);
     };
     let tls = TlsClient::read(OTLP_TLS, &otlp.tls)
         .and_then(|client| client.platform_config())
         .map_err(TelemetryBuildError::Tls)?;
-    Telemetry::with_tls(section, service, Arc::new(tls)).map_err(TelemetryBuildError::Init)
+    let clearing = match tls.check() {
+        Some(check) if otlp.endpoint.expose().starts_with("https://") => {
+            let endpoint =
+                url::Url::parse(otlp.endpoint.expose()).map_err(TelemetryBuildError::Endpoint)?;
+            Some(Clearing::spawn(check.clone(), vec![endpoint], CLEAR_WITHIN))
+        }
+        _ => None,
+    };
+    let telemetry = Telemetry::with_tls(section, service, Arc::new(tls.into_config()))
+        .map_err(TelemetryBuildError::Init)?;
+    Ok((telemetry, clearing))
 }
 
 /// Builds and installs the telemetry `section` asks for, with the family's
@@ -121,12 +151,17 @@ pub fn install(
     section: &TelemetrySection,
     service: Service,
 ) -> Result<Installed, TelemetryBuildError> {
-    let telemetry = Arc::new(build(section, service)?);
+    let (telemetry, clearing) = build(section, service)?;
+    let telemetry = Arc::new(telemetry);
     let filter = telemetry
         .install(section, &Console::detect())
         .map_err(TelemetryBuildError::Install)?;
     ferrohealth_telemetry::panic::install_hook();
-    Ok(Installed { telemetry, filter })
+    Ok(Installed {
+        telemetry,
+        filter,
+        clearing: clearing.map(Arc::new),
+    })
 }
 
 #[cfg(test)]
@@ -153,19 +188,21 @@ mod tests {
 
     #[test]
     fn no_collector_builds_with_no_tls() {
-        let telemetry = build(&TelemetrySection::default(), service()).expect("it builds");
+        let (telemetry, _clearing) =
+            build(&TelemetrySection::default(), service()).expect("it builds");
         assert!(telemetry.tracer().is_none(), "no spans are exported");
     }
 
     #[tokio::test]
     async fn a_plain_collector_builds_without_using_the_tls() {
-        let telemetry = build(&with_otlp("http://127.0.0.1:4317"), service()).expect("it builds");
+        let (telemetry, _clearing) =
+            build(&with_otlp("http://127.0.0.1:4317"), service()).expect("it builds");
         assert!(telemetry.tracer().is_some(), "spans are exported");
     }
 
     #[tokio::test]
     async fn an_https_collector_builds_over_the_platform_verifier() {
-        let telemetry =
+        let (telemetry, _clearing) =
             build(&with_otlp("https://otel.example.org:4317"), service()).expect("it builds");
         assert!(telemetry.tracer().is_some(), "spans are exported");
     }

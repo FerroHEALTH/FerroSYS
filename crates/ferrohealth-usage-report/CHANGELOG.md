@@ -10,6 +10,14 @@ released by the tag `ferrohealth-usage-report-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.6.0]
+
+### Changed
+
+- Breaking: the `telemetry` feature builds on `ferrohealth-telemetry` 0.6,
+  whose `[telemetry.otlp]` TLS table comes from `ferrohealth-config` 0.5
+  (FerroHEALTH/FerroSYS#470).
+
 ## [0.5.0] - 2026-11-15
 
 ### Changed

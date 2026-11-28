@@ -472,3 +472,67 @@ fn debug_never_shows_the_key() {
         "{rendered}"
     );
 }
+
+// NOTE: RFC 9881 §3: an ML-DSA CA signs its certificates and CRLs; the platform configuration
+// verifies a chain to a table root with webpki, which verifies ML-DSA on every operating system.
+#[cfg(feature = "platform-verifier")]
+#[tokio::test]
+async fn the_platform_configuration_reaches_an_ml_dsa_chain_to_a_table_root_once_cleared() {
+    let front = Front::start_with(Source::Crl, Standing::Good, Keys::MlDsa).await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let tls = tls_client(&front, dir.path())
+        .platform_config()
+        .expect("the configuration");
+    let http = tls
+        .apply(reqwest::Client::builder())
+        .build()
+        .expect("the client builds");
+    assert!(
+        http.get(ping(&front)).send().await.is_err(),
+        "no check cleared the chain"
+    );
+    assert_eq!(0, front.requests(), "nothing was sent");
+    let check = tls
+        .check()
+        .expect("the table's roots carry a check")
+        .clone();
+    let (_clearing, first) =
+        ferrohealth_server::revocation::Clearing::start(check, vec![ping(&front)], WITHIN).await;
+    for (endpoint, outcome) in &first {
+        assert!(outcome.is_ok(), "{endpoint}: {outcome:?}");
+    }
+    let answer = http
+        .get(ping(&front))
+        .send()
+        .await
+        .expect("the front answers");
+    assert_eq!(http::StatusCode::OK, answer.status());
+    assert_eq!(1, front.requests(), "the request reached the front");
+}
+
+#[cfg(feature = "platform-verifier")]
+#[tokio::test]
+async fn the_platform_configuration_leaves_a_chain_to_no_table_root_to_the_platform() {
+    let front = Front::start(Source::Crl, Standing::Good).await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let identity = dir.path().join("identity.pem");
+    std::fs::write(&identity, front.client_identity()).expect("the identity is written");
+    let section = TlsClientSection {
+        client_identity_file: Some(identity),
+        ..TlsClientSection::default()
+    };
+    let tls = TlsClient::read("xcpd.tls", &section)
+        .expect("the material reads")
+        .platform_config()
+        .expect("the configuration");
+    assert!(tls.check().is_none(), "no table root, no check");
+    let http = tls
+        .apply(reqwest::Client::builder())
+        .build()
+        .expect("the client builds");
+    assert!(
+        http.get(ping(&front)).send().await.is_err(),
+        "the platform does not trust the harness root"
+    );
+    assert_eq!(0, front.requests(), "nothing was sent");
+}

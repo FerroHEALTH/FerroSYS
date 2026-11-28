@@ -138,7 +138,7 @@ async fn the_client_identity_is_presented_on_every_connection() {
     let identity = write(dir.path(), "client.pem", &pki.client_pem);
     let roots = write(dir.path(), "ca.pem", &pki.ca_pem);
     let text = format!(
-        "{LOAD}client_identity_file = '{identity}'\ntrust_roots_file = '{roots}'\n\
+        "{LOAD}client_identity_file = '{identity}'\ntrust_roots_without_revocation_file = '{roots}'\n\
          [[requests]]\ngroup = \"read\"\nmethod = \"GET\"\npath = \"/ok\"\nstatus = 200\n"
     );
     let plan_path = write(dir.path(), "plan.toml", &text);
@@ -146,7 +146,6 @@ async fn the_client_identity_is_presented_on_every_connection() {
     let credentials = Credentials::load(&plan).unwrap();
     let client = credentials
         .apply(reqwest::Client::builder().no_proxy())
-        .unwrap()
         .build()
         .unwrap();
     let outcome = drive(
@@ -180,7 +179,6 @@ async fn the_client_identity_is_presented_on_every_connection() {
     let credentials = Credentials::load(&anonymous).unwrap();
     let client = credentials
         .apply(reqwest::Client::builder().no_proxy())
-        .unwrap()
         .build()
         .unwrap();
     let outcome = drive(

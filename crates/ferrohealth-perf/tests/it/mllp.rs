@@ -182,7 +182,7 @@ async fn a_tls_listener_takes_the_plans_identity_and_roots() {
     let accepted = write(dir.path(), "a01.hl7", ACCEPTED);
     let text = format!(
         "[load]\nrate = 10.0\nwarmup_secs = 0\nduration_secs = 2\n\
-         client_identity_file = '{identity}'\ntrust_roots_file = '{ca}'\n\
+         client_identity_file = '{identity}'\ntrust_roots_without_revocation_file = '{ca}'\n\
          [mllp]\naddress = '{address}'\ntls = true\n\
          [[messages]]\ngroup = \"iti-8\"\nfile = '{accepted}'\n"
     );

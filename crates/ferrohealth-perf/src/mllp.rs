@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use ferrohealth_server::revocation::{Clearing, RevocationCheck};
 use ferrohealth_server::tls_client::TlsClient;
 use rustls::pki_types::ServerName;
 use thiserror::Error;
@@ -30,6 +31,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
+use url::Url;
 
 use crate::plan::Plan;
 
@@ -299,6 +301,10 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
 pub struct Sender {
     address: String,
     tls: Option<(TlsConnector, ServerName<'static>)>,
+    /// The revocation check of `[load] trust_roots_file`, and the task that
+    /// keeps the listener cleared once the first connection starts it.
+    check: Option<RevocationCheck>,
+    clearing: tokio::sync::OnceCell<Option<Clearing>>,
     messages: Vec<Arc<Message>>,
     idle: Mutex<Vec<Stream>>,
     prefix: String,
@@ -358,11 +364,12 @@ impl Sender {
             .map(str::to_owned)
             .or(settings.address)
             .ok_or(MllpError::NoAddress)?;
-        let tls = if settings.tls {
+        let (tls, check) = if settings.tls {
             let host = settings.server_name.unwrap_or_else(|| host_of(&address));
-            Some(tls(plan, host)?)
+            let (connector, name, check) = tls(plan, host)?;
+            (Some((connector, name)), check)
         } else {
-            None
+            (None, None)
         };
         let messages = plan
             .messages
@@ -373,6 +380,8 @@ impl Sender {
         Ok(Some(Self {
             address,
             tls,
+            check,
+            clearing: tokio::sync::OnceCell::new(),
             messages,
             idle: Mutex::new(Vec::new()),
             prefix: nonce.chars().take(8).collect(),
@@ -446,6 +455,9 @@ impl Sender {
             .map_err(|_refused| "transport".to_owned())?;
         tcp.set_nodelay(true)
             .map_err(|_unsupported| "transport".to_owned())?;
+        if !self.clear().await {
+            return Err("revocation".to_owned());
+        }
         match &self.tls {
             None => Ok(Stream::Plain(tcp)),
             Some((connector, name)) => connector
@@ -457,6 +469,32 @@ impl Sender {
     }
 }
 
+impl Sender {
+    /// Starts keeping the listener cleared for revocation on the first call,
+    /// when the plan names `[load] trust_roots_file`, and returns whether its
+    /// first round cleared it; with no such roots there is nothing to clear.
+    async fn clear(&self) -> bool {
+        let Some(check) = &self.check else {
+            return true;
+        };
+        self.clearing
+            .get_or_init(|| async {
+                let listener = Url::parse(&format!("https://{}", self.address)).ok()?;
+                let (clearing, first) =
+                    Clearing::start(check.clone(), vec![listener], CLEAR_WITHIN).await;
+                first
+                    .iter()
+                    .all(|(_, outcome)| outcome.is_ok())
+                    .then_some(clearing)
+            })
+            .await
+            .is_some()
+    }
+}
+
+/// How long one revocation check of the listener may take.
+const CLEAR_WITHIN: Duration = Duration::from_secs(10);
+
 /// The host of `address`, `host:port` or `[v6]:port`.
 fn host_of(address: &str) -> String {
     let host = address.rsplit_once(':').map_or(address, |(host, _)| host);
@@ -466,14 +504,23 @@ fn host_of(address: &str) -> String {
 }
 
 /// The TLS connector of `plan`'s client identity and trust roots, beside the
-/// platform's, verifying the listener as `host`.
-fn tls(plan: &Plan, host: String) -> Result<(TlsConnector, ServerName<'static>), MllpError> {
-    let config = TlsClient::read("load", &plan.load.tls())
+/// platform's, verifying the listener as `host`, and the revocation check of
+/// the plan's checked roots.
+fn tls(
+    plan: &Plan,
+    host: String,
+) -> Result<(TlsConnector, ServerName<'static>, Option<RevocationCheck>), MllpError> {
+    let platform = TlsClient::read("load", &plan.load.tls())
         .and_then(|client| client.platform_config())
         .map_err(crate::credentials::CredentialError::from)?;
     let name =
         ServerName::try_from(host).map_err(|_invalid| MllpError::Tls("the server name", None))?;
-    Ok((TlsConnector::from(Arc::new(config)), name))
+    let check = platform.check().cloned();
+    Ok((
+        TlsConnector::from(Arc::new(platform.into_config())),
+        name,
+        check,
+    ))
 }
 
 #[cfg(test)]

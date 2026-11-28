@@ -10,6 +10,18 @@ released by the tag `ferrohealth-config-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.5.0]
+
+### Added
+
+- Breaking: `tls::TlsClientSection::trust_roots_without_revocation_file`,
+  a PEM bundle of trust roots whose PKI publishes no CRL and no OCSP
+  responder. `ferrohealth-server` trusts a chain to one of them with no
+  revocation check and names it, while a chain to a root of
+  `trust_roots_file` must clear a revocation check before a connection
+  opens. A struct literal of the table adds the field or ends in
+  `..Default::default()` (#470).
+
 ## [0.4.5] - 2026-11-15
 
 ### Fixed

@@ -19,9 +19,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// A table takes `client_identity`, inline, or `client_identity_file`: the
 /// client certificate chain and its private key in one PEM, presented for
-/// mutual TLS and held as a secret; and `trust_roots_file`, a PEM bundle of
-/// trust roots beside the platform's. `Debug` and serialization show the
-/// inline identity as `***`, as [`Secret`] does.
+/// mutual TLS and held as a secret; `trust_roots_file`, a PEM bundle of trust
+/// roots beside the platform's, whose chains are checked for revocation; and
+/// `trust_roots_without_revocation_file`, a PEM bundle of trust roots whose
+/// PKI publishes no revocation service, whose chains are not. `Debug` and
+/// serialization show the inline identity as `***`, as [`Secret`] does.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
@@ -30,8 +32,14 @@ pub struct TlsClientSection {
     pub client_identity: Option<Secret>,
     /// A file holding `client_identity`.
     pub client_identity_file: Option<PathBuf>,
-    /// A PEM bundle of trust roots beside the platform's.
+    /// A PEM bundle of trust roots beside the platform's. A chain to one of
+    /// them must clear a revocation check before a connection over it.
     pub trust_roots_file: Option<PathBuf>,
+    /// A PEM bundle of trust roots beside the platform's whose PKI publishes
+    /// no CRL and no OCSP responder. A chain to one of them is trusted with no
+    /// revocation check, which the product names at its start and logs at
+    /// each connection.
+    pub trust_roots_without_revocation_file: Option<PathBuf>,
     /// The oldest TLS version the client speaks: `"1.3"` unless lowered to
     /// `"1.2"`, as for the listener.
     pub min_version: TlsVersion,
@@ -45,6 +53,7 @@ impl TlsClientSection {
         self.client_identity.is_some()
             || self.client_identity_file.is_some()
             || self.trust_roots_file.is_some()
+            || self.trust_roots_without_revocation_file.is_some()
     }
 }
 
