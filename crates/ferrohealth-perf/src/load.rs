@@ -92,7 +92,7 @@ pub enum LoadError {
     /// The schedule does not fit in a run.
     #[error("the schedule of {0} arrivals is too long")]
     Schedule(u64),
-    /// A `DPoP` proof could not be signed.
+    /// A `DPoP` proof or a client assertion could not be signed.
     #[error(transparent)]
     Proof(crate::credentials::CredentialError),
     /// The plan sends HL7 v2 messages and the endpoints hold no MLLP
@@ -308,13 +308,23 @@ impl Item {
                         .map_err(LoadError::Template)?,
                     None => None,
                 };
-                let (request, url) = match filled {
+                let (mut request, url) = match filled {
                     Some(filled) => {
                         let url = request_url(base, &filled)?;
                         (filled, url)
                     }
                     None => ((**request).clone(), url.clone()),
                 };
+                // NOTE: RFC 7523 §3: an assertion is used once; it is signed before the intended instant, outside the timed window.
+                if let Some(fields) = credentials
+                    .assertion(*position, &url)
+                    .map_err(LoadError::Proof)?
+                {
+                    request.body = Some(match request.body.take() {
+                        Some(body) if !body.is_empty() => format!("{body}&{fields}"),
+                        _ => fields,
+                    });
+                }
                 // NOTE: RFC 9449 §4.2: a proof is fresh per request; it is signed before the intended instant, outside the timed window.
                 let proof = sign(credentials, *position, &request, &url)?;
                 let call = HttpCall {
@@ -744,6 +754,7 @@ mod tests {
             body: None,
             headers: BTreeMap::new(),
             dpop_key_file: None,
+            client_assertion: None,
         };
         let base = Url::parse("http://127.0.0.1:8080/api/").unwrap();
         assert_eq!(

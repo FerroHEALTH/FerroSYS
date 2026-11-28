@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "ferrohealth-perf"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
