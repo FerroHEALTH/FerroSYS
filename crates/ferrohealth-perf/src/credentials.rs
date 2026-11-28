@@ -19,6 +19,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use ferrohealth_server::revocation::{Clearing, RevocationError};
+use ferrohealth_server::tls_client::platform_tls::PlatformTls;
 use ferrohealth_server::tls_client::{TlsClient, TlsClientError};
 use ferrohealth_smart::client::dpop::{DpopKey, Role};
 use reqwest::ClientBuilder;
@@ -62,13 +64,26 @@ pub enum CredentialError {
     /// The client identity or the trust roots cannot be used.
     #[error("the TLS client material of [load] cannot be used")]
     Tls(#[from] TlsClientError),
+    /// A target whose chain reaches a root of `[load] trust_roots_file` was
+    /// not cleared for revocation, so no connection to it would open.
+    #[error("the target {host} was not cleared for revocation")]
+    Revocation {
+        /// The target's host.
+        host: String,
+        /// Why the check did not clear it.
+        #[source]
+        source: RevocationError,
+    },
 }
+
+/// How long one revocation check of a target may take.
+const CLEAR_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// What the load client presents: its TLS identity and trust roots, and the
 /// `DPoP` key of each request of the plan, in the plan's order.
 #[derive(Debug, Default, Clone)]
 pub struct Credentials {
-    tls: Option<Arc<TlsClient>>,
+    tls: Option<Arc<PlatformTls>>,
     dpop: Vec<Option<Arc<DpopKey>>>,
 }
 
@@ -83,7 +98,7 @@ impl Credentials {
     /// [`CredentialError::Parse`] for a `DPoP` key that cannot be read or
     /// holds no P-256, P-384 or ML-DSA private key.
     pub fn load(plan: &Plan) -> Result<Self, CredentialError> {
-        let tls = TlsClient::read("load", &plan.load.tls())?;
+        let tls = TlsClient::read("load", &plan.load.tls())?.platform_config()?;
         let dpop = plan
             .requests
             .iter()
@@ -101,17 +116,43 @@ impl Credentials {
         })
     }
 
-    /// `builder` with the client identity, the trust roots and the oldest
-    /// TLS version of the plan.
+    /// `builder` over the platform configuration of the plan's client
+    /// identity, trust roots and oldest TLS version.
+    pub fn apply(&self, builder: ClientBuilder) -> ClientBuilder {
+        match &self.tls {
+            Some(tls) => tls.apply(builder),
+            None => builder,
+        }
+    }
+
+    /// Clears the `https` ones of `targets` for revocation and keeps them
+    /// cleared, when the plan
+    /// names `[load] trust_roots_file`, so a connection to a target whose
+    /// chain reaches one of those roots opens; `None` when it names none.
     ///
     /// # Errors
     ///
-    /// [`CredentialError::Tls`] when reqwest refuses the identity or a root.
-    pub fn apply(&self, builder: ClientBuilder) -> Result<ClientBuilder, CredentialError> {
-        match &self.tls {
-            Some(tls) => Ok(tls.apply(builder)?),
-            None => Ok(builder),
+    /// [`CredentialError::Revocation`] for a target the first round did not
+    /// clear.
+    pub async fn keep_cleared(
+        &self,
+        targets: Vec<Url>,
+    ) -> Result<Option<Clearing>, CredentialError> {
+        let Some(check) = self.tls.as_ref().and_then(|tls| tls.check()) else {
+            return Ok(None);
+        };
+        let targets = targets
+            .into_iter()
+            .filter(|target| target.scheme() == "https")
+            .collect();
+        let (clearing, first) = Clearing::start(check.clone(), targets, CLEAR_WITHIN).await;
+        for (target, outcome) in first {
+            outcome.map_err(|source| CredentialError::Revocation {
+                host: target.host_str().unwrap_or_default().to_owned(),
+                source,
+            })?;
         }
+        Ok(Some(clearing))
     }
 
     /// A fresh proof for request `index` of the plan, sent with `method` to

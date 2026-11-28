@@ -10,6 +10,40 @@ released by the tag `ferrohealth-server-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.14.0]
+
+### Changed
+
+- Breaking: `tls_client::TlsClient::platform_config` returns a
+  `tls_client::platform_tls::PlatformTls` and verifies by root (#470). A
+  chain to a root of `trust_roots_file` is verified by webpki over the
+  provider's algorithms, ML-DSA (RFC 9881) included, so it verifies on
+  macOS and Windows too, and opens a connection only once a
+  `revocation::RevocationCheck` cleared it: revocation of those chains is
+  mandatory and fails closed when no source answers. A chain to a root of
+  the new `trust_roots_without_revocation_file` is verified by webpki with
+  no revocation check, logged once when the configuration is built and at
+  each connection, and `PlatformTls::unchecked_roots` names those roots
+  for the startup banner. Any other chain goes to the platform's verifier
+  under the operating system's policy, now built once per process.
+  `PlatformTls::check` is the check to clear the private endpoints with,
+  and `PlatformTls::apply` sets the configuration on a reqwest client.
+- Breaking: `tls_client::TlsClient::apply`, the feature `reqwest` and
+  `TlsClientError::Client` are removed; a reqwest client takes
+  `PlatformTls::apply`. The feature `platform-verifier` turns on
+  `revocation`.
+- Breaking: `telemetry::build` returns the telemetry with the `Clearing`
+  that keeps an `https` collector under `trust_roots_file` cleared, and
+  `telemetry::Installed::clearing` holds it.
+
+### Added
+
+- `revocation::Clearing` keeps every endpoint of a check cleared: at its
+  start and every four minutes, inside the five-minute window a cleared
+  chain admits. `Clearing::start` waits for the first round and returns
+  its outcomes, and `Clearing::spawn` starts at once for a caller that
+  cannot wait.
+
 ## [0.13.0] - 2026-11-28
 
 ### Added

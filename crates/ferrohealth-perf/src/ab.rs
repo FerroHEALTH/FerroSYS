@@ -401,6 +401,12 @@ async fn carry_out(
 ) -> Result<AbResult, RunError> {
     let plan = &options.plan;
     let (credentials, client) = client(plan)?;
+    let _clearing = credentials
+        .keep_cleared(vec![
+            server_url(&options.base.url)?,
+            server_url(&options.head.url)?,
+        ])
+        .await?;
     let arms = Arms {
         base: side(base_plan, &options.base, values.map(|v| &v.base)).await?,
         head: side(head_plan, &options.head, values.map(|v| &v.head)).await?,

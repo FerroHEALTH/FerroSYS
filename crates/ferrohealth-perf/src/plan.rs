@@ -178,9 +178,14 @@ pub struct LoadSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_identity_file: Option<PathBuf>,
     /// A PEM file of the roots that verify an `https` target, beside the
-    /// platform's.
+    /// platform's; a target whose chain reaches one is cleared for
+    /// revocation before the load phase.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_roots_file: Option<PathBuf>,
+    /// A PEM file of roots beside the platform's whose PKI publishes no
+    /// revocation service, trusted with no revocation check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_roots_without_revocation_file: Option<PathBuf>,
     /// The oldest TLS version the load client and the MLLP sender speak:
     /// `"1.3"` unless lowered to `"1.2"`, as for every FerroHEALTH outbound
     /// TLS table.
@@ -206,6 +211,7 @@ impl Default for LoadSettings {
             stall_ratio: 10.0,
             client_identity_file: None,
             trust_roots_file: None,
+            trust_roots_without_revocation_file: None,
             min_version: TlsVersion::default(),
             seed: 0,
         }
@@ -220,6 +226,7 @@ impl LoadSettings {
         TlsClientSection {
             client_identity_file: self.client_identity_file.clone(),
             trust_roots_file: self.trust_roots_file.clone(),
+            trust_roots_without_revocation_file: self.trust_roots_without_revocation_file.clone(),
             min_version: self.min_version,
             ..TlsClientSection::default()
         }

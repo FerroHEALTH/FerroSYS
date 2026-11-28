@@ -10,6 +10,21 @@ released by the tag `ferrohealth-perf-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.18.0]
+
+### Changed
+
+- Breaking: the load client and the MLLP sender verify through
+  `ferrohealth-server` 0.14's platform configuration. A target whose chain
+  reaches a root of `[load] trust_roots_file` is cleared for revocation
+  before the load phase, and the run is refused when it cannot be; an MLLP
+  listener is cleared at its first connection, and a failed check counts
+  each send as a `revocation` failure. `[load]
+  trust_roots_without_revocation_file` takes the roots of a PKI that
+  publishes no CRL or OCSP. `Credentials::apply` returns the builder
+  itself, and `Credentials::keep_cleared` clears the targets
+  (#470).
+
 ## [0.17.0] - 2026-11-28
 
 ### Changed

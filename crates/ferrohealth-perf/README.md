@@ -121,7 +121,8 @@ sample_ms = 100                    # how often memory is sampled
 settle_secs = 11                   # wait after it, before the transaction count
 stall_ratio = 10.0                 # p99 over this times p50 on every route marks a stall
 # client_identity_file = "perf/client.pem"  # a certificate chain and its key, for mTLS
-# trust_roots_file = "perf/ca.pem"          # roots that verify an https target
+# trust_roots_file = "perf/ca.pem"          # roots that verify an https target, cleared for revocation
+# trust_roots_without_revocation_file = "perf/test-ca.pem"  # roots of a PKI with no CRL or OCSP
 min_version = "1.3"                # the oldest TLS version spoken; "1.2" lowers it
 seed = 0                           # the seed of the per-arrival variables
 
@@ -258,8 +259,11 @@ it in MSA-2. MSA-1 `AA` or `CA` answers the message; `AE`, `AR`, `CE`, `CR`
 or the echo of another MSH-10 counts as a failed request, named by the code
 in the report. A message file that cannot be read or holds no MSH-10
 refuses the plan before any phase runs. Under `tls = true` the listener is
-verified against the platform's roots and the plan's `trust_roots_file`,
-and the connection presents the plan's `client_identity_file`.
+verified against the platform's roots and the plan's trust roots, a
+listener whose chain reaches a root of `trust_roots_file` is cleared for
+revocation at the first connection (a failed check counts every send as a
+`revocation` failure), and the connection presents the plan's
+`client_identity_file`.
 
 ### Sender-constrained tokens
 
@@ -269,7 +273,11 @@ RFC 9700 §2.2, and the load phase presents either:
 - `[load] client_identity_file`: a PEM file holding a certificate chain and
   its private key, presented on every TLS connection to the target, for a
   certificate-bound token (RFC 8705 §3). `[load] trust_roots_file` holds the
-  roots that verify an `https` target, beside the platform's. Both are read
+  roots that verify an `https` target, beside the platform's; before the
+  load phase each target whose chain reaches one is cleared for revocation,
+  and a target that cannot be cleared refuses the run. Roots of a test PKI
+  that publishes no CRL or OCSP go in `[load]
+  trust_roots_without_revocation_file` instead. Both are read
   by `ferrohealth-server`'s `TlsClient`, the reader every FerroHEALTH
   product uses for its outbound TLS keys, so a file that holds no
   certificate refuses the plan. The load client and the MLLP sender speak

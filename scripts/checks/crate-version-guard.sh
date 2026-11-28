@@ -65,6 +65,9 @@ self_test() {
 
   state 0.1.4 0.4.2 1.0.0 0.23.9 0.8.4
   expect 0 "a patch step on the public dependencies' lines" released HEAD
+  printf '[[package]]\nname = "demo"\nversion = "0.0.9"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n\n[[package]]\nname = "demo"\nversion = "0.1.4"\n' > "$tmp/repo/Cargo.lock"
+  t_git commit -qam "demo 0.1.4 beside a registry copy of 0.0.9"
+  expect 0 "the member's lock entry beside a registry copy of another version" released HEAD
   state 0.1.2 0.4.2 1.0.0 0.23.0 0.8.0
   expect 1 "a version that moves backwards" released HEAD
   state 0.1.3 0.5.0 1.0.0 0.23.0 0.8.0
@@ -130,11 +133,18 @@ package_version() {
        !done && p && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; done=1}'
 }
 
-# The version of the package $1 in a Cargo.lock read on stdin.
+# The version of the workspace member $1 in a Cargo.lock read on stdin: the
+# entry of that name with no `source`, since a registry copy of the same
+# name, which another dependency requires, carries one.
 locked_version() {
   local member="$1"
-  awk -v name="$member" '$0 == "name = \"" name "\"" {p=1; next}
-       !done && p && /^version = /{gsub(/version = "|"/, ""); print; done=1}'
+  awk -v name="$member" '
+    function judge() { if (!done && n == name && !src && v != "") { print v; done = 1 } }
+    /^\[\[package\]\]/ { judge(); n = ""; v = ""; src = 0; next }
+    /^name = / { n = $0; sub(/^name = "/, "", n); sub(/"$/, "", n) }
+    /^version = / { v = $0; sub(/^version = "/, "", v); sub(/"$/, "", v) }
+    /^source = / { src = 1 }
+    END { judge() }'
 }
 
 failures=0

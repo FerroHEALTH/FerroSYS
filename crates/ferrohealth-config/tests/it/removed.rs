@@ -185,6 +185,17 @@ fn the_outbound_tls_section_reads_its_keys_and_masks_the_identity() {
 }
 
 #[test]
+fn the_roots_without_revocation_name_material_of_their_own() {
+    let tree = load("[tls]\ntrust_roots_without_revocation_file = \"/etc/private-pki.pem\"\n");
+    assert_eq!(
+        Some(std::path::Path::new("/etc/private-pki.pem")),
+        tree.tls.trust_roots_without_revocation_file.as_deref()
+    );
+    assert!(tree.tls.trust_roots_file.is_none());
+    assert!(tree.tls.names_material());
+}
+
+#[test]
 fn a_deprecated_tls_version_is_refused_naming_the_minimum() {
     assert_eq!(
         Err(TlsVersionError::Deprecated("1.1")),

@@ -197,7 +197,7 @@ pub(crate) fn server_url(url: &SecretUrl) -> Result<Url, RunError> {
 pub(crate) fn client(plan: &Plan) -> Result<(Credentials, reqwest::Client), RunError> {
     let credentials = Credentials::load(plan)?;
     let client = credentials
-        .apply(reqwest::Client::builder().no_proxy())?
+        .apply(reqwest::Client::builder().no_proxy())
         .build()
         .map_err(RunError::Client)?;
     Ok((credentials, client))
@@ -370,6 +370,9 @@ pub async fn run(options: &RunOptions) -> Result<RunResult, RunError> {
         options.mllp_address.as_deref(),
     )?;
     let (credentials, client) = client(&options.plan)?;
+    let _clearing = credentials
+        .keep_cleared(vec![server_url(&options.base_url)?])
+        .await?;
     let instruments = Instruments::open(&options.target, options.database_url.as_ref()).await?;
     let started = now();
     let plan = &options.plan;

@@ -80,10 +80,17 @@ runs the same stack, the same health routes and the same shutdown.
 - `serve::run_all` serves several listeners under one signal,
   `client_address` names a request's client, `caller_rate` limits one
   caller, `health::Health::with_info` serves `/health/info`, and
-  `tls_client` reads the TLS material of outbound calls (feature `reqwest`
-  sets it on a reqwest client, and feature `platform-verifier` gives the
-  rustls configuration over the platform's verifier for TLS outside
-  HTTP).
+  `tls_client` reads the TLS material of outbound calls. Feature
+  `platform-verifier` gives `platform_config`, the configuration every
+  outbound client takes: a chain to a root the table names is verified by
+  webpki over the provider's algorithms, ML-DSA among them, and a chain to
+  any other root by the platform's verifier under the operating system's
+  policy. A chain to a root of `trust_roots_file` opens a connection only
+  once a revocation check cleared it, so a product keeps its private
+  endpoints cleared with `revocation::Clearing`; a chain to a root of
+  `trust_roots_without_revocation_file` is trusted with no check and logged
+  at each connection, and `PlatformTls::unchecked_roots` is the line the
+  startup banner names those roots by.
 - `revocation` (feature `revocation`) checks every certificate an outbound
   peer presents by its CRL, then its OCSP responder, before any data is
   sent, and hands out a reqwest client that connects only over a chain a

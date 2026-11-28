@@ -61,6 +61,11 @@ const CLEARED_FOR: u64 = 300;
 /// seconds.
 const KEPT_FOR: u64 = 3_600;
 
+/// How often a [`Clearing`] clears its endpoints again: a minute inside the
+/// window a cleared chain admits, so a source that answers keeps the chain
+/// admitted.
+const CLEAR_EVERY: Duration = Duration::from_secs(CLEARED_FOR - 60);
+
 /// The TLS of an outbound link: the trust roots, the client identity, and
 /// the chains a check cleared.
 ///
@@ -74,6 +79,11 @@ struct Inner {
     anchors: Vec<Certificate>,
     probe: Arc<ClientConfig>,
     gated: Arc<ClientConfig>,
+    #[cfg_attr(
+        not(feature = "platform-verifier"),
+        expect(dead_code, reason = "read by the platform configuration alone")
+    )]
+    gate: Arc<Gate>,
     certificate: Option<CertificateDer<'static>>,
     fetch: reqwest::Client,
     cleared: Arc<Cleared>,
@@ -364,11 +374,12 @@ impl RevocationCheck {
                 .map_err(RevocationSetupError::Tls)?,
         };
         let cleared = Arc::new(Cleared::default());
+        let gate = Arc::new(Gate::new(webpki, Arc::clone(&cleared)));
         let gated = ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(versions)
             .map_err(RevocationSetupError::Tls)?
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(Gate::new(webpki, Arc::clone(&cleared))));
+            .with_custom_certificate_verifier(Arc::<Gate>::clone(&gate));
         let gated = match identity {
             None => gated.with_no_client_auth(),
             Some((chain, key)) => gated
@@ -386,12 +397,23 @@ impl RevocationCheck {
                 anchors,
                 probe: Arc::new(probe),
                 gated: Arc::new(gated),
+                gate,
                 certificate,
                 fetch,
                 cleared,
                 kept: Mutex::new(BTreeMap::new()),
             }),
         })
+    }
+
+    /// The certificate verifier of [`RevocationCheck::config`]: the path
+    /// verification against the roots, then the chain must be one a check
+    /// cleared.
+    #[cfg(feature = "platform-verifier")]
+    pub(crate) fn verifier(&self) -> Arc<dyn rustls::client::danger::ServerCertVerifier> {
+        let gate: Arc<dyn rustls::client::danger::ServerCertVerifier> =
+            Arc::<Gate>::clone(&self.inner.gate);
+        gate
     }
 
     /// The rustls configuration of the link: it presents the client
@@ -597,4 +619,92 @@ fn client_identity(
 /// every status is not yet valid.
 fn now() -> u64 {
     jiff::Timestamp::now().as_second().max(0).unsigned_abs()
+}
+
+/// The task that keeps every endpoint of a check cleared.
+///
+/// It clears each endpoint once at its start and then every four minutes, so
+/// a connection to any of them passes the gate while their revocation sources
+/// answer. A round that fails for an endpoint logs it, and that endpoint's
+/// connections fail closed until a later round clears it. Dropping the
+/// clearing stops it.
+pub struct Clearing {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl fmt::Debug for Clearing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Clearing")
+            .field("running", &!self.task.is_finished())
+            .finish()
+    }
+}
+
+impl Drop for Clearing {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl Clearing {
+    /// Clears every one of `endpoints` with `check`, each within `within`,
+    /// then keeps them cleared in a task of the current runtime. Returns the
+    /// clearing and the first round's outcome, endpoint by endpoint.
+    pub async fn start(
+        check: RevocationCheck,
+        endpoints: Vec<Url>,
+        within: Duration,
+    ) -> (Self, Vec<(Url, Result<(), RevocationError>)>) {
+        let first = round(&check, &endpoints, within).await;
+        let task = tokio::spawn(keep(check, endpoints, within, CLEAR_EVERY));
+        (Self { task }, first)
+    }
+
+    /// Clears every one of `endpoints` with `check`, each within `within`,
+    /// in a task of the current runtime that starts at once and logs every
+    /// endpoint a round does not clear, for a caller that cannot wait for
+    /// the first round.
+    ///
+    /// # Panics
+    ///
+    /// Panics outside a Tokio runtime, as `tokio::spawn` does.
+    #[must_use]
+    pub fn spawn(check: RevocationCheck, endpoints: Vec<Url>, within: Duration) -> Self {
+        Self {
+            task: tokio::spawn(keep(check, endpoints, within, Duration::ZERO)),
+        }
+    }
+}
+
+/// Clears `endpoints` with `check` after `first`, then every
+/// [`CLEAR_EVERY`], logging each endpoint a round does not clear.
+async fn keep(check: RevocationCheck, endpoints: Vec<Url>, within: Duration, first: Duration) {
+    let mut wait = first;
+    loop {
+        tokio::time::sleep(wait).await;
+        wait = CLEAR_EVERY;
+        for (endpoint, outcome) in round(&check, &endpoints, within).await {
+            if let Err(error) = outcome {
+                tracing::warn!(
+                    host = endpoint.host_str().unwrap_or_default(),
+                    port = endpoint.port_or_known_default(),
+                    error = %error,
+                    "an endpoint was not cleared for revocation, so its connections fail until it is"
+                );
+            }
+        }
+    }
+}
+
+/// Clears each of `endpoints` with `check`, in turn.
+async fn round(
+    check: &RevocationCheck,
+    endpoints: &[Url],
+    within: Duration,
+) -> Vec<(Url, Result<(), RevocationError>)> {
+    let mut outcomes = Vec::with_capacity(endpoints.len());
+    for endpoint in endpoints {
+        outcomes.push((endpoint.clone(), check.clear(endpoint, within).await));
+    }
+    outcomes
 }

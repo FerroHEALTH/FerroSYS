@@ -10,6 +10,17 @@ released by the tag `ferrohealth-telemetry-vX.Y.Z`.
 
 ## [Unreleased]
 
+## [0.6.0]
+
+### Changed
+
+- Breaking: the TLS table of `[telemetry.otlp]`,
+  `ferrohealth_config::tls::TlsClientSection`, comes from
+  `ferrohealth-config` 0.5, which adds `trust_roots_without_revocation_file`
+  for the roots of a PKI that publishes no revocation service.
+  `ferrohealth-server` 0.14 keeps an `https` collector under
+  `trust_roots_file` cleared for revocation (FerroHEALTH/FerroSYS#470).
+
 ## [0.5.1] - 2026-11-22
 
 ### Changed

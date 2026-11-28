@@ -6,21 +6,24 @@
 //! A table that names a remote service holds a
 //! `ferrohealth_config::tls::TlsClientSection`: `client_identity`, inline, or
 //! `client_identity_file`: the client certificate chain and its private key
-//! in one PEM, presented for mutual TLS and held as a secret; and
-//! `trust_roots_file`, a PEM bundle of trust roots beside the platform's.
-//! [`TlsClient::read`] reads every file once, and [`TlsClient::certificate`]
-//! returns the identity's end-entity certificate;
+//! in one PEM, presented for mutual TLS and held as a secret;
+//! `trust_roots_file`, a PEM bundle of trust roots beside the platform's,
+//! whose chains are checked for revocation; and
+//! `trust_roots_without_revocation_file`, roots whose PKI publishes no
+//! revocation service. [`TlsClient::read`] reads every file once, and
+//! [`TlsClient::certificate`] returns the identity's end-entity certificate;
 //! [`TlsClient::client_config`] gives a rustls configuration over the
-//! platform roots the caller hands it, `TlsClient::platform_config` (feature
-//! `platform-verifier`) one over the platform's verifier, and
-//! `TlsClient::apply` (feature `reqwest`) sets the same material on a
-//! `reqwest::ClientBuilder`. No specification
-//! governs the keys: our own design.
+//! platform roots the caller hands it, and `TlsClient::platform_config`
+//! (feature `platform-verifier`) one that verifies a chain to the table's
+//! roots with webpki and any other chain with the platform's verifier. No
+//! specification governs the keys: our own design.
 
 use std::path::PathBuf;
 
 #[cfg(feature = "platform-verifier")]
 mod platform;
+#[cfg(feature = "platform-verifier")]
+pub mod platform_tls;
 
 use ferrohealth_config::tls::TlsClientSection;
 use ferrohealth_secret::secret::Secret;
@@ -65,22 +68,40 @@ pub enum TlsClientError {
         #[source]
         source: rustls::Error,
     },
-    /// The HTTP client refused the identity or a root.
-    #[cfg(feature = "reqwest")]
-    #[error("{key} was refused by the HTTP client")]
-    Client {
-        /// The key the material was read from.
+    /// A root's subject does not decode, so it cannot be named.
+    #[cfg(feature = "platform-verifier")]
+    #[error("{key} holds a root whose subject does not decode")]
+    Subject {
+        /// The key the roots were read from.
         key: String,
-        /// What reqwest reported.
+        /// What the decoder reported.
         #[source]
-        source: reqwest::Error,
+        source: der::Error,
+    },
+    /// rustls refused to build a verifier over the roots.
+    #[cfg(feature = "platform-verifier")]
+    #[error("{key} gives no verifier")]
+    Verifier {
+        /// The key the roots were read from.
+        key: String,
+        /// What rustls reported.
+        #[source]
+        source: rustls::client::VerifierBuilderError,
+    },
+    /// The revocation check of the table's roots cannot be built.
+    #[cfg(feature = "platform-verifier")]
+    #[error("{key} cannot be checked for revocation")]
+    Revocation {
+        /// The key the roots were read from.
+        key: String,
+        /// What the check reported.
+        #[source]
+        source: crate::revocation::RevocationSetupError,
     },
 }
 
-/// The client identity: its PEM, as reqwest takes it, and its parts.
+/// The client identity: its certificate chain and private key.
 struct Identity {
-    #[cfg(feature = "reqwest")]
-    pem: Secret,
     chain: Vec<CertificateDer<'static>>,
     key: PrivateKeyDer<'static>,
 }
@@ -95,6 +116,7 @@ pub struct TlsClient {
     key: String,
     identity: Option<Identity>,
     roots: Vec<CertificateDer<'static>>,
+    unchecked_roots: Vec<CertificateDer<'static>>,
     min_version: ferrohealth_config::tls::TlsVersion,
 }
 
@@ -104,6 +126,7 @@ impl std::fmt::Debug for TlsClient {
             .field("key", &self.key)
             .field("identity", &self.identity.as_ref().map(|_identity| "***"))
             .field("roots", &self.roots.len())
+            .field("unchecked_roots", &self.unchecked_roots.len())
             .field("min_version", &self.min_version)
             .finish()
     }
@@ -118,7 +141,10 @@ impl PartialEq for TlsClient {
             }
             _ => false,
         };
-        identity && self.roots == other.roots && self.min_version == other.min_version
+        identity
+            && self.roots == other.roots
+            && self.unchecked_roots == other.unchecked_roots
+            && self.min_version == other.min_version
     }
 }
 
@@ -150,33 +176,18 @@ impl TlsClient {
             };
             let chain = certificates(text).ok_or_else(pem_error)?;
             let key = PrivateKeyDer::from_pem_slice(text).map_err(|_unreadable| pem_error())?;
-            Ok::<_, TlsClientError>(Identity {
-                #[cfg(feature = "reqwest")]
-                pem,
-                chain,
-                key,
-            })
+            Ok::<_, TlsClientError>(Identity { chain, key })
         })
         .transpose()?;
-        let roots = match &section.trust_roots_file {
-            None => Vec::new(),
-            Some(path) => {
-                let roots_key = format!("{key}.trust_roots_file");
-                let text = std::fs::read(path).map_err(|source| TlsClientError::Read {
-                    key: roots_key.clone(),
-                    path: path.clone(),
-                    source,
-                })?;
-                certificates(&text).ok_or(TlsClientError::Pem {
-                    key: roots_key,
-                    holds: "certificate",
-                })?
-            }
-        };
         Ok(Self {
             key: key.to_owned(),
             identity,
-            roots,
+            roots: roots(key, "trust_roots_file", section.trust_roots_file.as_ref())?,
+            unchecked_roots: roots(
+                key,
+                "trust_roots_without_revocation_file",
+                section.trust_roots_without_revocation_file.as_ref(),
+            )?,
             min_version: section.min_version,
         })
     }
@@ -216,8 +227,8 @@ impl TlsClient {
         }
     }
 
-    /// The rustls configuration that trusts `platform_roots` and the extra
-    /// roots, and presents the client identity when one is set.
+    /// The rustls configuration that trusts `platform_roots` and both sets
+    /// of extra roots, and presents the client identity when one is set.
     ///
     /// The protocol versions and cipher suites are the listener's: TLS 1.3,
     /// and TLS 1.2 with the four suites RFC 9325 §4.2 recommends only where
@@ -231,7 +242,7 @@ impl TlsClient {
         &self,
         mut platform_roots: RootCertStore,
     ) -> Result<ClientConfig, TlsClientError> {
-        for root in &self.roots {
+        for root in self.roots.iter().chain(&self.unchecked_roots) {
             platform_roots
                 .add(root.clone())
                 .map_err(|source| self.refused("trust_roots_file", source))?;
@@ -242,33 +253,99 @@ impl TlsClient {
         self.authenticate(builder)
     }
 
-    /// The rustls configuration that verifies a server through the
-    /// platform's verifier, trusting the extra roots beside the platform's
-    /// own, and presents the client identity when one is set.
+    /// The platform configuration: a chain to a root of `trust_roots_file`
+    /// is verified by webpki and opens a connection only once a revocation
+    /// check cleared it, a chain to a root of
+    /// `trust_roots_without_revocation_file` is verified by webpki alone and
+    /// logged at each connection, and any other chain goes to the platform's
+    /// verifier under the operating system's policy.
     ///
-    /// It trusts what [`TlsClient::apply`] has reqwest trust, since reqwest's
-    /// `rustls` feature verifies through the same platform verifier, so a
-    /// product that speaks TLS outside HTTP, such as MLLP, reaches the
-    /// servers its HTTP client reaches. The protocol versions and cipher
-    /// suites are those of [`TlsClient::client_config`]. The platform's
-    /// verifier is built once per process for each set of extra roots and
-    /// shared after, since on Linux each build reads the whole system root
-    /// store (#372).
+    /// webpki verifies over the provider's algorithms, so a chain an ML-DSA
+    /// CA signs (RFC 9881) verifies on every operating system; the platform
+    /// verifiers of macOS and Windows verify none. The protocol versions and
+    /// cipher suites are those of [`TlsClient::client_config`]. A product
+    /// clears the endpoints that reach the checked roots with
+    /// [`crate::revocation::Clearing`] over [`platform_tls::PlatformTls::check`].
     ///
     /// # Errors
     ///
-    /// Returns [`TlsClientError::Refused`] when the platform verifier refuses
-    /// the extra roots or rustls refuses the identity.
+    /// Returns [`TlsClientError::Revocation`] when the check of the roots
+    /// cannot be built and [`TlsClientError::Refused`] when rustls refuses a
+    /// root, the identity, or the platform verifier cannot be built.
     #[cfg(feature = "platform-verifier")]
-    pub fn platform_config(&self) -> Result<ClientConfig, TlsClientError> {
+    pub fn platform_config(&self) -> Result<platform_tls::PlatformTls, TlsClientError> {
         let provider = crate::tls::provider();
-        let verifier = platform::verifier(&self.roots, std::sync::Arc::clone(&provider))
-            .map_err(|source| self.refused("trust_roots_file", source))?;
+        let check = (!self.roots.is_empty())
+            .then(|| crate::revocation::RevocationCheck::from_tls_client(self))
+            .transpose()
+            .map_err(|source| TlsClientError::Revocation {
+                key: format!("{}.trust_roots_file", self.key),
+                source,
+            })?;
+        let unchecked = self.unchecked(&provider)?;
+        let names = unchecked.as_ref().map(|unchecked| unchecked.names.clone());
+        if let Some(names) = &names {
+            tracing::warn!(
+                key = %self.key,
+                roots = %names,
+                "these trust roots are trusted with no revocation check (trust_roots_without_revocation_file)"
+            );
+        }
+        let verifier = platform::Split::new(
+            check
+                .as_ref()
+                .map(crate::revocation::RevocationCheck::verifier),
+            unchecked,
+            std::sync::Arc::clone(&provider),
+        )
+        .map_err(|source| self.refused("trust_roots_file", source))?;
         let builder = self
             .versions(provider)?
             .dangerous()
-            .with_custom_certificate_verifier(verifier);
-        self.authenticate(builder)
+            .with_custom_certificate_verifier(std::sync::Arc::new(verifier));
+        Ok(platform_tls::PlatformTls::new(
+            self.authenticate(builder)?,
+            check,
+            names.map(|names| (self.key.clone(), names)),
+        ))
+    }
+
+    /// The webpki verifier over the roots of
+    /// `trust_roots_without_revocation_file`, with their subjects, or `None`
+    /// when the table names none.
+    #[cfg(feature = "platform-verifier")]
+    fn unchecked(
+        &self,
+        provider: &std::sync::Arc<rustls::crypto::CryptoProvider>,
+    ) -> Result<Option<platform::Unchecked>, TlsClientError> {
+        if self.unchecked_roots.is_empty() {
+            return Ok(None);
+        }
+        let mut store = RootCertStore::empty();
+        let mut names = Vec::with_capacity(self.unchecked_roots.len());
+        for root in &self.unchecked_roots {
+            store
+                .add(root.clone())
+                .map_err(|source| self.refused("trust_roots_without_revocation_file", source))?;
+            names.push(subject(root).map_err(|source| TlsClientError::Subject {
+                key: format!("{}.trust_roots_without_revocation_file", self.key),
+                source,
+            })?);
+        }
+        let webpki = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            std::sync::Arc::new(store),
+            std::sync::Arc::clone(provider),
+        )
+        .build()
+        .map_err(|source| TlsClientError::Verifier {
+            key: format!("{}.trust_roots_without_revocation_file", self.key),
+            source,
+        })?;
+        Ok(Some(platform::Unchecked {
+            webpki,
+            key: self.key.clone(),
+            names: names.join("; "),
+        }))
     }
 
     /// The configuration builder over `provider` at the table's versions.
@@ -294,49 +371,46 @@ impl TlsClient {
         }
     }
 
-    /// Sets the extra roots, beside the platform's, and the client identity
-    /// on `builder`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TlsClientError::Client`] when reqwest refuses a root or the
-    /// identity.
-    #[cfg(feature = "reqwest")]
-    pub fn apply(
-        &self,
-        mut builder: reqwest::ClientBuilder,
-    ) -> Result<reqwest::ClientBuilder, TlsClientError> {
-        for root in &self.roots {
-            let root = reqwest::Certificate::from_der(root)
-                .map_err(|source| self.client("trust_roots_file", source))?;
-            builder = builder.add_root_certificate(root);
-        }
-        builder = builder.tls_version_min(match self.min_version {
-            ferrohealth_config::tls::TlsVersion::Tls12 => reqwest::tls::Version::TLS_1_2,
-            ferrohealth_config::tls::TlsVersion::Tls13 => reqwest::tls::Version::TLS_1_3,
-        });
-        if let Some(identity) = &self.identity {
-            let identity = reqwest::Identity::from_pem(identity.pem.expose().as_bytes())
-                .map_err(|source| self.client("client_identity", source))?;
-            builder = builder.identity(identity);
-        }
-        Ok(builder)
-    }
-
     fn refused(&self, name: &str, source: rustls::Error) -> TlsClientError {
         TlsClientError::Refused {
             key: format!("{}.{name}", self.key),
             source,
         }
     }
+}
 
-    #[cfg(feature = "reqwest")]
-    fn client(&self, name: &str, source: reqwest::Error) -> TlsClientError {
-        TlsClientError::Client {
-            key: format!("{}.{name}", self.key),
-            source,
-        }
-    }
+/// The roots the file at `name` of table `key` holds, or none when the
+/// table does not name one.
+fn roots(
+    key: &str,
+    name: &str,
+    path: Option<&PathBuf>,
+) -> Result<Vec<CertificateDer<'static>>, TlsClientError> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let roots_key = format!("{key}.{name}");
+    let text = std::fs::read(path).map_err(|source| TlsClientError::Read {
+        key: roots_key.clone(),
+        path: path.clone(),
+        source,
+    })?;
+    certificates(&text).ok_or(TlsClientError::Pem {
+        key: roots_key,
+        holds: "certificate",
+    })
+}
+
+/// The subject of `root` as RFC 4514 renders it.
+///
+/// # Errors
+///
+/// The decoding error when `root` is no X.509 certificate.
+#[cfg(feature = "platform-verifier")]
+fn subject(root: &CertificateDer<'_>) -> Result<String, der::Error> {
+    use der::Decode as _;
+    x509_cert::Certificate::from_der(root)
+        .map(|certificate| certificate.tbs_certificate().subject().to_string())
 }
 
 /// The certificates in `pem`, or `None` when it holds none or one that does
@@ -351,422 +425,4 @@ fn certificates(pem: &[u8]) -> Option<Vec<CertificateDer<'static>>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::net::SocketAddr;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use axum::Router;
-    use axum::routing::get;
-    use ferrohealth_health::lifecycle::Lifecycle;
-    use ferrohealth_secret::secret::Secret;
-    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
-    use rustls::RootCertStore;
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-    use tokio::net::TcpListener;
-
-    use ferrohealth_config::tls::TlsClientSection;
-
-    use super::{TlsClient, TlsClientError};
-    use crate::section::{ClientAuth, TlsSection};
-    use crate::tls::{PeerCertificates, ReloadableTls};
-
-    /// A CA, a server certificate for `localhost` and a client identity,
-    /// both signed by it.
-    struct Pki {
-        dir: tempfile::TempDir,
-    }
-
-    impl Pki {
-        fn new() -> Self {
-            let dir = tempfile::tempdir().expect("a directory");
-            let ca_key = KeyPair::generate().expect("a CA key");
-            let mut ca_params =
-                CertificateParams::new(Vec::<String>::new()).expect("CA parameters");
-            ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-            let ca = ca_params.self_signed(&ca_key).expect("a CA certificate");
-            write(dir.path(), "ca.pem", &ca.pem());
-            let issuer = Issuer::new(ca_params, ca_key);
-            for (name, san) in [("server", "localhost"), ("client", "client.example")] {
-                let key = KeyPair::generate().expect("a key");
-                let certificate = CertificateParams::new(vec![san.to_owned()])
-                    .expect("parameters")
-                    .signed_by(&key, &issuer)
-                    .expect("a certificate");
-                write(dir.path(), &format!("{name}.pem"), &certificate.pem());
-                write(dir.path(), &format!("{name}.key"), &key.serialize_pem());
-            }
-            let identity = format!(
-                "{}{}",
-                std::fs::read_to_string(dir.path().join("client.pem")).expect("the chain"),
-                std::fs::read_to_string(dir.path().join("client.key")).expect("the key")
-            );
-            write(dir.path(), "identity.pem", &identity);
-            Self { dir }
-        }
-
-        fn path(&self, name: &str) -> std::path::PathBuf {
-            self.dir.path().join(name)
-        }
-
-        fn client(&self, identity: bool) -> TlsClientSection {
-            TlsClientSection {
-                client_identity_file: identity.then(|| self.path("identity.pem")),
-                trust_roots_file: Some(self.path("ca.pem")),
-                ..TlsClientSection::default()
-            }
-        }
-
-        /// Serves `/peer`, answering how many client certificates it saw,
-        /// requiring one signed by the CA.
-        async fn serve(&self) -> SocketAddr {
-            let section = TlsSection {
-                client_auth: ClientAuth::Required,
-                client_ca_file: Some(self.path("ca.pem")),
-                ..TlsSection::new(self.path("server.pem"), self.path("server.key"))
-            };
-            let tls = Arc::new(ReloadableTls::new(&section).expect("the files read"));
-            let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-            let address = listener.local_addr().expect("the address");
-            let app = Router::new().route(
-                "/peer",
-                get(
-                    |peers: Option<axum::Extension<PeerCertificates>>| async move {
-                        peers
-                            .map_or(0, |axum::Extension(peers)| peers.0.len())
-                            .to_string()
-                    },
-                ),
-            );
-            tokio::spawn(crate::serve::serve_tls(
-                listener,
-                app,
-                tls,
-                Lifecycle::default(),
-                std::future::pending::<()>(),
-                Duration::ZERO,
-                Duration::from_secs(1),
-            ));
-            address
-        }
-    }
-
-    fn write(dir: &Path, name: &str, text: &str) {
-        std::fs::write(dir.join(name), text).expect("the file is written");
-    }
-
-    /// The body of `GET /peer` over a connection with `client`, or `None`
-    /// when no answer came.
-    async fn peer(address: SocketAddr, client: &TlsClient) -> Option<String> {
-        let config = client
-            .client_config(RootCertStore::empty())
-            .expect("the configuration");
-        exchange(address, config).await
-    }
-
-    /// The body of `GET /peer` over a connection under `config`, or `None`
-    /// when no answer came.
-    async fn exchange(address: SocketAddr, config: rustls::ClientConfig) -> Option<String> {
-        let stream = tokio::net::TcpStream::connect(address).await.ok()?;
-        let name = rustls::pki_types::ServerName::try_from("localhost").expect("a name");
-        let mut stream = tokio_rustls::TlsConnector::from(Arc::new(config))
-            .connect(name, stream)
-            .await
-            .ok()?;
-        stream
-            .write_all(b"GET /peer HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
-            .await
-            .ok()?;
-        let mut answer = Vec::new();
-        let _read = stream.read_to_end(&mut answer).await;
-        let answer = String::from_utf8(answer).ok()?;
-        answer
-            .starts_with("HTTP/1.1 200")
-            .then(|| answer.rsplit("\r\n").next().unwrap_or_default().to_owned())
-    }
-
-    #[tokio::test]
-    async fn the_identity_is_presented_and_the_extra_root_trusted() {
-        let pki = Pki::new();
-        let address = pki.serve().await;
-        let with = TlsClient::read("remote", &pki.client(true)).expect("the material reads");
-        assert!(with.has_identity());
-        assert_eq!(Some("1".to_owned()), peer(address, &with).await);
-        let without = TlsClient::read("remote", &pki.client(false)).expect("the roots read");
-        assert_eq!(
-            None,
-            peer(address, &without).await,
-            "the listener requires an identity"
-        );
-        let untrusted = TlsClient::read(
-            "remote",
-            &TlsClientSection {
-                client_identity_file: Some(pki.path("identity.pem")),
-                ..TlsClientSection::default()
-            },
-        )
-        .expect("the identity reads");
-        assert_eq!(
-            None,
-            peer(address, &untrusted).await,
-            "the CA is no platform root"
-        );
-    }
-
-    #[cfg(feature = "platform-verifier")]
-    #[tokio::test]
-    async fn the_platform_configuration_presents_the_identity_and_trusts_the_extra_root() {
-        let pki = Pki::new();
-        let address = pki.serve().await;
-        let connect = |client: TlsClient| async move {
-            let config = client.platform_config().expect("the configuration");
-            exchange(address, config).await
-        };
-        let with = TlsClient::read("remote", &pki.client(true)).expect("the material reads");
-        assert_eq!(Some("1".to_owned()), connect(with).await);
-        let without = TlsClient::read("remote", &pki.client(false)).expect("the roots read");
-        assert_eq!(
-            None,
-            connect(without).await,
-            "the listener requires an identity"
-        );
-        let untrusted = TlsClient::read(
-            "remote",
-            &TlsClientSection {
-                client_identity_file: Some(pki.path("identity.pem")),
-                ..TlsClientSection::default()
-            },
-        )
-        .expect("the identity reads");
-        assert_eq!(None, connect(untrusted).await, "the CA is no platform root");
-    }
-
-    #[cfg(feature = "reqwest")]
-    #[tokio::test]
-    async fn reqwest_presents_the_identity_and_trusts_the_extra_root() {
-        let pki = Pki::new();
-        let address = pki.serve().await;
-        let client = TlsClient::read("remote", &pki.client(true)).expect("the material reads");
-        let http = client
-            .apply(reqwest::Client::builder().resolve("localhost", address))
-            .expect("reqwest takes the material")
-            .build()
-            .expect("the client builds");
-        let answer = http
-            .get(format!("https://localhost:{}/peer", address.port()))
-            .send()
-            .await
-            .expect("the call is answered");
-        assert_eq!(http::StatusCode::OK, answer.status());
-        assert_eq!("1", answer.text().await.expect("the body"));
-    }
-
-    #[cfg(feature = "reqwest")]
-    #[tokio::test]
-    async fn reqwest_agrees_on_x25519mlkem768_with_the_listener() {
-        let pki = Pki::new();
-        let section = TlsSection::new(pki.path("server.pem"), pki.path("server.key"));
-        let mut config = Arc::unwrap_or_clone(
-            crate::tls::server_config_of(&section, crate::tls::TlsKeys::SERVER)
-                .expect("the files read"),
-        );
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
-        let address = listener.local_addr().expect("the address");
-        let server = tokio::spawn(async move {
-            let (socket, _peer) = listener.accept().await.expect("a connection");
-            let mut stream = acceptor.accept(socket).await.expect("the handshake");
-            let group = stream
-                .get_ref()
-                .1
-                .negotiated_key_exchange_group()
-                .map(rustls::crypto::SupportedKxGroup::name);
-            let mut request = [0_u8; 1024];
-            let _read = stream.read(&mut request).await.expect("the request");
-            stream
-                .write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n")
-                .await
-                .expect("the answer");
-            stream.shutdown().await.expect("the close");
-            group
-        });
-        let client = TlsClient::read("remote", &pki.client(false)).expect("the material reads");
-        let http = client
-            .apply(reqwest::Client::builder().resolve("localhost", address))
-            .expect("reqwest takes the material")
-            .build()
-            .expect("the client builds");
-        let answer = http
-            .get(format!("https://localhost:{}/", address.port()))
-            .send()
-            .await
-            .expect("the call is answered");
-        assert_eq!(http::StatusCode::NO_CONTENT, answer.status());
-        assert_eq!(
-            Some(rustls::NamedGroup::X25519MLKEM768),
-            server.await.expect("the server ends")
-        );
-    }
-
-    #[test]
-    fn the_certificate_is_the_first_of_the_identity_chain() {
-        use rustls::pki_types::CertificateDer;
-        use rustls::pki_types::pem::PemObject as _;
-
-        let pki = Pki::new();
-        let text = |name: &str| std::fs::read_to_string(pki.path(name)).expect("the file");
-        let chained = format!(
-            "{}{}{}",
-            text("client.pem"),
-            text("ca.pem"),
-            text("client.key")
-        );
-        write(pki.dir.path(), "chained.pem", &chained);
-        let leaf = CertificateDer::from_pem_file(pki.path("client.pem")).expect("the leaf");
-        let section = TlsClientSection {
-            client_identity_file: Some(pki.path("chained.pem")),
-            ..TlsClientSection::default()
-        };
-        let client = TlsClient::read("xcpd", &section).expect("the chain reads");
-        assert_eq!(Some(&leaf), client.certificate());
-        let without =
-            TlsClient::read("xcpd", &TlsClientSection::default()).expect("nothing to read");
-        assert_eq!(None, without.certificate());
-        assert!(!without.has_identity());
-    }
-
-    #[test]
-    fn two_reads_are_equal_over_the_material_they_read() {
-        let pki = Pki::new();
-        let read = |key: &str, section: &TlsClientSection| {
-            TlsClient::read(key, section).expect("the material reads")
-        };
-        let first = read("xcpd", &pki.client(true));
-        assert_eq!(first, read("xcpd", &pki.client(true)));
-        assert_eq!(
-            first,
-            read("pdqm", &pki.client(true)),
-            "the table key takes no part"
-        );
-        let inline = TlsClientSection {
-            client_identity: Some(Secret::new(
-                std::fs::read_to_string(pki.path("identity.pem")).expect("the identity"),
-            )),
-            client_identity_file: None,
-            ..pki.client(true)
-        };
-        assert_eq!(first, read("xcpd", &inline), "the same identity inline");
-        assert_ne!(first, read("xcpd", &pki.client(false)), "no identity");
-        assert_ne!(
-            first,
-            read(
-                "xcpd",
-                &TlsClientSection {
-                    min_version: ferrohealth_config::tls::TlsVersion::Tls12,
-                    ..pki.client(true)
-                }
-            ),
-            "another minimum version"
-        );
-
-        let renewed = Pki::new();
-        std::fs::copy(renewed.path("identity.pem"), pki.path("identity.pem"))
-            .expect("the identity is renewed in place");
-        let after_renewal = read("xcpd", &pki.client(true));
-        assert_ne!(first, after_renewal, "a renewed identity at the same path");
-
-        std::fs::copy(renewed.path("ca.pem"), pki.path("ca.pem"))
-            .expect("the roots are replaced in place");
-        assert_ne!(
-            after_renewal,
-            read("xcpd", &pki.client(true)),
-            "a changed roots file at the same path"
-        );
-    }
-
-    #[test]
-    fn a_renewed_key_under_the_same_chain_compares_unequal() {
-        let pki = Pki::new();
-        let text = |name: &str| std::fs::read_to_string(pki.path(name)).expect("the file");
-        let first = TlsClient::read("xcpd", &pki.client(true)).expect("the material reads");
-        let other_key = KeyPair::generate().expect("a key").serialize_pem();
-        write(
-            pki.dir.path(),
-            "identity.pem",
-            &format!("{}{other_key}", text("client.pem")),
-        );
-        let rekeyed = TlsClient::read("xcpd", &pki.client(true)).expect("the material reads");
-        assert_ne!(first, rekeyed, "the key takes part");
-        let rendered = format!("{rekeyed:?}");
-        assert!(!rendered.contains("PRIVATE KEY"), "{rendered}");
-    }
-
-    #[test]
-    fn material_that_does_not_read_is_refused_with_its_key() {
-        let pki = Pki::new();
-        let both = TlsClientSection {
-            client_identity: Some(Secret::new("inline")),
-            client_identity_file: Some(pki.path("identity.pem")),
-            ..TlsClientSection::default()
-        };
-        assert!(matches!(
-            TlsClient::read("remote", &both),
-            Err(TlsClientError::Identity(_))
-        ));
-        let no_key = TlsClientSection {
-            client_identity_file: Some(pki.path("client.pem")),
-            ..TlsClientSection::default()
-        };
-        assert!(matches!(
-            TlsClient::read("remote", &no_key),
-            Err(TlsClientError::Pem { key, .. }) if key == "remote.client_identity"
-        ));
-        let no_roots = TlsClientSection {
-            trust_roots_file: Some(pki.path("client.key")),
-            ..TlsClientSection::default()
-        };
-        assert!(matches!(
-            TlsClient::read("remote", &no_roots),
-            Err(TlsClientError::Pem { key, .. }) if key == "remote.trust_roots_file"
-        ));
-        let rendered = format!(
-            "{:?}",
-            TlsClient::read("remote", &pki.client(true)).expect("reads")
-        );
-        assert!(
-            !rendered.contains("PRIVATE KEY") && rendered.contains("***"),
-            "{rendered}"
-        );
-    }
-
-    #[test]
-    fn the_table_reads_from_toml() {
-        let section: TlsClientSection =
-            toml::from_str("client_identity_file = \"/run/secrets/id.pem\"\ntrust_roots_file = \"/etc/roots.pem\"\n")
-                .expect("the table loads");
-        assert_eq!(Some("/etc/roots.pem".into()), section.trust_roots_file);
-        assert!(
-            toml::from_str::<TlsClientSection>("roots = \"x\"\n").is_err(),
-            "an unknown key is refused"
-        );
-    }
-
-    #[test]
-    fn the_outbound_minimum_is_tls_1_3_unless_lowered_and_never_below_1_2() {
-        assert_eq!(
-            ferrohealth_config::tls::TlsVersion::Tls13,
-            TlsClientSection::default().min_version
-        );
-        let lowered: TlsClientSection =
-            toml::from_str("min_version = \"1.2\"\n").expect("1.2 is taken");
-        assert_eq!(
-            ferrohealth_config::tls::TlsVersion::Tls12,
-            lowered.min_version
-        );
-        let refused = toml::from_str::<TlsClientSection>("min_version = \"1.1\"\n")
-            .expect_err("1.1 is refused");
-        assert!(refused.to_string().contains("RFC 8996"), "{refused}");
-    }
-}
+mod tests;

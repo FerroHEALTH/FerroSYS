@@ -62,7 +62,14 @@ console reads its configuration the same way, so an operator learns it once.
   release.
 - `tls::TlsClientSection` is the TLS table of every outbound call, read by
   `ferrohealth-server`'s `tls_client::TlsClient`, and `tls::TlsVersion` the
-  oldest TLS version a listener or a client speaks.
+  oldest TLS version a listener or a client speaks. The table splits its
+  trust roots by revocation: a chain to a root of `trust_roots_file` must
+  clear a revocation check (CRL, then OCSP) before a connection opens, and
+  fails closed when no source answers; a chain to a root of
+  `trust_roots_without_revocation_file`, for a private PKI that publishes
+  no CRL and no OCSP responder, is trusted with no check, named at the
+  product's start and logged at each connection. Any other chain is the
+  platform's to verify, under the operating system's policy.
 - Feature `schema` derives `schemars::JsonSchema` on these types, for a
   product that generates its configuration reference.
 
