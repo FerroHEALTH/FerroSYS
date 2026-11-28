@@ -58,13 +58,16 @@ same order from the default provider.
 The key exchange protects what a session carries against an attacker who
 records it now and decrypts it later, the risk the roadmap gives first
 place. A peer is authenticated by the certificates the operator issues.
-The listener and every client present and verify ML-DSA-44, ML-DSA-65 and
-ML-DSA-87 certificates (RFC 9881) in TLS 1.3, under the signature schemes
-IANA assigned at 0x0904 to 0x0906 for draft-ietf-tls-mldsa-06. The
-revocation check verifies CRLs and OCSP answers that an ML-DSA CA signs.
-The operator's PKI decides the algorithm, so these two rows count as safe:
-an ML-DSA PKI is verified end to end, and a classical PKI is the
-operator's choice. TLS 1.2 defines no ML-DSA signature, so a connection
+The listener, the healthcheck and `TlsClient::client_config` present and
+verify ML-DSA-44, ML-DSA-65 and ML-DSA-87 certificates (RFC 9881) in TLS
+1.3, under the signature schemes IANA assigned at 0x0904 to 0x0906 for
+draft-ietf-tls-mldsa-06. The revocation check verifies CRLs and OCSP
+answers that an ML-DSA CA signs. The operator's PKI decides the algorithm,
+so these two rows count as safe: an ML-DSA PKI is verified end to end, and
+a classical PKI is the operator's choice. `TlsClient::platform_config`
+verifies through the platform's verifier: on Linux that is webpki, which
+verifies ML-DSA, but the macOS verifier refuses an ML-DSA certificate and
+the Windows one is untested, so that row counts as not safe (#470). TLS 1.2 defines no ML-DSA signature, so a connection
 that falls back to TLS 1.2 authenticates classically.
 
 ## Whose choice the classical rows are
@@ -96,7 +99,8 @@ Three rows stay classical, and FerroSYS does not choose their algorithm:
 | TLS 1.3 key exchange of reqwest clients and other default-provider rustls users | X25519MLKEM768 first (rustls prefer-post-quantum) | yes | RFC 10024 | `Cargo.toml (rustls features), crates/ferrohealth-server/src/tls_client.rs (TlsClient::apply)` |
 | TLS 1.3 key exchange of the OTLP export | X25519MLKEM768 first, through the TlsClient configuration | yes | RFC 10024 | `crates/ferrohealth-telemetry/src/telemetry/otlp.rs` |
 | TLS 1.2 key exchange where min_version lowers the minimum | ECDHE over X25519, P-256 or P-384 | no | none for TLS 1.2 (RFC 9851 §2); the operator's choice, for eHDSI peers (eHDSI Cryptographic Algorithms 9.0.0 §3) | `crates/ferrohealth-server/src/tls.rs (protocol_versions)` |
-| TLS server and client certificate authentication | ML-DSA-44, ML-DSA-65 or ML-DSA-87 in TLS 1.3, or ECDSA, RSA or Ed25519, as the operator's certificates hold | yes | RFC 9881; draft-ietf-tls-mldsa-06 (IANA TLS SignatureScheme 0x0904 to 0x0906) | `crates/ferrohealth-server/src/tls.rs, crates/ferrohealth-server/src/tls_client.rs` |
+| TLS certificate authentication of the listener, the healthcheck and TlsClient::client_config | ML-DSA-44, ML-DSA-65 or ML-DSA-87 in TLS 1.3, or ECDSA, RSA or Ed25519, as the operator's certificates hold | yes | RFC 9881; draft-ietf-tls-mldsa-06 (IANA TLS SignatureScheme 0x0904 to 0x0906) | `crates/ferrohealth-server/src/tls.rs, crates/ferrohealth-server/src/tls_client.rs` |
+| TLS server certificate verification of TlsClient::platform_config | the platform verifier: ML-DSA in TLS 1.3 through webpki on Linux; on macOS ECDSA, RSA or Ed25519 only, an ML-DSA certificate refused (#470); Windows untested | no | RFC 9881; refused by the macOS platform verifier (#470) | `crates/ferrohealth-server/src/tls_client/platform.rs` |
 | TLS record protection | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-server/src/tls.rs` |
 | CRL and OCSP response signature verification | ML-DSA-44, ML-DSA-65 or ML-DSA-87, or RSA PKCS#1 v1.5 or ECDSA, as the issuing CA's key holds | yes | RFC 9881 | `crates/ferrohealth-server/src/revocation/signature.rs` |
 | OCSP CertID and certificate digests | SHA-1 (RFC 6960 CertID), SHA-256 | yes | NIST IR 8547 4.1.3 | `crates/ferrohealth-server/src/revocation/ocsp.rs, crates/ferrohealth-server/src/revocation/chain.rs` |
