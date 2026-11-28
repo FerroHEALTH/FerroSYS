@@ -400,13 +400,27 @@ pub(crate) fn lag_problem(phase: &LoadReport) -> Option<String> {
 }
 
 /// The problem of `steadiness` outside [`STEADY`], its ratios named by
-/// `what`.
+/// `what`, each group out of range named with its own.
 pub(crate) fn unsteady(steadiness: &Steadiness, what: &str) -> Option<String> {
-    (!steadiness.steady()).then(|| {
+    if steadiness.steady() {
+        return None;
+    }
+    let groups: Vec<String> = steadiness
+        .unsteady()
+        .map(|(group, ratios)| {
+            format!(
+                "{group} {} and {}",
+                ratio(ratios.p50_ratio),
+                ratio(ratios.p95_ratio)
+            )
+        })
+        .collect();
+    Some(if groups.is_empty() {
+        format!("{what} resolve in no group")
+    } else {
         format!(
-            "{what} are {} and {}, outside {} to {}",
-            ratio(steadiness.p50_ratio),
-            ratio(steadiness.p95_ratio),
+            "{what} are, by group, {}, outside {} to {}",
+            groups.join("; "),
             STEADY.0,
             STEADY.1
         )

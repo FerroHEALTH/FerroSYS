@@ -185,32 +185,41 @@ pub struct GroupReport {
     pub second_half: String,
 }
 
-/// The second half's p50 and p95 over the first's.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// The second half's p50 and p95 over the first's, of each group.
+///
+/// Each group is judged on its own, so how a plan weights its groups cannot
+/// move the verdict: the median of a mix of fast and slow groups in about
+/// equal shares falls between them and moves from half to half while every
+/// group holds steady. No specification governs this: our own design.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Steadiness {
+    /// The ratios of each group, by name.
+    pub groups: BTreeMap<String, Ratios>,
+}
+
+/// One group's second half over its first, on p50 and p95.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Ratios {
     /// The p50 ratio, when both halves resolve it.
     pub p50_ratio: Option<f64>,
     /// The p95 ratio, when both halves resolve it.
     pub p95_ratio: Option<f64>,
 }
 
-impl Steadiness {
-    /// Whether every ratio that exists lies within [`STEADY`], and one does.
-    #[must_use]
-    pub fn steady(&self) -> bool {
-        let ratios: Vec<f64> = [self.p50_ratio, self.p95_ratio]
-            .into_iter()
-            .flatten()
-            .collect();
-        !ratios.is_empty() && ratios.iter().all(|r| (STEADY.0..=STEADY.1).contains(r))
+impl Ratios {
+    /// The ratios that exist.
+    fn values(self) -> impl Iterator<Item = f64> {
+        [self.p50_ratio, self.p95_ratio].into_iter().flatten()
     }
 
-    /// The steadiness of one arm over another's measured at the same time:
-    /// each ratio of `self` over the same ratio of `other`. A drift of the
-    /// host reaches both arms and cancels; what is left is how far the
-    /// comparison of the two moved from the first half to the second.
+    /// Whether every ratio that exists lies within [`STEADY`].
     #[must_use]
-    pub fn over(&self, other: &Self) -> Self {
+    pub fn within(self) -> bool {
+        self.values().all(|r| (STEADY.0..=STEADY.1).contains(&r))
+    }
+
+    /// Each ratio of `self` over the same ratio of `other`.
+    fn over(self, other: Self) -> Self {
         let over = |a: Option<f64>, b: Option<f64>| {
             let (a, b) = (a?, b?);
             (b > 0.0).then_some(a / b)
@@ -218,6 +227,45 @@ impl Steadiness {
         Self {
             p50_ratio: over(self.p50_ratio, other.p50_ratio),
             p95_ratio: over(self.p95_ratio, other.p95_ratio),
+        }
+    }
+}
+
+impl Steadiness {
+    /// Whether every group's ratios lie within [`STEADY`], and some group
+    /// resolves one.
+    #[must_use]
+    pub fn steady(&self) -> bool {
+        self.groups.values().any(|r| r.values().next().is_some())
+            && self.groups.values().all(|r| r.within())
+    }
+
+    /// The groups whose ratios lie outside [`STEADY`], by name.
+    pub fn unsteady(&self) -> impl Iterator<Item = (&str, &Ratios)> {
+        self.groups
+            .iter()
+            .filter(|(_, ratios)| !ratios.within())
+            .map(|(group, ratios)| (group.as_str(), ratios))
+    }
+
+    /// The steadiness of one arm over another's measured at the same time:
+    /// each group's ratios of `self` over the same group's of `other`. A
+    /// drift of the host reaches both arms and cancels; what is left is how
+    /// far the comparison of the two moved from the first half to the
+    /// second. A group only one arm holds is left out.
+    #[must_use]
+    pub fn over(&self, other: &Self) -> Self {
+        Self {
+            groups: self
+                .groups
+                .iter()
+                .filter_map(|(group, ratios)| {
+                    other
+                        .groups
+                        .get(group)
+                        .map(|base| (group.clone(), ratios.over(*base)))
+                })
+                .collect(),
         }
     }
 }
@@ -289,38 +337,30 @@ impl GroupReport {
 }
 
 impl LoadReport {
-    /// The merged histograms of every group, by half.
-    ///
-    /// # Errors
-    ///
-    /// [`ReportError::Histogram`] when one does not decode or merge.
-    pub fn overall_halves(&self) -> Result<(Histogram<u64>, Histogram<u64>), ReportError> {
-        let mut first = histogram::empty();
-        let mut second = histogram::empty();
-        for group in self.groups.values() {
-            let (a, b) = group.halves()?;
-            histogram::merge(&mut first, &a)?;
-            histogram::merge(&mut second, &b)?;
-        }
-        Ok((first, second))
-    }
-
-    /// The steadiness of the measured window, from the merged halves.
+    /// The steadiness of the measured window, each group from its own
+    /// halves.
     ///
     /// # Errors
     ///
     /// [`ReportError::Histogram`] when a histogram does not decode.
     pub fn steadiness(&self) -> Result<Steadiness, ReportError> {
-        let (first, second) = self.overall_halves()?;
-        let ratio = |name| {
-            let a = quantile(&first, name).value_ms()?;
-            let b = quantile(&second, name).value_ms()?;
-            (a > 0.0).then_some(b / a)
-        };
-        Ok(Steadiness {
-            p50_ratio: ratio(QuantileName::P50),
-            p95_ratio: ratio(QuantileName::P95),
-        })
+        let mut groups = BTreeMap::new();
+        for (name, group) in &self.groups {
+            let (first, second) = group.halves()?;
+            let ratio = |quantile_name| {
+                let a = quantile(&first, quantile_name).value_ms()?;
+                let b = quantile(&second, quantile_name).value_ms()?;
+                (a > 0.0).then_some(b / a)
+            };
+            groups.insert(
+                name.clone(),
+                Ratios {
+                    p50_ratio: ratio(QuantileName::P50),
+                    p95_ratio: ratio(QuantileName::P95),
+                },
+            );
+        }
+        Ok(Steadiness { groups })
     }
 
     /// Whether the runner stalled: every group whose p50 and p99 resolve
@@ -484,7 +524,59 @@ mod tests {
     fn a_window_whose_second_half_slows_is_unsteady() {
         let steadiness = load_of(10, 20).steadiness().unwrap();
         assert!(!steadiness.steady(), "{steadiness:?}");
-        assert!(steadiness.p50_ratio.unwrap() > 1.9, "{steadiness:?}");
+        assert!(
+            steadiness.groups["read"].p50_ratio.unwrap() > 1.9,
+            "{steadiness:?}"
+        );
+    }
+
+    // NOTE: no specification governs this: our own design; an even mix of a fast group and
+    // a slow one puts its median between them, yet each group is steady, so the phase is.
+    #[test]
+    fn a_bimodal_mix_of_steady_groups_is_steady_and_one_unsteady_group_is_not() {
+        let mut load = load_of(10, 10);
+        // The fast group is a little faster in the second half and the slow one a little
+        // slower, which moves the mix's median from one group to the other.
+        let (fast_a, fast_b) = halves_of(&[(1, 101)], &[(1, 99)]);
+        let (slow_a, slow_b) = halves_of(&[(3, 99)], &[(3, 101)]);
+        load.groups = BTreeMap::from([
+            (
+                "fast".to_owned(),
+                GroupReport::new(200, &fast_a, &fast_b).unwrap(),
+            ),
+            (
+                "slow".to_owned(),
+                GroupReport::new(200, &slow_a, &slow_b).unwrap(),
+            ),
+        ]);
+        let steadiness = load.steadiness().unwrap();
+        assert!(steadiness.steady(), "{steadiness:?}");
+        let (slower_a, slower_b) = halves_of(&[(3, 100)], &[(9, 100)]);
+        load.groups.insert(
+            "slow".to_owned(),
+            GroupReport::new(200, &slower_a, &slower_b).unwrap(),
+        );
+        let steadiness = load.steadiness().unwrap();
+        assert!(!steadiness.steady(), "{steadiness:?}");
+        assert_eq!(
+            vec!["slow"],
+            steadiness
+                .unsteady()
+                .map(|(group, _)| group)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Two halves holding `count` samples of `ms` for each `(ms, count)`.
+    fn halves_of(first: &[(u64, u64)], second: &[(u64, u64)]) -> (Histogram<u64>, Histogram<u64>) {
+        let fill = |samples: &[(u64, u64)]| {
+            let mut half = histogram::empty();
+            for (ms, count) in samples {
+                half.record_n(ms * 1_000, *count).unwrap();
+            }
+            half
+        };
+        (fill(first), fill(second))
     }
 
     #[test]

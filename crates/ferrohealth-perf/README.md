@@ -40,8 +40,12 @@ baseline the product committed.
    the p50, p95 and p99 with their 95 % rank intervals (a quantile with too
    few samples is withheld: p99 needs 100), and overall the throughput,
    the peak memory, the CPU time per request and the transactions per
-   request. The second half of the window must match the first within 0.8
-   to 1.25 on p50 and p95, or the run is not steady and cannot be judged.
+   request. In every group, the second half of the window must match the
+   first within 0.8 to 1.25 on p50 and p95, or the run is not steady and
+   cannot be judged. Each group is held to the band on its own, so a plan's
+   weights cannot decide it: the median of an even mix of fast and slow
+   groups falls between them and moves from half to half while each group
+   holds steady.
    A phase where every route's p99 is over `stall_ratio` (10 by default)
    times its p50 at once marks a stalled runner: it is reported, never
    judged, and the run exits 2.
@@ -389,8 +393,8 @@ ferrohealth-perf ab --plan perf/plan.toml \
    clears and a regression, which repeats, fails.
 4. **What cannot be judged.** A pair cannot be judged when a phase of it
    stalled or its generator lagged past the bound, or when the comparison
-   moved within the window: the head's second half over its first, over
-   the base's, outside 0.8 to 1.25 on p50 or p95. Each arm's window is not
+   moved within the window: in some group, the head's second half over its
+   first, over the base's, outside 0.8 to 1.25 on p50 or p95. Each arm's window is not
    held to that band on its own, because the two run at once and a drift
    of the runner reaches both: in FerroFED's gate on 4-vCPU runners 31 of
    72 phases moved on their own while the comparison moved in 6 of 36
