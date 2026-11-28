@@ -87,7 +87,7 @@ ferrohealth-secret = "=0.2.2"
 ferrohealth-config = "=0.5.0"
 ferrohealth-telemetry = { version = "=0.6.0", features = ["otlp", "prometheus", "axum"] }
 ferrohealth-health = { version = "=0.1.1", features = ["registry"] }
-ferrohealth-server = { version = "=0.13.0", features = ["otlp"] }
+ferrohealth-server = { version = "=0.14.0", features = ["otlp"] }
 ferrohealth-usage-report = { version = "=0.5.0", features = ["telemetry"] }
 ferrohealth-openpgp-pq = { version = "=0.1.0", default-features = false }
 ```
